@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "module": "node16",
+    "moduleResolution": "node16",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "es2022",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": false,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "forceConsistentCasingInFileNames": false,
+    "noFallthroughCasesInSwitch": false
+  },
+  "exclude": [
+    "dist/**/*",
+    "src/skills/index.ts",
+    "src/skills/preload.ts",
+    "src/skills/main/**/*",
+    "src/skills/renderer/**/*",
+    "src/skills/shared/**/*"
+  ]
+}
