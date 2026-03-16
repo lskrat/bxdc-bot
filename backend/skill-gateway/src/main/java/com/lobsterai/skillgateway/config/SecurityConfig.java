@@ -47,6 +47,7 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/skills", "/api/skills/*").permitAll()
                 .requestMatchers("/api/skills/**").authenticated()
                 .anyRequest().permitAll()
             )
@@ -96,7 +97,9 @@ public class SecurityConfig {
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
                 throws ServletException, IOException {
-            if (!request.getRequestURI().startsWith("/api/skills/")) {
+            boolean isSkillRoute = request.getRequestURI().startsWith("/api/skills");
+            boolean isReadOnlySkillRequest = "GET".equalsIgnoreCase(request.getMethod());
+            if (!isSkillRoute || isReadOnlySkillRequest) {
                 filterChain.doFilter(request, response);
                 return;
             }

@@ -36,7 +36,7 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody Map<String, String> payload) {
         String id = payload.get("id");
-        if (id == null) {
+        if (id == null || (id = id.trim()).isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("error", "ID is required"));
         }
 

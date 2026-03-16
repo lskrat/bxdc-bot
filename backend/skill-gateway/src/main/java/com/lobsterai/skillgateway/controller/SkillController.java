@@ -1,8 +1,12 @@
 package com.lobsterai.skillgateway.controller;
 
+import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.service.ApiProxyService;
+import com.lobsterai.skillgateway.service.LinuxScriptExecutionService;
 import com.lobsterai.skillgateway.service.SSHExecutorService;
 import com.lobsterai.skillgateway.service.SecurityFilterService;
+import com.lobsterai.skillgateway.service.ServerLedgerService;
+import com.lobsterai.skillgateway.service.SkillService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -12,6 +16,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.NoSuchElementException;
 import java.util.List;
 import java.util.Map;
 
@@ -20,6 +25,7 @@ import java.util.Map;
  * <p>
  * 暴露 RESTful 接口供 Agent Core 调用，以执行具体的 SSH 命令或 API 请求。
  * 包含安全检查逻辑。
+ * 此外，提供 Skill 的统一管理（CRUD）。
  * </p>
  */
 @RestController
@@ -29,12 +35,69 @@ public class SkillController {
     private final SSHExecutorService sshExecutorService;
     private final ApiProxyService apiProxyService;
     private final SecurityFilterService securityFilterService;
+    private final SkillService skillService;
+    private final LinuxScriptExecutionService linuxScriptExecutionService;
+    private final ServerLedgerService serverLedgerService;
 
-    public SkillController(SSHExecutorService sshExecutorService, ApiProxyService apiProxyService, SecurityFilterService securityFilterService) {
+    public SkillController(
+            SSHExecutorService sshExecutorService,
+            ApiProxyService apiProxyService,
+            SecurityFilterService securityFilterService,
+            SkillService skillService,
+            LinuxScriptExecutionService linuxScriptExecutionService,
+            ServerLedgerService serverLedgerService
+    ) {
         this.sshExecutorService = sshExecutorService;
         this.apiProxyService = apiProxyService;
         this.securityFilterService = securityFilterService;
+        this.skillService = skillService;
+        this.linuxScriptExecutionService = linuxScriptExecutionService;
+        this.serverLedgerService = serverLedgerService;
     }
+
+    // --- Skill Management (CRUD) ---
+
+    @GetMapping
+    public List<Skill> getAllSkills() {
+        return skillService.getAllSkills();
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<Skill> getSkillById(@PathVariable Long id) {
+        return skillService.getSkillById(id)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PostMapping
+    public ResponseEntity<?> createSkill(@RequestBody Skill skill) {
+        try {
+            return ResponseEntity.ok(skillService.createSkill(skill));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<?> updateSkill(@PathVariable Long id, @RequestBody Skill skillDetails) {
+        try {
+            return ResponseEntity.ok(skillService.updateSkill(id, skillDetails));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> deleteSkill(@PathVariable Long id) {
+        try {
+            skillService.deleteSkill(id);
+            return ResponseEntity.ok().build();
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    // --- Skill Execution ---
 
     /**
      * 执行 SSH 命令。
@@ -43,15 +106,47 @@ public class SkillController {
      * @return 命令执行结果或错误信息
      */
     @PostMapping("/ssh")
-    public ResponseEntity<String> executeSshCommand(@RequestBody SshRequest request) {
+    public ResponseEntity<String> executeSshCommand(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestBody SshRequest request
+    ) {
         if (!securityFilterService.isCommandSafe(request.getCommand())) {
             return ResponseEntity.badRequest().body("Command blocked by security policy");
         }
+
         try {
-            // In a real implementation, keys would be retrieved from secure storage based on serverId
-            // For this example, we assume they are passed or handled internally
-            String output = sshExecutorService.executeCommand(request.getHost(), request.getPort(), request.getUsername(), request.getPrivateKey(), request.getCommand());
-            return ResponseEntity.ok(output);
+            if (userId != null && !userId.isBlank()) {
+                // Ledger mode: Resolve credentials from server ledger
+                return serverLedgerService.getServerLedgerByIp(userId, request.getHost())
+                        .map(ledger -> {
+                            try {
+                                String output = sshExecutorService.executeCommandWithPassword(
+                                        ledger.getIp(),
+                                        request.getPort(),
+                                        ledger.getUsername(),
+                                        ledger.getPassword(),
+                                        request.getCommand()
+                                );
+                                return ResponseEntity.ok(output);
+                            } catch (IOException e) {
+                                return ResponseEntity.internalServerError().body("SSH execution failed: " + e.getMessage());
+                            }
+                        })
+                        .orElseGet(() -> ResponseEntity.badRequest().body("Server not found in user ledger: " + request.getHost()));
+            } else {
+                // Legacy mode: Use provided credentials
+                if (request.getUsername() == null || request.getPrivateKey() == null) {
+                    return ResponseEntity.badRequest().body("Missing username/privateKey for legacy SSH execution");
+                }
+                String output = sshExecutorService.executeCommand(
+                        request.getHost(),
+                        request.getPort(),
+                        request.getUsername(),
+                        request.getPrivateKey(),
+                        request.getCommand()
+                );
+                return ResponseEntity.ok(output);
+            }
         } catch (IOException e) {
             return ResponseEntity.internalServerError().body("SSH execution failed: " + e.getMessage());
         }
@@ -70,6 +165,26 @@ public class SkillController {
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body("API call failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 在预配置的 Linux 服务器上执行脚本命令。
+     *
+     * @param request 包含 serverId 和 command 的请求体
+     * @return 成功时 { "result": "..." }，失败时返回错误信息
+     */
+    @PostMapping("/linux-script")
+    public ResponseEntity<Map<String, Object>> executeLinuxScript(@RequestBody LinuxScriptRequest request) {
+        try {
+            String output = linuxScriptExecutionService.execute(request.getServerId(), request.getCommand());
+            return ResponseEntity.ok(Map.of("result", output));
+        } catch (NoSuchElementException e) {
+            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (IOException e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", "Linux script execution failed: " + e.getMessage()));
         }
     }
 
