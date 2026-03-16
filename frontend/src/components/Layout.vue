@@ -1,8 +1,15 @@
 <script setup lang="ts">
 import { useUser } from '../composables/useUser';
+import { useSkillHub } from '../composables/useSkillHub';
+import { useServerLedger } from '../composables/useServerLedger';
 import UserAvatar from './UserAvatar.vue';
+import SkillHub from './SkillHub.vue';
+import ServerLedger from './ServerLedger.vue';
+import { AppIcon, ServerIcon } from 'tdesign-icons-vue-next';
 
 const { currentUser, logout } = useUser();
+const { toggleSkillHub } = useSkillHub();
+const { toggleServerLedger } = useServerLedger();
 </script>
 
 <template>
@@ -16,12 +23,21 @@ const { currentUser, logout } = useUser();
         
         <div style="flex: 1"></div>
 
-        <div class="layout-actions" v-if="currentUser">
-          <div class="user-info">
+        <div class="layout-actions">
+          <t-button theme="default" variant="text" @click="toggleServerLedger" v-if="currentUser">
+            <template #icon><ServerIcon /></template>
+            Servers
+          </t-button>
+          <t-button theme="default" variant="text" @click="toggleSkillHub">
+            <template #icon><AppIcon /></template>
+            SkillHub
+          </t-button>
+          
+          <div class="user-info" v-if="currentUser">
             <UserAvatar :avatar="currentUser.avatar" :size="32" />
             <span class="user-name">{{ currentUser.nickname }}</span>
           </div>
-          <t-button theme="default" variant="text" @click="logout">Switch User</t-button>
+          <t-button v-if="currentUser" theme="default" variant="text" @click="logout">Switch User</t-button>
         </div>
       </div>
     </t-header>
@@ -30,6 +46,8 @@ const { currentUser, logout } = useUser();
         <slot />
       </div>
     </t-content>
+    <SkillHub />
+    <ServerLedger />
   </t-layout>
 </template>
 

@@ -2,8 +2,10 @@
 import { computed } from 'vue'
 import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
 import { useChat } from '../composables/useChat'
+import { useUser } from '../composables/useUser'
 
 const { messages, isThinking } = useChat()
+const { currentUser } = useUser()
 
 function formatToolStatus(status: 'running' | 'completed' | 'failed') {
   if (status === 'completed') return '已完成'
@@ -18,16 +20,32 @@ function formatTime(timestamp: number) {
   }).format(timestamp)
 }
 
+function getAvatarUrl(emoji: string) {
+  // Check if it's already a URL
+  if (emoji.startsWith('http') || emoji.startsWith('data:')) {
+    return emoji;
+  }
+
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+      <rect width="100%" height="100%" fill="#f0f0f0"/>
+      <text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-size="70">${emoji}</text>
+    </svg>
+  `.trim();
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+}
+
 const chatItems = computed(() =>
   (messages?.value ?? []).map((message, index, list) => ({
     id: message.id,
     role: message.role,
-    content: '',
+    content: [{ type: 'text', text: message.content }],
     rawContent: message.content,
     toolInvocations: message.toolInvocations ?? [],
     showThinking: message.role === 'assistant' && isThinking.value && index === list.length - 1,
     name: message.role === 'assistant' ? 'BXDC.bot' : '你',
     datetime: formatTime(message.timestamp),
+    avatar: message.role === 'assistant' ? getAvatarUrl('🤖') : getAvatarUrl(currentUser.value?.avatar || '👤'),
   } as any)),
 )
 </script>
@@ -54,6 +72,12 @@ const chatItems = computed(() =>
       :text-loading="false"
       :animation="'moving'"
     >
+      <template #avatar="{ item }">
+        <div class="chat-avatar" :class="item.role">
+          <img :src="item.avatar" class="avatar-img" />
+        </div>
+      </template>
+
       <template #content="{ item }">
         <div class="message-content-block">
           <transition name="thinking-fade">
@@ -286,5 +310,35 @@ const chatItems = computed(() =>
 .thinking-fade-leave-to {
   opacity: 0;
   transform: translateY(6px);
+}
+
+.chat-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background-color: #f0f0f0;
+}
+
+.chat-avatar.assistant {
+  background-color: #e6f7ff;
+}
+
+.chat-avatar.user {
+  background-color: #f6ffed;
+}
+
+.avatar-emoji {
+  line-height: 1;
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 </style>

@@ -232,6 +232,7 @@ export class AgentController {
       openAiApiKey,
       { modelName, baseUrl },
       this.skillManager,
+      userId,
     );
 
     // Retrieve memories (Limit to recent 50 to avoid clutter)

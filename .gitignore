@@ -21,3 +21,6 @@ target/
 # Database & runtime data
 backend/skill-gateway/data/
 backend/agent-core/memories.db
+
+# Backups
+frontend-react-backup/

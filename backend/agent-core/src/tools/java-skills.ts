@@ -43,11 +43,13 @@ export class JavaSshTool extends Tool {
 
   private gatewayUrl: string;
   private apiToken: string;
+  private userId?: string;
 
-  constructor(gatewayUrl: string, apiToken: string) {
+  constructor(gatewayUrl: string, apiToken: string, userId?: string) {
     super();
     this.gatewayUrl = gatewayUrl;
     this.apiToken = apiToken;
+    this.userId = userId;
   }
 
   /**
@@ -59,15 +61,18 @@ export class JavaSshTool extends Tool {
   async _call(input: string): Promise<string> {
     try {
       const params = JSON.parse(input);
+      const headers: Record<string, string> = {
+        "X-Agent-Token": this.apiToken,
+        "Content-Type": "application/json",
+      };
+      if (this.userId) {
+        headers["X-User-Id"] = this.userId;
+      }
+
       const response = await axios.post(
         `${this.gatewayUrl}/api/skills/ssh`,
         params,
-        {
-          headers: {
-            "X-Agent-Token": this.apiToken,
-            "Content-Type": "application/json",
-          },
-        }
+        { headers }
       );
       return response.data;
     } catch (error) {
@@ -112,6 +117,52 @@ export class JavaComputeTool extends Tool {
       return JSON.stringify(response.data);
     } catch (error) {
       return `Error executing compute: ${formatToolError(error)}`;
+    }
+  }
+}
+
+/**
+ * Java Linux 脚本执行工具。
+ * <p>
+ * 封装对 Java Skill Gateway Linux 脚本接口的调用。
+ * 允许 Agent 根据 serverId 在预配置服务器上执行命令。
+ * </p>
+ */
+export class JavaLinuxScriptTool extends Tool {
+  name = "linux_script_executor";
+  description = "Executes a shell command on a preconfigured Linux server. Input should be a JSON string with 'serverId' and 'command'. Returns the command output.";
+
+  private gatewayUrl: string;
+  private apiToken: string;
+
+  constructor(gatewayUrl: string, apiToken: string) {
+    super();
+    this.gatewayUrl = gatewayUrl;
+    this.apiToken = apiToken;
+  }
+
+  async _call(input: string): Promise<string> {
+    try {
+      const params = JSON.parse(input);
+      const response = await axios.post(
+        `${this.gatewayUrl}/api/skills/linux-script`,
+        params,
+        {
+          headers: {
+            "X-Agent-Token": this.apiToken,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      if (typeof response.data === "string") {
+        return response.data;
+      }
+      if (response.data && typeof response.data.result === "string") {
+        return response.data.result;
+      }
+      return JSON.stringify(response.data);
+    } catch (error) {
+      return `Error executing linux script: ${formatToolError(error)}`;
     }
   }
 }

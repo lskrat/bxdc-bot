@@ -1,6 +1,6 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
-import { JavaSshTool, JavaApiTool, JavaComputeTool } from "../tools/java-skills";
+import { JavaSshTool, JavaApiTool, JavaComputeTool, JavaLinuxScriptTool } from "../tools/java-skills";
 import type { SkillManager } from "../skills/skill.manager";
 
 /**
@@ -24,12 +24,14 @@ export class AgentFactory {
     apiToken: string,
     openAiApiKey: string,
     config?: { modelName?: string, baseUrl?: string },
-    skillManager?: SkillManager
+    skillManager?: SkillManager,
+    userId?: string
   ) {
     const tools = [
-      new JavaSshTool(gatewayUrl, apiToken),
+      new JavaSshTool(gatewayUrl, apiToken, userId),
       new JavaApiTool(gatewayUrl, apiToken),
       new JavaComputeTool(gatewayUrl, apiToken),
+      new JavaLinuxScriptTool(gatewayUrl, apiToken),
       ...(skillManager?.getLangChainTools() || []),
     ];
 
