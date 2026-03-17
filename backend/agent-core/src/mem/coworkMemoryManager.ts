@@ -667,6 +667,10 @@ export class MemoryManager {
   }
 
   markOrphanImplicitMemoriesStale(): void {
+    // For now, we don't want to mark memories as stale automatically 
+    // unless we have a better way to track their relevance.
+    // Birthday and other profile info should stay active.
+    /*
     const now = Date.now();
     this.db.run(`
       UPDATE user_memories
@@ -679,6 +683,7 @@ export class MemoryManager {
           WHERE s.memory_id = user_memories.id AND s.is_active = 1
         )
     `, [now]);
+    */
   }
 
   async applyTurnMemoryUpdates(options: ApplyTurnMemoryUpdatesOptions): Promise<ApplyTurnMemoryUpdatesResult> {

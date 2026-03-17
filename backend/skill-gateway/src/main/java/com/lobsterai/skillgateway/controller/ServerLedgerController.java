@@ -37,6 +37,7 @@ public class ServerLedgerController {
             List<Map<String, Object>> response = ledgers.stream().map(l -> {
                 Map<String, Object> map = new java.util.HashMap<>();
                 map.put("id", l.getId());
+                map.put("name", l.getName());
                 map.put("ip", l.getIp());
                 map.put("username", l.getUsername());
                 map.put("createdAt", l.getCreatedAt() != null ? l.getCreatedAt().toString() : "");

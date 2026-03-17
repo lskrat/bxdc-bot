@@ -62,16 +62,24 @@ public class SkillService {
     }
 
     private void ensureDefaultExtendedSkills() {
-        if (skillRepository.findByName("获取时间").isPresent()) {
-            return;
+        if (skillRepository.findByName("获取时间").isEmpty()) {
+            Skill getTimeSkill = new Skill();
+            getTimeSkill.setName("获取时间");
+            getTimeSkill.setDescription("获取当前系统时间，便于 Agent 在回答时间相关问题时使用。");
+            getTimeSkill.setType("EXTENSION");
+            getTimeSkill.setConfiguration("{\"kind\":\"time\",\"operation\":\"now\"}");
+            getTimeSkill.setEnabled(true);
+            skillRepository.save(getTimeSkill);
         }
 
-        Skill getTimeSkill = new Skill();
-        getTimeSkill.setName("获取时间");
-        getTimeSkill.setDescription("获取当前系统时间，便于 Agent 在回答时间相关问题时使用。");
-        getTimeSkill.setType("EXTENSION");
-        getTimeSkill.setConfiguration("{\"kind\":\"time\",\"operation\":\"now\"}");
-        getTimeSkill.setEnabled(true);
-        skillRepository.save(getTimeSkill);
+        if (skillRepository.findByName("服务器资源状态").isEmpty()) {
+            Skill serverStatusSkill = new Skill();
+            serverStatusSkill.setName("服务器资源状态");
+            serverStatusSkill.setDescription("查看远程服务器的资源状态（CPU、内存、磁盘、负载等）。");
+            serverStatusSkill.setType("EXTENSION");
+            serverStatusSkill.setConfiguration("{\"kind\":\"monitor\",\"operation\":\"server-resource-status\"}");
+            serverStatusSkill.setEnabled(true);
+            skillRepository.save(serverStatusSkill);
+        }
     }
 }

@@ -131,7 +131,7 @@ export class MemoryService implements OnModuleInit {
       userText: options.userText,
       assistantText: options.assistantText,
       implicitEnabled: true, // Enable implicit extraction
-      memoryLlmJudgeEnabled: false, // Disable LLM judge for now (requires config)
+      memoryLlmJudgeEnabled: true, // Enable LLM judge for better extraction
       guardLevel: 'standard',
     });
     

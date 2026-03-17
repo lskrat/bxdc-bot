@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
 import { useChat } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 
-const { messages, isThinking } = useChat()
+const { messages, isThinking, sendMessage } = useChat()
 const { currentUser } = useUser()
 
 function formatToolStatus(status: 'running' | 'completed' | 'failed') {
@@ -29,10 +29,36 @@ function getAvatarUrl(emoji: string) {
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
       <rect width="100%" height="100%" fill="#f0f0f0"/>
-      <text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-size="70">${emoji}</text>
+      <text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-size="70">${emoji}</text>
     </svg>
   `.trim();
   return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+}
+
+function parseConfirmationRequest(content: string) {
+  try {
+    if (content.includes('CONFIRMATION_REQUIRED')) {
+      // Try to parse the JSON block if it exists
+      const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/{[\s\S]*"status":\s*"CONFIRMATION_REQUIRED"[\s\S]*}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[1] || jsonMatch[0]);
+        if (parsed.status === 'CONFIRMATION_REQUIRED') {
+          return parsed;
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore parsing errors
+  }
+  return null;
+}
+
+function handleConfirm(action: 'yes' | 'no') {
+  if (action === 'yes') {
+    sendMessage('I confirm. Please proceed with "confirmed": true.');
+  } else {
+    sendMessage('I cancel this action. Do not proceed.');
+  }
 }
 
 const chatItems = computed(() =>
@@ -41,6 +67,7 @@ const chatItems = computed(() =>
     role: message.role,
     content: [{ type: 'text', text: message.content }],
     rawContent: message.content,
+    confirmationRequest: message.role === 'assistant' ? parseConfirmationRequest(message.content) : null,
     toolInvocations: message.toolInvocations ?? [],
     showThinking: message.role === 'assistant' && isThinking.value && index === list.length - 1,
     name: message.role === 'assistant' ? 'BXDC.bot' : '你',
@@ -96,6 +123,20 @@ const chatItems = computed(() =>
                 : item.rawContent || ''
             "
           />
+
+          <div v-if="item.confirmationRequest" class="confirmation-card">
+            <div class="confirmation-header">
+              <span class="confirmation-title">Action Confirmation Required</span>
+            </div>
+            <div class="confirmation-body">
+              <p><strong>Action:</strong> {{ item.confirmationRequest.summary }}</p>
+              <p><strong>Details:</strong> {{ item.confirmationRequest.details }}</p>
+            </div>
+            <div class="confirmation-actions">
+              <t-button theme="default" variant="outline" @click="handleConfirm('no')">Cancel</t-button>
+              <t-button theme="primary" @click="handleConfirm('yes')">Confirm & Execute</t-button>
+            </div>
+          </div>
 
           <div
             v-if="item.role === 'assistant' && item.toolInvocations.length"
@@ -321,6 +362,7 @@ const chatItems = computed(() =>
   justify-content: center;
   font-size: 24px;
   background-color: #f0f0f0;
+  overflow: hidden;
 }
 
 .chat-avatar.assistant {
@@ -340,5 +382,48 @@ const chatItems = computed(() =>
   height: 100%;
   object-fit: cover;
   border-radius: 50%;
+}
+
+.confirmation-card {
+  margin-top: 8px;
+  border: 1px solid var(--td-border-level-2-color);
+  border-radius: var(--td-radius-medium);
+  background-color: var(--td-bg-color-container);
+  overflow: hidden;
+  max-width: 400px;
+}
+
+.confirmation-header {
+  padding: 8px 12px;
+  background-color: var(--td-warning-color-1);
+  border-bottom: 1px solid var(--td-border-level-1-color);
+}
+
+.confirmation-title {
+  font-weight: 600;
+  color: var(--td-warning-color-6);
+  font-size: 14px;
+}
+
+.confirmation-body {
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.confirmation-body p {
+  margin: 0 0 8px 0;
+}
+
+.confirmation-body p:last-child {
+  margin-bottom: 0;
+}
+
+.confirmation-actions {
+  padding: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--td-border-level-1-color);
 }
 </style>

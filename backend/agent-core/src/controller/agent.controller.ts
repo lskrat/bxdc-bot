@@ -243,7 +243,16 @@ export class AgentController {
       : '';
     const skillContext = this.skillManager.buildSkillPromptContext();
     
-    const fullInstruction = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
+    // Add confirmation instructions
+    const confirmationContext = `
+[Tool Confirmation Instructions]
+If a tool returns a response with status "CONFIRMATION_REQUIRED", you MUST NOT proceed with the action.
+Instead, you MUST output the confirmation request to the user exactly as requested by the tool, and ask for their approval.
+If the user approves, you should call the tool again, this time including '"confirmed": true' in the tool parameters.
+If the user denies, acknowledge the cancellation and do not execute the tool.
+`;
+    
+    const fullInstruction = `${skillContext}${confirmationContext}${memoryContext}User Instruction:\n${instruction}`;
 
     // Run agent asynchronously
     (async () => {

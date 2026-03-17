@@ -39,7 +39,7 @@ function formatToolError(error: unknown): string {
  */
 export class JavaSshTool extends Tool {
   name = "ssh_executor";
-  description = "Executes a shell command on a remote server via SSH. Input should be a JSON string with 'host', 'username', 'privateKey', and 'command'.";
+  description = "Executes a shell command on a remote server via SSH. Input should be a JSON string with 'host', 'username', 'command', and either 'privateKey' or 'password', and optionally 'confirmed' (boolean). For safe/read-only commands, you can set 'confirmed': true to skip user confirmation. For destructive commands (e.g. rm, reboot), you MUST ask the user first.";
 
   private gatewayUrl: string;
   private apiToken: string;
@@ -61,6 +61,18 @@ export class JavaSshTool extends Tool {
   async _call(input: string): Promise<string> {
     try {
       const params = JSON.parse(input);
+      
+      // Basic confirmation logic for SSH
+      const dangerousPattern = /rm\s+-rf|mkfs|dd\s+if=|shutdown|reboot/;
+      if (!params.confirmed && dangerousPattern.test(params.command)) {
+        return JSON.stringify({
+          status: "CONFIRMATION_REQUIRED",
+          summary: `Execute potentially dangerous SSH command on ${params.host}`,
+          details: `Command: ${params.command}`,
+          instruction: "This command looks dangerous. Please ask the user to confirm this action. If they agree, call this tool again with 'confirmed': true."
+        });
+      }
+
       const headers: Record<string, string> = {
         "X-Agent-Token": this.apiToken,
         "Content-Type": "application/json",
@@ -163,6 +175,46 @@ export class JavaLinuxScriptTool extends Tool {
       return JSON.stringify(response.data);
     } catch (error) {
       return `Error executing linux script: ${formatToolError(error)}`;
+    }
+  }
+}
+
+export class JavaServerLookupTool extends Tool {
+  name = "server_lookup";
+  description = "Looks up server connection details (ip, username) by the server's alias name. Input should be a JSON string with 'name'.";
+
+  private gatewayUrl: string;
+  private apiToken: string;
+  private userId?: string;
+
+  constructor(gatewayUrl: string, apiToken: string, userId?: string) {
+    super();
+    this.gatewayUrl = gatewayUrl;
+    this.apiToken = apiToken;
+    this.userId = userId;
+  }
+
+  async _call(input: string): Promise<string> {
+    try {
+      const params = JSON.parse(input);
+      const headers: Record<string, string> = {
+        "X-Agent-Token": this.apiToken,
+        "Content-Type": "application/json",
+      };
+      if (this.userId) {
+        headers["X-User-Id"] = this.userId;
+      }
+
+      const response = await axios.get(
+        `${this.gatewayUrl}/api/skills/server-lookup`,
+        { 
+          headers,
+          params: { name: params.name }
+        }
+      );
+      return JSON.stringify(response.data);
+    } catch (error) {
+      return `Error looking up server: ${formatToolError(error)}`;
     }
   }
 }

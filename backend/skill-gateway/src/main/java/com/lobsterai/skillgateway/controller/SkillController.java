@@ -97,6 +97,25 @@ public class SkillController {
         }
     }
 
+    @GetMapping("/server-lookup")
+    public ResponseEntity<?> lookupServer(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestParam String name
+    ) {
+        if (userId == null || userId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "X-User-Id header is required for server lookup"));
+        }
+        return serverLedgerService.getServerLedgerByName(userId, name)
+                .map(ledger -> {
+                    Map<String, Object> response = new java.util.HashMap<>();
+                    response.put("ip", ledger.getIp());
+                    response.put("username", ledger.getUsername());
+                    response.put("password", ledger.getPassword());
+                    return ResponseEntity.ok(response);
+                })
+                .orElseGet(() -> ResponseEntity.status(404).body(Map.of("error", "Server not found with name: " + name)));
+    }
+
     // --- Skill Execution ---
 
     /**

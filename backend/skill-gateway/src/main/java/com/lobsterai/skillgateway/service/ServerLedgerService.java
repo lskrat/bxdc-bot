@@ -24,6 +24,9 @@ public class ServerLedgerService {
         if (serverLedgerRepository.findByUserIdAndIp(userId, ledger.getIp()).isPresent()) {
             throw new IllegalArgumentException("Server with IP " + ledger.getIp() + " already exists for this user.");
         }
+        if (serverLedgerRepository.findByUserIdAndName(userId, ledger.getName()).isPresent()) {
+            throw new IllegalArgumentException("Server with name " + ledger.getName() + " already exists for this user.");
+        }
         ledger.setUserId(userId);
         return serverLedgerRepository.save(ledger);
     }
@@ -32,6 +35,13 @@ public class ServerLedgerService {
         ServerLedger ledger = serverLedgerRepository.findByUserIdAndId(userId, id)
                 .orElseThrow(() -> new IllegalArgumentException("Server ledger not found or access denied"));
 
+        // Check if name is being updated and if it conflicts
+        if (!ledger.getName().equals(ledgerDetails.getName()) && 
+            serverLedgerRepository.findByUserIdAndName(userId, ledgerDetails.getName()).isPresent()) {
+            throw new IllegalArgumentException("Server with name " + ledgerDetails.getName() + " already exists for this user.");
+        }
+
+        ledger.setName(ledgerDetails.getName());
         ledger.setIp(ledgerDetails.getIp());
         ledger.setUsername(ledgerDetails.getUsername());
         
@@ -51,5 +61,9 @@ public class ServerLedgerService {
 
     public Optional<ServerLedger> getServerLedgerByIp(String userId, String ip) {
         return serverLedgerRepository.findByUserIdAndIp(userId, ip);
+    }
+
+    public Optional<ServerLedger> getServerLedgerByName(String userId, String name) {
+        return serverLedgerRepository.findByUserIdAndName(userId, name);
     }
 }

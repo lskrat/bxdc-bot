@@ -10,6 +10,7 @@ const isFormVisible = ref(false);
 const isEditMode = ref(false);
 const formTitle = ref('Add Server');
 const formData = reactive<ServerLedger>({
+  name: '',
   ip: '',
   username: '',
   password: ''
@@ -19,6 +20,7 @@ const currentId = ref<number | undefined>(undefined);
 function openAddForm() {
   isEditMode.value = false;
   formTitle.value = 'Add Server';
+  formData.name = '';
   formData.ip = '';
   formData.username = '';
   formData.password = '';
@@ -29,6 +31,7 @@ function openAddForm() {
 function openEditForm(ledger: ServerLedger) {
   isEditMode.value = true;
   formTitle.value = 'Edit Server';
+  formData.name = ledger.name;
   formData.ip = ledger.ip;
   formData.username = ledger.username;
   formData.password = ''; // Don't show password
@@ -87,7 +90,7 @@ async function handleDelete(id: number) {
       </div>
       <t-list v-else :split="true">
         <t-list-item v-for="ledger in ledgers" :key="ledger.id">
-          <t-list-item-meta :title="ledger.ip" :description="ledger.username">
+          <t-list-item-meta :title="ledger.name" :description="`${ledger.ip} (${ledger.username})`">
             <template #image>
               <div class="server-icon">
                 <ServerIcon />
@@ -116,6 +119,9 @@ async function handleDelete(id: number) {
       @confirm="handleSubmit"
     >
       <t-form :data="formData" label-align="top">
+        <t-form-item label="Server Name" name="name">
+          <t-input v-model="formData.name" placeholder="e.g. web-prod-1" />
+        </t-form-item>
         <t-form-item label="IP Address" name="ip">
           <t-input v-model="formData.ip" placeholder="e.g. 192.168.1.1" />
         </t-form-item>

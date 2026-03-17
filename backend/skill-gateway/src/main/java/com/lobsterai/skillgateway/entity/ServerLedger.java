@@ -5,7 +5,8 @@ import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "server_ledgers", uniqueConstraints = {
-    @UniqueConstraint(columnNames = {"userId", "ip"})
+    @UniqueConstraint(columnNames = {"userId", "ip"}),
+    @UniqueConstraint(columnNames = {"userId", "name"})
 })
 public class ServerLedger {
     @Id
@@ -14,6 +15,9 @@ public class ServerLedger {
 
     @Column(nullable = false)
     private String userId;
+
+    @Column(nullable = false)
+    private String name;
 
     @Column(nullable = false)
     private String ip;
@@ -52,6 +56,14 @@ public class ServerLedger {
 
     public void setUserId(String userId) {
         this.userId = userId;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
     }
 
     public String getIp() {

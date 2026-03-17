@@ -23,6 +23,9 @@ public class Skill {
 
     private boolean enabled = true;
 
+    @Column(nullable = false)
+    private boolean requiresConfirmation = false;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -83,6 +86,14 @@ public class Skill {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public boolean isRequiresConfirmation() {
+        return requiresConfirmation;
+    }
+
+    public void setRequiresConfirmation(boolean requiresConfirmation) {
+        this.requiresConfirmation = requiresConfirmation;
     }
 
     public LocalDateTime getCreatedAt() {

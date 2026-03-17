@@ -3,6 +3,7 @@ import { useUser } from './useUser';
 
 export interface ServerLedger {
   id?: number;
+  name: string;
   ip: string;
   username: string;
   password?: string;

@@ -13,10 +13,21 @@ export interface ApiConfig {
 
 // Placeholder for external dependency
 export function resolveCurrentApiConfig(): { config: ApiConfig | null } {
-  // In a real implementation, this would retrieve the API configuration
-  // For now, return null or throw an error to indicate it needs implementation
-  console.warn('resolveCurrentApiConfig is a placeholder. Please implement configuration retrieval.');
-  return { config: null };
+  const apiKey = process.env.OPENAI_API_KEY;
+  const baseURL = process.env.OPENAI_API_BASE || 'https://api.openai.com/v1';
+  const model = process.env.OPENAI_MODEL_NAME || 'gpt-4';
+
+  if (!apiKey) {
+    return { config: null };
+  }
+
+  return {
+    config: {
+      apiKey,
+      baseURL,
+      model,
+    },
+  };
 }
 
 const FACTUAL_PROFILE_RE = /(我叫|我是(?!谁|哪|几|多少)|我的名字|我名字|我来自|我住在|我的职业|我的生日|我生日|我的出生日期|我出生于|我生于|我有(?!\s*(?:一个|个)?问题)|我养了|我喜欢|我偏好|我习惯|\bmy\s+name\s+is\b|\bi\s+am\b|\bi['’]?m\b|\bmy\s+birthday\b|\bdate\s+of\s+birth\b|\bi\s+was\s+born\s+on\b|\bi\s+was\s+born\s+in\b|\bi\s+live\s+in\b|\bi['’]?m\s+from\b|\bi\s+work\s+as\b|\bi\s+have\b|\bi\s+prefer\b|\bi\s+like\b|\bi\s+usually\b)/i;
@@ -222,7 +233,7 @@ async function judgeWithLlm(
   const { config } = resolveCurrentApiConfig();
   if (!config) return null;
 
-  const url = buildAnthropicMessagesUrl(config.baseURL);
+  const url = `${config.baseURL.replace(/\/+$/, '')}/chat/completions`;
   const normalizedText = normalizeText(input.text).slice(0, LLM_INPUT_MAX_CHARS);
   if (!normalizedText) return null;
 
@@ -250,15 +261,17 @@ async function judgeWithLlm(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
+        'Authorization': `Bearer ${config.apiKey}`,
       },
       body: JSON.stringify({
         model: config.model,
         max_tokens: 120,
         temperature: 0,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        response_format: { type: 'json_object' }
       }),
       signal: controller.signal,
     });
@@ -266,8 +279,8 @@ async function judgeWithLlm(
     if (!response.ok) {
       return null;
     }
-    const payload = await response.json();
-    const text = extractTextFromAnthropicResponse(payload);
+    const payload = await response.json() as any;
+    const text = payload.choices?.[0]?.message?.content || '';
     const parsed = parseLlmJudgePayload(text);
     if (!parsed || parsed.confidence < LLM_MIN_CONFIDENCE) {
       return null;
