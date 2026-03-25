@@ -1,92 +1,101 @@
-# Fishtank Single-Host Deployment
+# Fishtank 三端单机部署文档
 
-本文是一份完整的三服务部署说明书，目标是在同一台 Linux 服务器上部署：
+本文用于指导在同一台 Linux 服务器上部署以下三端，并说明上线前需要修改的配置项：
 
-- `frontend`
-- `skill-gateway`
-- `agent-core`
+- `frontend`：Vue 3 前端静态站点
+- `skill-gateway`：Spring Boot 网关服务
+- `agent-core`：NestJS Agent 服务
 
-并通过统一域名对外提供服务。
+推荐采用单域名反向代理方式，对外只暴露 `80/443`，内部服务仅监听本机地址。
 
-## 架构说明
+## 1. 部署拓扑
 
-推荐拓扑如下：
+推荐部署结构如下：
 
-- `nginx`：对外提供 `80/443`
-- `frontend`：构建为静态文件，由 `nginx` 直接托管
-- `skill-gateway`：监听 `127.0.0.1:18080`
-- `agent-core`：监听 `127.0.0.1:3000`
-- `mem0`：监听 `127.0.0.1:8001`，或使用远程服务地址
+```text
+浏览器
+  -> nginx:80/443
+     -> /            -> frontend/dist
+     -> /api/        -> 127.0.0.1:18080   (skill-gateway)
+     -> /features/   -> 127.0.0.1:3000    (agent-core)
 
-建议浏览器始终只访问同一个域名：
+skill-gateway -> agent-core
+agent-core -> mem0 / 大模型接口
+```
 
-- `https://your-domain.example.com/` -> 前端页面
-- `https://your-domain.example.com/api/` -> `skill-gateway`
-- `https://your-domain.example.com/features/` -> `agent-core`
+推荐端口规划：
 
-服务调用关系：
+| 服务 | 监听地址 | 端口 | 说明 |
+|------|----------|------|------|
+| `frontend` | 由 `nginx` 托管 | - | 静态文件，不单独监听业务端口 |
+| `skill-gateway` | `127.0.0.1` | `18080` | 网关接口、鉴权、SSE 转发 |
+| `agent-core` | `127.0.0.1` 或 `0.0.0.0` | `3000` | Agent 编排与功能接口 |
+| `mem0` | `127.0.0.1` 或远端地址 | `8001` | 可选依赖，不属于三端主体 |
 
-- 浏览器 -> `nginx`
-- `nginx /api/*` -> `skill-gateway`
-- `nginx /features/*` -> `agent-core`
-- `skill-gateway` -> `agent-core`
-- `agent-core` -> `mem0`
-- `agent-core` -> 大模型 API
+## 2. 服务器准备
 
-## 前置条件
-
-服务器建议准备以下运行时：
+建议服务器至少准备以下运行环境：
 
 - `nginx`
 - `Node.js 18+`
 - `Java 17`
-- 可选：`systemd`
+- `Maven 3.8+`，仅在服务器本地打包 `skill-gateway` 时需要
+- `systemd`，用于托管后台服务
 
-如果服务器无法访问公网依赖源，请在有网环境完成打包后上传产物。
+如果目标服务器不能联网，请在有网环境完成构建，再上传构建产物。
 
-## 目录规划建议
+## 3. 推荐目录结构
 
-建议部署目录如下：
+建议统一部署到 `/opt/fishtank`：
 
 ```text
 /opt/fishtank/
-  frontend/
-    dist/
-  agent-core/
-    dist/
-    node_modules/
-    package.json
-    package-lock.json
-    SKILLs/
-    .env
-  skill-gateway/
-    skill-gateway-0.0.1-SNAPSHOT.jar
-    application-prod.properties
-  data/
-    fishtank_db.mv.db
+├── frontend/
+│   └── dist/
+├── agent-core/
+│   ├── dist/
+│   ├── node_modules/
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── SKILLs/
+│   └── .env
+├── skill-gateway/
+│   ├── skill-gateway-0.0.1-SNAPSHOT.jar
+│   └── application-prod.properties
+└── data/
+    └── fishtank_db.mv.db
 ```
 
-## 配置文件
+## 4. 三端上线前配置修改
 
-### frontend
+### 4.1 Frontend 配置
 
-复制 `frontend/.env.production.example` 为 `frontend/.env.production`：
+文件来源：`frontend/.env.production.example`
+
+生产环境建议新建 `frontend/.env.production`：
 
 ```env
 VITE_API_URL=https://your-domain.example.com
 VITE_AGENT_URL=https://your-domain.example.com
 ```
 
-说明：
+配置说明：
 
-- `VITE_API_URL`：前端访问 `skill-gateway` 的统一入口
-- `VITE_AGENT_URL`：前端访问 `agent-core` 的统一入口
+- `VITE_API_URL`：前端访问 `skill-gateway` 的基础地址
+- `VITE_AGENT_URL`：前端访问 `agent-core` 的基础地址
 
-如果你使用同域反向代理，这两个值都填同一个域名即可。
+当前代码中：
 
-### agent-core
+- 聊天任务、登录注册等走 `VITE_API_URL`
+- 欢迎语、头像生成等接口直接走 `VITE_AGENT_URL`
 
-复制 `backend/agent-core/.env.example` 为 `backend/agent-core/.env`：
+如果采用同域名反向代理，这两个值都写成同一个域名即可，例如 `https://your-domain.example.com`。
+
+### 4.2 Agent Core 配置
+
+文件来源：`backend/agent-core/.env.example`
+
+生产环境建议复制为 `/opt/fishtank/agent-core/.env`：
 
 ```env
 NODE_ENV=production
@@ -98,24 +107,27 @@ OPENAI_MODEL_NAME=gpt-4o-mini
 OPENAI_API_BASE=https://api.openai.com/v1
 
 JAVA_GATEWAY_URL=http://127.0.0.1:18080
-JAVA_GATEWAY_TOKEN=your-java-gateway-token
+JAVA_GATEWAY_TOKEN=your-secure-token-here
 
 MEM0_URL=http://127.0.0.1:8001
 ```
 
-说明：
+配置说明：
 
-- `HOST` / `PORT`：`agent-core` 监听地址和端口
-- `OPENAI_API_KEY`：大模型密钥
-- `OPENAI_MODEL_NAME`：模型名，例如 `gpt-4o-mini`、`deepseek-chat`
-- `OPENAI_API_BASE`：OpenAI 兼容接口地址
-- `JAVA_GATEWAY_URL`：指向 `skill-gateway`
-- `JAVA_GATEWAY_TOKEN`：与 `skill-gateway` 中要求的 token 保持一致
-- `MEM0_URL`：记忆服务地址
+- `HOST`：监听地址。若只通过 `nginx` 访问，建议仍可保留 `0.0.0.0` 或改为 `127.0.0.1`
+- `PORT`：`agent-core` 监听端口，默认 `3000`
+- `OPENAI_API_KEY`：大模型接口密钥
+- `OPENAI_MODEL_NAME`：模型名
+- `OPENAI_API_BASE`：兼容 OpenAI 协议的接口地址
+- `JAVA_GATEWAY_URL`：指向 `skill-gateway` 内网地址
+- `JAVA_GATEWAY_TOKEN`：调用 `skill-gateway` 的鉴权 token，必须与网关侧保持一致
+- `MEM0_URL`：记忆服务地址，可为本机或远端
 
-### skill-gateway
+### 4.3 Skill Gateway 配置
 
-复制 `backend/skill-gateway/src/main/resources/application-prod.example.properties` 为服务器上的 `application-prod.properties`：
+文件来源：`backend/skill-gateway/src/main/resources/application-prod.example.properties`
+
+生产环境建议放置为 `/opt/fishtank/skill-gateway/application-prod.properties`：
 
 ```properties
 spring.datasource.url=jdbc:h2:file:/opt/fishtank/data/fishtank_db;DB_CLOSE_DELAY=-1
@@ -134,16 +146,24 @@ agent.core.url=http://127.0.0.1:3000
 app.cors.allowed-origins=https://your-domain.example.com
 ```
 
-说明：
+除此之外，`skill-gateway` 的技能执行接口还会读取环境变量：
 
-- `server.address` / `server.port`：`skill-gateway` 监听地址和端口
-- `agent.core.url`：`skill-gateway` 调用 `agent-core` 的地址
-- `app.cors.allowed-origins`：允许前端访问的域名，支持逗号分隔多个值
-- `spring.datasource.*`：本地 H2 数据库配置
+```bash
+export JAVA_GATEWAY_TOKEN=your-secure-token-here
+```
 
-## 打包步骤
+配置说明：
 
-### 1. 打包 frontend
+- `spring.datasource.*`：H2 数据库位置和账号
+- `server.address`：建议改成 `127.0.0.1`，避免直接暴露网关端口
+- `server.port`：网关监听端口，默认 `18080`
+- `agent.core.url`：网关调用 `agent-core` 的地址
+- `app.cors.allowed-origins`：允许浏览器访问的前端域名，多个域名可用英文逗号分隔
+- `JAVA_GATEWAY_TOKEN`：`/api/skills/**` 写操作接口使用的鉴权 token
+
+## 5. 三端打包步骤
+
+### 5.1 打包 Frontend
 
 在有网环境执行：
 
@@ -153,15 +173,15 @@ npm ci
 npm run build
 ```
 
-构建完成后，会生成：
+构建完成后生成：
 
 - `frontend/dist/`
 
-将整个 `dist/` 目录上传到服务器，例如：
+上传到服务器目标目录：
 
 - `/opt/fishtank/frontend/dist`
 
-### 2. 打包 agent-core
+### 5.2 打包 Agent Core
 
 在有网环境执行：
 
@@ -171,7 +191,7 @@ npm ci
 npm run build
 ```
 
-上传以下内容到服务器，例如 `/opt/fishtank/agent-core/`：
+需要上传的内容：
 
 - `dist/`
 - `node_modules/`
@@ -180,12 +200,25 @@ npm run build
 - `SKILLs/`
 - `.env`
 
-说明：
+如果希望打成一个离线包，可在 `backend` 目录执行：
 
-- 如果目标机是 Linux，请尽量在 Linux 环境打包 `node_modules`
-- 不建议在 macOS 上安装依赖后直接复制到 Linux 使用
+```bash
+tar czvf agent-core-deploy.tar.gz \
+  agent-core/dist \
+  agent-core/node_modules \
+  agent-core/package.json \
+  agent-core/package-lock.json \
+  agent-core/SKILLs \
+  agent-core/.env
+```
 
-### 3. 打包 skill-gateway
+注意事项：
+
+- `node_modules` 与操作系统、CPU 架构相关
+- 目标服务器是 Linux 时，最好在 Linux 环境执行 `npm ci`
+- 不建议直接把 macOS 上安装出来的 `node_modules` 拷贝到 Linux 运行
+
+### 5.3 打包 Skill Gateway
 
 在有网环境执行：
 
@@ -194,41 +227,142 @@ cd backend/skill-gateway
 mvn -DskipTests package
 ```
 
-上传：
+构建完成后生成：
+
+- `target/skill-gateway-0.0.1-SNAPSHOT.jar`
+
+上传以下内容到服务器：
 
 - `target/skill-gateway-0.0.1-SNAPSHOT.jar`
 - `application-prod.properties`
 
-## 启动步骤
+## 6. 服务器部署步骤
 
-建议启动顺序：
+### 6.1 部署 Frontend
 
-1. 启动 `mem0`
-2. 启动 `agent-core`
-3. 启动 `skill-gateway`
-4. 配置并重载 `nginx`
+```bash
+mkdir -p /opt/fishtank/frontend
+```
 
-### 启动 agent-core
+将本地构建得到的 `dist/` 整体上传到：
+
+- `/opt/fishtank/frontend/dist`
+
+### 6.2 部署 Agent Core
+
+```bash
+mkdir -p /opt/fishtank/agent-core
+```
+
+将构建产物上传并解压到 `/opt/fishtank/agent-core`，确保该目录下至少包含：
+
+- `dist/`
+- `node_modules/`
+- `package.json`
+- `package-lock.json`
+- `SKILLs/`
+- `.env`
+
+启动命令：
 
 ```bash
 cd /opt/fishtank/agent-core
 node dist/main.js
 ```
 
-### 启动 skill-gateway
+### 6.3 部署 Skill Gateway
+
+```bash
+mkdir -p /opt/fishtank/skill-gateway
+mkdir -p /opt/fishtank/data
+```
+
+将 `jar` 和配置文件上传到 `/opt/fishtank/skill-gateway` 后，执行：
 
 ```bash
 cd /opt/fishtank/skill-gateway
-java -jar skill-gateway-0.0.1-SNAPSHOT.jar --spring.config.location=/opt/fishtank/skill-gateway/application-prod.properties
+export JAVA_GATEWAY_TOKEN=your-secure-token-here
+java -jar skill-gateway-0.0.1-SNAPSHOT.jar \
+  --spring.config.location=/opt/fishtank/skill-gateway/application-prod.properties
 ```
 
-### 配置 nginx
+## 7. systemd 托管
 
-示例配置文件已经放在：
+仓库已提供两个示例服务文件：
+
+- `deploy/systemd/agent-core.service`
+- `deploy/systemd/skill-gateway.service`
+
+使用前建议检查以下内容是否需要修改：
+
+- `WorkingDirectory`
+- `ExecStart`
+- `Environment`
+- `EnvironmentFile`
+
+### 7.1 agent-core.service 示例
+
+建议在现有示例基础上补充环境文件：
+
+```ini
+[Unit]
+Description=Fishtank agent-core
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fishtank/agent-core
+ExecStart=/usr/bin/node /opt/fishtank/agent-core/dist/main.js
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/fishtank/agent-core/.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 7.2 skill-gateway.service 示例
+
+建议根据实际 token 增加环境变量：
+
+```ini
+[Unit]
+Description=Fishtank skill-gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fishtank/skill-gateway
+Environment=JAVA_GATEWAY_TOKEN=your-secure-token-here
+ExecStart=/usr/bin/java -jar /opt/fishtank/skill-gateway/skill-gateway-0.0.1-SNAPSHOT.jar --spring.config.location=/opt/fishtank/skill-gateway/application-prod.properties
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 7.3 systemd 启用命令
+
+```bash
+cp deploy/systemd/agent-core.service /etc/systemd/system/
+cp deploy/systemd/skill-gateway.service /etc/systemd/system/
+
+systemctl daemon-reload
+systemctl enable --now agent-core
+systemctl enable --now skill-gateway
+```
+
+如果 `node` 或 `java` 不在 `/usr/bin`，请先修改 `ExecStart`。
+
+## 8. nginx 配置
+
+仓库中已提供单域名示例：
 
 - `deploy/nginx/fishtank.single-host.conf`
 
-核心配置如下：
+可部署为例如 `/etc/nginx/conf.d/fishtank.conf`：
 
 ```nginx
 server {
@@ -244,46 +378,46 @@ server {
 
     location /api/ {
         proxy_pass http://127.0.0.1:18080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 
     location /features/ {
         proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
 ```
 
-如果你已经准备好域名和证书，可以再补 `443 ssl` 配置。
-
-## systemd 启动建议
-
-示例文件已提供：
-
-- `deploy/systemd/agent-core.service`
-- `deploy/systemd/skill-gateway.service`
-
-使用方式：
+加载配置：
 
 ```bash
-cp deploy/systemd/agent-core.service /etc/systemd/system/
-cp deploy/systemd/skill-gateway.service /etc/systemd/system/
-
-systemctl daemon-reload
-systemctl enable --now agent-core
-systemctl enable --now skill-gateway
-systemctl restart nginx
+nginx -t
+systemctl reload nginx
 ```
 
-如果你的 `node` 或 `java` 不在 `/usr/bin/`，请先修改服务文件中的 `ExecStart`。
+如果已经有 HTTPS 证书，可以在此基础上增加 `443 ssl` 配置。
 
-## 服务可用性测试
+## 9. 启动顺序
 
-### agent-core 测试接口
+建议启动顺序如下：
 
-本次已增加健康检查接口：
+1. 启动 `mem0` 或确认远端 `mem0` 可用
+2. 启动 `agent-core`
+3. 启动 `skill-gateway`
+4. 启动或重载 `nginx`
+5. 浏览器访问前端并做联调验证
 
-- `GET /health`
+## 10. 上线后验证
 
-本机测试：
+### 10.1 验证 Agent Core
+
+健康检查接口：
 
 ```bash
 curl http://127.0.0.1:3000/health
@@ -294,54 +428,27 @@ curl http://127.0.0.1:3000/health
 ```json
 {
   "status": "ok",
-  "service": "agent-core"
+  "service": "agent-core",
+  "timestamp": "2026-03-25T00:00:00.000Z",
+  "uptimeSeconds": 12
 }
 ```
 
-也可以测试一个现有业务接口：
+### 10.2 验证 Skill Gateway
 
-- `POST /features/avatar/generate`
-
-示例：
-
-```bash
-curl -X POST http://127.0.0.1:3000/features/avatar/generate \
-  -H "Content-Type: application/json" \
-  -d '{"nickname":"test"}'
-```
-
-### skill-gateway 测试接口
-
-本次已增加健康检查接口：
-
-- `GET /api/health`
-
-本机测试：
+健康检查接口：
 
 ```bash
 curl http://127.0.0.1:18080/api/health
 ```
 
-预期返回类似：
-
-```json
-{
-  "status": "ok",
-  "service": "skill-gateway"
-}
-```
-
-也可以测试一个现有公开接口：
-
-- `GET /api/skills`
-
-示例：
+也可以验证公开技能列表：
 
 ```bash
 curl http://127.0.0.1:18080/api/skills
 ```
 
-### 前端测试
+### 10.3 验证 Frontend
 
 浏览器访问：
 
@@ -349,33 +456,25 @@ curl http://127.0.0.1:18080/api/skills
 https://your-domain.example.com/
 ```
 
-检查：
+重点检查：
 
-- 页面能正常打开
-- 注册/登录接口能访问
-- 首页欢迎语可返回
-- 聊天时 SSE 能正常建立
+- 页面是否正常打开
+- 登录、注册接口是否正常
+- 聊天任务是否能成功创建
+- SSE 流是否正常返回
+- 欢迎语和头像生成接口是否可用
 
-## 端口建议
+## 11. 常见问题
 
-推荐对外只开放：
+### 11.1 前端页面能打开，但请求仍打到 `localhost`
 
-- `80`
-- `443`
+原因通常是：
 
-推荐仅本机监听：
+- 没有正确创建 `frontend/.env.production`
+- 构建时未读取最新环境变量
+- 上传了旧的 `dist/`
 
-- `127.0.0.1:18080` for `skill-gateway`
-- `127.0.0.1:3000` for `agent-core`
-- `127.0.0.1:8001` for `mem0`
-
-这样可以避免直接暴露内部服务端口。
-
-## 常见问题
-
-### `frontend` 可以打开，但请求都打到 `localhost`
-
-说明前端构建时没有正确读取 `.env.production`，或仍在使用旧的构建产物。请重新执行：
+处理方式：
 
 ```bash
 cd frontend
@@ -384,36 +483,55 @@ npm run build
 
 然后重新上传 `dist/`。
 
-### `agent-core` 启动失败，提示找不到模块
+### 11.2 Agent Core 启动时报 `Cannot find module`
 
-通常是以下原因：
+通常检查以下几项：
 
-- `node_modules` 没有一起上传
-- 工作目录不对
-- 在错误的平台打包了依赖
+- `node_modules/` 是否一起上传
+- 当前启动目录是否正确
+- 构建平台是否与目标服务器一致
 
-### `skill-gateway` 能启动，但前端跨域失败
+### 11.3 Skill Gateway 能启动，但 Agent 调用技能接口返回 `401`
 
-请检查：
+优先检查：
+
+- `agent-core` 中的 `JAVA_GATEWAY_TOKEN`
+- `skill-gateway` 进程环境中的 `JAVA_GATEWAY_TOKEN`
+- 两边是否完全一致
+
+### 11.4 前端跨域失败
+
+优先检查：
 
 - `app.cors.allowed-origins`
-- `nginx` 访问域名
-- 浏览器实际访问地址是否和配置一致
+- 浏览器访问域名是否与配置完全一致
+- 是否通过 `nginx` 同域代理访问
 
-### `skill-gateway` 调不到 `agent-core`
+### 11.5 Skill Gateway 调不到 Agent Core
 
-请检查：
+优先检查：
 
 - `agent.core.url`
-- `agent-core` 是否已启动
+- `agent-core` 进程是否正常
 - `curl http://127.0.0.1:3000/health`
 
-### `agent-core` 调不到大模型或 `mem0`
+### 11.6 Agent Core 调不到大模型或记忆服务
 
-请检查：
+优先检查：
 
 - `OPENAI_API_KEY`
 - `OPENAI_API_BASE`
 - `OPENAI_MODEL_NAME`
 - `MEM0_URL`
-- 服务器出网能力或目标服务连通性
+- 服务器出网权限和目标地址连通性
+
+## 12. 变更配置后的重启建议
+
+修改配置后，建议按以下顺序重启：
+
+1. 若修改了 `agent-core/.env`，重启 `agent-core`
+2. 若修改了 `application-prod.properties` 或 `JAVA_GATEWAY_TOKEN`，重启 `skill-gateway`
+3. 若重新构建了前端，覆盖 `frontend/dist` 后重载 `nginx`
+4. 若修改了 `nginx` 配置，执行 `nginx -t && systemctl reload nginx`
+
+这样可以把三端部署、配置修改、反向代理和验证流程串成一套完整闭环。
