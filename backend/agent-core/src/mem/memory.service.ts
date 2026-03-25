@@ -1,152 +1,143 @@
-import Database = require('better-sqlite3');
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { v4 as uuidv4 } from 'uuid';
-import { MemoryManager, Database as MemoryDatabase } from './coworkMemoryManager';
-import { initializeMemoryTables, migrateMemoryTables } from './coworkMemoryTables';
+import axios from 'axios';
+import { LoggerService } from '../utils/logger.service';
 
-class BetterSqliteAdapter implements MemoryDatabase {
-  private db: Database.Database;
-  private lastInfo: Database.RunResult | null = null;
+@Injectable()
+export class MemoryService implements OnModuleInit {
+  private mem0Url: string;
 
-  constructor(db: Database.Database) {
-    this.db = db;
+  constructor(private readonly logger: LoggerService) {}
+
+  onModuleInit() {
+    this.mem0Url = process.env.MEM0_URL || 'http://39.104.81.41:8001';
+    console.log(`[MemoryService] Initialized with mem0 service at: ${this.mem0Url}`);
   }
 
-  exec(sql: string, params: any[] = []): any[] {
+  /**
+   * Search for relevant memories based on user query using mem0 service
+   */
+  async searchMemories(query: string, userId?: string, limit = 10): Promise<string[]> {
+    if (!userId) {
+      console.warn('[MemoryService] searchMemories skipped: userId is missing');
+      return [];
+    }
+
     try {
-      const stmt = this.db.prepare(sql);
-      // better-sqlite3 'all' returns an array of objects
-      const rows = stmt.all(...params);
+      const requestData = {
+        sentence: query,
+        userid: userId,
+        topk: limit
+      };
       
-      if (!rows || rows.length === 0) {
-        return [{ columns: [], values: [] }];
+      const response = await axios.post(`${this.mem0Url}/msearch`, requestData);
+
+      if (response.data && response.data.code === 200) {
+        // 根据文档和用户反馈，尝试多种可能的字段名
+        // 1. 尝试 results, data, memories (常见规范)
+        // 2. 尝试 details (文档中提到的字段)
+        const rawResults = response.data.results || 
+                           response.data.data || 
+                           response.data.memories || 
+                           response.data.details || 
+                           [];
+        
+        let results: string[] = [];
+        if (Array.isArray(rawResults)) {
+          results = rawResults.map(item => typeof item === 'string' ? item : JSON.stringify(item));
+        } else if (typeof rawResults === 'string' && rawResults.length > 0) {
+          // 如果 details 是以逗号或换行分隔的字符串，进行拆分
+          results = rawResults.split(/[\n,，]/).filter(s => s.trim().length > 0);
+        }
+
+        this.logger.logMemory('retrieve', {
+          request: requestData,
+          response: response.data,
+          parsedResults: results
+        });
+
+        console.log(`[MemoryService] Found ${results.length} memories for query: "${query}"`);
+        return results;
       }
-
-      // Extract columns from the first row
-      const columns = Object.keys(rows[0]);
-      // Extract values from all rows, ensuring order matches columns
-      const values = rows.map((row: any) => columns.map(col => row[col]));
-
-      return [{ columns, values }];
+      
+      this.logger.logMemory('retrieve', {
+        request: requestData,
+        error: 'Invalid response code',
+        response: response.data
+      });
+      return [];
     } catch (e) {
-      console.error('[MemoryDB] Exec Error:', e);
+      console.error('[MemoryService] msearch error:', e.message);
+      this.logger.logMemory('retrieve', {
+        query,
+        userId,
+        error: e.message
+      });
       return [];
     }
   }
 
-  run(sql: string, params: any[] = []): void {
-    try {
-      const stmt = this.db.prepare(sql);
-      this.lastInfo = stmt.run(...params);
-    } catch (e) {
-      console.error('[MemoryDB] Run Error:', e);
-    }
-  }
-
-  getRowsModified(): number {
-    return this.lastInfo ? this.lastInfo.changes : 0;
-  }
-
-  export(): Uint8Array {
-    return new Uint8Array(0);
-  }
-}
-
-@Injectable()
-export class MemoryService implements OnModuleInit {
-  private db: Database.Database;
-  private manager: MemoryManager;
-
-  onModuleInit() {
-    this.db = new Database('memories.db');
-    console.log(`[MemoryDB] Database initialized at: ${process.cwd()}/memories.db`);
-    
-    // Initialize Tables using the new schema
-    const adapter = new BetterSqliteAdapter(this.db);
-    
-    // Run initialization SQL directly via adapter or db
-    // initializeMemoryTables expects a runSql function
-    initializeMemoryTables((sql) => {
-      this.db.exec(sql);
-    });
-
-    // Run migrations (e.g. adding columns to existing tables)
-    migrateMemoryTables((sql) => {
-      this.db.exec(sql);
-    });
-
-    this.manager = new MemoryManager(adapter, () => {
-        // saveDb callback - for file-based sqlite, writes are immediate usually, 
-        // but better-sqlite3 might imply we don't need explicit save unless WAL handling?
-        // We can leave this empty or log.
-        // console.log('[MemoryDB] DB Saved');
-    });
+  /**
+   * Get all memories (fallback to search with empty query)
+   */
+  async getAllMemories(userId?: string, limit = 50): Promise<string[]> {
+    return this.searchMemories('', userId, limit);
   }
 
   /**
-   * Search for relevant memories based on user query
+   * Process a turn and store memory using mem0 service
    */
-  searchMemories(query: string, userId?: string, limit = 10): string[] {
-    // The listUserMemories method supports a 'query' parameter for LIKE matching
-    // For implicit RAG, we might need a more sophisticated search later, 
-    // but strict keyword matching is a good start.
-    // If query is very long, keyword match might fail. 
-    // We can try to extract keywords or just list recent ones if query is too long.
-    
-    const memories = this.manager.listUserMemories({
-      query: query.length < 20 ? query : undefined, // Only use query if it's short enough to likely be a keyword
-      userId: userId,
-      limit: limit,
-      status: 'created'
-    });
-
-    // If no matches with query, fallback to recent memories?
-    // User requirement: "Only show when relevant". So if no match, maybe show nothing?
-    // But "I am X" context is always relevant.
-    
-    // Strategy:
-    // 1. Always include "Profile" type memories (name, role, etc) if we can distinguish them.
-    //    CoworkMemoryManager doesn't categorize them explicitly in DB, but extracting code does.
-    // 2. Search matches.
-    
-    // For now, let's just return what listUserMemories returns.
-    // If query is empty, it returns recent ones.
-    
-    return memories.map(m => m.text);
-  }
-
-  getAllMemories(userId?: string, limit = 50): string[] {
-      return this.manager.listUserMemories({ limit, status: 'created', userId }).map(m => m.text);
-  }
-
   async processTurn(options: {
     sessionId: string;
     userId?: string;
     userText: string;
     assistantText: string;
   }) {
-    const result = await this.manager.applyTurnMemoryUpdates({
-      sessionId: options.sessionId,
-      userId: options.userId,
-      userText: options.userText,
-      assistantText: options.assistantText,
-      implicitEnabled: true, // Enable implicit extraction
-      memoryLlmJudgeEnabled: true, // Enable LLM judge for better extraction
-      guardLevel: 'standard',
-    });
-    
-    if (result.totalChanges > 0) {
-        console.log('[MemoryManager] Update Result:', result);
+    if (!options.userId) {
+      console.warn('[MemoryService] processTurn skipped: userId is missing');
+      return;
+    }
+
+    try {
+      const requestData = {
+        sentencein: options.userText,
+        sentenceout: options.assistantText,
+        userid: options.userId
+      };
+
+      const response = await axios.post(`${this.mem0Url}/madd`, requestData);
+
+      if (response.data && response.data.code === 200) {
+        console.log('[MemoryService] Memory stored in mem0:', response.data.message);
+        this.logger.logMemory('store', {
+          request: requestData,
+          response: response.data
+        });
+      } else {
+        console.warn('[MemoryService] mem0 madd failed:', response.data);
+        this.logger.logMemory('store', {
+          request: requestData,
+          error: 'Failed to store',
+          response: response.data
+        });
+      }
+    } catch (e) {
+      console.error('[MemoryService] madd error:', e.message);
+      this.logger.logMemory('store', {
+        options,
+        error: e.message
+      });
     }
   }
 
-  addMemory(userId: string, text: string, role: 'user' | 'assistant' | 'system' = 'system') {
-      return this.manager.createUserMemory({
-          text,
-          userId,
-          source: { role, sessionId: 'system-event' },
-          isExplicit: true,
-          confidence: 1.0
-      });
+  /**
+   * Add explicit memory
+   */
+  async addMemory(userId: string, text: string, role: 'user' | 'assistant' | 'system' = 'system') {
+    return this.processTurn({
+      sessionId: 'explicit-add',
+      userId,
+      userText: text,
+      assistantText: '好的，我已经记住了。'
+    });
   }
 }

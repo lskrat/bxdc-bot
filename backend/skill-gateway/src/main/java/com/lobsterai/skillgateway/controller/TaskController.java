@@ -31,7 +31,7 @@ public class TaskController {
     @PostMapping
     public ResponseEntity<CreateTaskResponse> createTask(@RequestBody CreateTaskRequest request) {
         String taskId = UUID.randomUUID().toString();
-        taskContexts.put(taskId, new TaskContext(request.getContent(), request.getUserId()));
+        taskContexts.put(taskId, new TaskContext(request.getContent(), request.getUserId(), request.getHistory()));
         return ResponseEntity.ok(new CreateTaskResponse(taskId));
     }
 
@@ -57,7 +57,7 @@ public class TaskController {
         }
         executionContext.put("sessionId", id);
 
-        Disposable subscription = agentStreamConsumer.executeAndStream(context.getContent(), executionContext)
+        Disposable subscription = agentStreamConsumer.executeAndStream(context.getContent(), executionContext, context.getHistory())
             .subscribe(
                 data -> {
                     try {
@@ -109,6 +109,7 @@ public class TaskController {
     public static class CreateTaskRequest {
         private String content;
         private String userId;
+        private java.util.List<Map<String, Object>> history;
 
         public String getContent() {
             return content;
@@ -124,6 +125,14 @@ public class TaskController {
 
         public void setUserId(String userId) {
             this.userId = userId;
+        }
+
+        public java.util.List<Map<String, Object>> getHistory() {
+            return history;
+        }
+
+        public void setHistory(java.util.List<Map<String, Object>> history) {
+            this.history = history;
         }
     }
 
@@ -146,10 +155,12 @@ public class TaskController {
     private static class TaskContext {
         private final String content;
         private final String userId;
+        private final java.util.List<Map<String, Object>> history;
 
-        public TaskContext(String content, String userId) {
+        public TaskContext(String content, String userId, java.util.List<Map<String, Object>> history) {
             this.content = content;
             this.userId = userId;
+            this.history = history;
         }
 
         public String getContent() {
@@ -158,6 +169,10 @@ public class TaskController {
 
         public String getUserId() {
             return userId;
+        }
+
+        public java.util.List<Map<String, Object>> getHistory() {
+            return history;
         }
     }
 }

@@ -55,9 +55,9 @@ function parseConfirmationRequest(content: string) {
 
 function handleConfirm(action: 'yes' | 'no') {
   if (action === 'yes') {
-    sendMessage('I confirm. Please proceed with "confirmed": true.');
+    sendMessage('I confirm. Please proceed with "confirmed": true.', currentUser.value?.id);
   } else {
-    sendMessage('I cancel this action. Do not proceed.');
+    sendMessage('I cancel this action. Do not proceed.', currentUser.value?.id);
   }
 }
 

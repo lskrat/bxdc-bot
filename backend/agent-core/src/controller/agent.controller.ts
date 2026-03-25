@@ -3,6 +3,7 @@ import { Observable, Subject } from 'rxjs';
 import { AgentFactory } from '../agent/agent';
 import { MemoryService } from '../mem/memory.service';
 import { SkillManager } from '../skills/skill.manager';
+import { LoggerService } from '../utils/logger.service';
 
 type ToolStatus = 'running' | 'completed' | 'failed';
 
@@ -165,6 +166,7 @@ export class AgentController {
   constructor(
     private readonly memoryService: MemoryService,
     private readonly skillManager: SkillManager,
+    private readonly logger: LoggerService,
   ) {}
 
   private emitToolEvents(subject: Subject<MessageEvent>, chunk: any, seenToolStatuses: Map<string, ToolStatus>) {
@@ -209,19 +211,21 @@ export class AgentController {
    * 接收包含指令和上下文的 POST 请求，启动 Agent，并将结果作为 SSE 事件流返回。
    * </p>
    *
-   * @param body 请求体，包含 `instruction` (指令) 和 `context` (上下文)
+   * @param body 请求体，包含 `instruction` (指令), `context` (上下文) 和 `history` (历史对话)
    * @returns Observable<MessageEvent> SSE 事件流
    */
   @Post('run')
   @Sse()
-  runTask(@Body() body: { instruction: string; context: any }): Observable<MessageEvent> {
-    const { instruction, context } = body;
+  runTask(@Body() body: { instruction: string; context: any; history?: any[] }): Observable<MessageEvent> {
+    const { instruction, context, history = [] } = body;
     const userId = context?.userId;
     const subject = new Subject<MessageEvent>();
 
     // In a real app, these would come from config/env
     const gatewayUrl = process.env.JAVA_GATEWAY_URL || 'http://localhost:18080';
     const apiToken = process.env.JAVA_GATEWAY_TOKEN || 'your-secure-token-here';
+    
+    // Model configuration
     const openAiApiKey = process.env.OPENAI_API_KEY;
     const modelName = process.env.OPENAI_MODEL_NAME || 'gpt-4';
     const baseUrl = process.env.OPENAI_API_BASE;
@@ -235,12 +239,6 @@ export class AgentController {
       userId,
     );
 
-    // Retrieve memories (Limit to recent 50 to avoid clutter)
-    // Use MemoryManager's list capability
-    const memories = this.memoryService.getAllMemories(userId, 50);
-    const memoryContext = memories.length > 0 
-      ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n` 
-      : '';
     const skillContext = this.skillManager.buildSkillPromptContext();
     
     // Add confirmation instructions
@@ -251,17 +249,48 @@ Instead, you MUST output the confirmation request to the user exactly as request
 If the user approves, you should call the tool again, this time including '"confirmed": true' in the tool parameters.
 If the user denies, acknowledge the cancellation and do not execute the tool.
 `;
-    
-    const fullInstruction = `${skillContext}${confirmationContext}${memoryContext}User Instruction:\n${instruction}`;
 
     // Run agent asynchronously
     (async () => {
       let fullAssistantResponse = '';
       const seenToolStatuses = new Map<string, ToolStatus>();
       try {
-        const stream = await agent.stream({ messages: [{ role: 'user', content: fullInstruction }] });
+        // Retrieve relevant long-term memories based on current instruction
+        const memories = await this.memoryService.searchMemories(instruction, userId, 10);
+        console.log(`[Memory] Retrieved ${memories.length} memories for user ${userId}`);
+        if (memories.length > 0) {
+          console.log(`[Memory] First memory: ${memories[0]}`);
+        }
+        
+        const memoryContext = memories.length > 0 
+          ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n` 
+          : '';
+        
+        const fullInstruction = `${skillContext}${confirmationContext}${memoryContext}User Instruction:\n${instruction}`;
 
-        for await (const chunk of stream) {
+        // Combine history (short-term memory) with current instruction
+        const messages = [
+          ...history,
+          { role: 'user', content: fullInstruction }
+        ];
+
+        this.logger.logLlm('input', {
+          userId,
+          instruction,
+          historyCount: history.length,
+          fullMessageList: messages
+        });
+
+        const stream = await agent.stream({ messages });
+
+        for await (const chunk of stream as any) {
+          // Log intermediate interactions
+          if (chunk.agent) {
+            this.logger.logLlm('agent_thought', chunk.agent);
+          } else if (chunk.tools) {
+            this.logger.logLlm('tool_result', chunk.tools);
+          }
+
           subject.next({ data: JSON.stringify(chunk) });
           this.emitToolEvents(subject, chunk, seenToolStatuses);
 
@@ -280,6 +309,12 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
             }
           }
         }
+        
+        this.logger.logLlm('output', {
+          userId,
+          response: fullAssistantResponse
+        });
+
         subject.complete();
 
         // Process Memory
