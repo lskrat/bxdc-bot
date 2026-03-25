@@ -1,0 +1,14 @@
+[Unit]
+Description=Fishtank agent-core
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fishtank/agent-core
+ExecStart=/usr/bin/node /opt/fishtank/agent-core/dist/main.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,6 @@
 import { ref, provide, inject, type InjectionKey } from 'vue'
 import { createTask, getEventSourceUrl } from '../services/api'
+import { agentUrl } from '../services/config'
 import { useUser } from './useUser'
 
 export type ToolInvocationStatus = 'running' | 'completed' | 'failed'
@@ -324,7 +325,15 @@ export function provideChat() {
     error.value = null
 
     try {
-      const { id } = await createTask(content, userId)
+      // Get recent history (e.g., last 10 messages) to provide short-term context
+      const history = messages.value
+        .slice(-10)
+        .map(m => ({
+          role: m.role,
+          content: m.content
+        }))
+
+      const { id } = await createTask(content, userId, history)
       const url = getEventSourceUrl(id)
 
       addMessage({
@@ -414,7 +423,7 @@ export function provideChat() {
     if (!currentUser.value) return
 
     try {
-        const res = await fetch('http://localhost:3000/features/avatar/greeting', {
+        const res = await fetch(agentUrl('/features/avatar/greeting'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 

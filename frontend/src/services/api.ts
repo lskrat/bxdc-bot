@@ -1,12 +1,12 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:18080'
+import { apiUrl } from './config'
 
-export async function createTask(content: string, userId?: string): Promise<{ id: string }> {
-  const response = await fetch(`${API_BASE_URL}/api/tasks`, {
+export async function createTask(content: string, userId?: string, history?: any[]): Promise<{ id: string }> {
+  const response = await fetch(apiUrl('/api/tasks'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ content, userId }),
+    body: JSON.stringify({ content, userId, history }),
   })
 
   if (!response.ok) {
@@ -17,5 +17,5 @@ export async function createTask(content: string, userId?: string): Promise<{ id
 }
 
 export function getEventSourceUrl(taskId: string): string {
-  return `${API_BASE_URL}/api/tasks/${taskId}/events`
+  return apiUrl(`/api/tasks/${taskId}/events`)
 }

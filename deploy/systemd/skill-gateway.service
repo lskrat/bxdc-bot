@@ -1,0 +1,13 @@
+[Unit]
+Description=Fishtank skill-gateway
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fishtank/skill-gateway
+ExecStart=/usr/bin/java -jar /opt/fishtank/skill-gateway/skill-gateway-0.0.1-SNAPSHOT.jar --spring.config.location=/opt/fishtank/skill-gateway/application-prod.properties
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

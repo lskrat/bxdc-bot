@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import { apiUrl } from '../services/config';
 
 export interface Skill {
   id: number;
@@ -64,7 +65,7 @@ export function useSkillHub() {
     isLoading.value = true;
     error.value = null;
     try {
-      const res = await fetch('http://localhost:18080/api/skills');
+      const res = await fetch(apiUrl('/api/skills'));
       if (!res.ok) {
         throw new Error('Failed to fetch skills');
       }

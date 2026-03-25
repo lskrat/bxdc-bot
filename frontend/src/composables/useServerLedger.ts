@@ -1,5 +1,6 @@
 import { ref } from 'vue';
 import { useUser } from './useUser';
+import { apiUrl } from '../services/config';
 
 export interface ServerLedger {
   id?: number;
@@ -31,7 +32,7 @@ export function useServerLedger() {
     isLoading.value = true;
     error.value = null;
     try {
-      const res = await fetch('http://localhost:18080/api/server-ledgers', {
+      const res = await fetch(apiUrl('/api/server-ledgers'), {
         headers: {
           'X-User-Id': currentUser.value.id
         }
@@ -48,7 +49,7 @@ export function useServerLedger() {
   async function createLedger(ledger: ServerLedger) {
     if (!currentUser.value) return;
     try {
-      const res = await fetch('http://localhost:18080/api/server-ledgers', {
+      const res = await fetch(apiUrl('/api/server-ledgers'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -69,7 +70,7 @@ export function useServerLedger() {
   async function updateLedger(id: number, ledger: ServerLedger) {
     if (!currentUser.value) return;
     try {
-      const res = await fetch(`http://localhost:18080/api/server-ledgers/${id}`, {
+      const res = await fetch(apiUrl(`/api/server-ledgers/${id}`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -90,7 +91,7 @@ export function useServerLedger() {
   async function deleteLedger(id: number) {
     if (!currentUser.value) return;
     try {
-      const res = await fetch(`http://localhost:18080/api/server-ledgers/${id}`, {
+      const res = await fetch(apiUrl(`/api/server-ledgers/${id}`), {
         method: 'DELETE',
         headers: {
           'X-User-Id': currentUser.value.id

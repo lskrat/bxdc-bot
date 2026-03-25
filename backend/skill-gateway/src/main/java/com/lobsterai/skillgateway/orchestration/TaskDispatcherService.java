@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.orchestration;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -16,9 +17,11 @@ public class TaskDispatcherService {
 
     private final WebClient webClient;
 
-    public TaskDispatcherService(WebClient.Builder webClientBuilder) {
-        // Assuming agent-core is running on localhost:3000
-        this.webClient = webClientBuilder.baseUrl("http://localhost:3000").build();
+    public TaskDispatcherService(
+            WebClient.Builder webClientBuilder,
+            @Value("${agent.core.url:http://localhost:3000}") String agentCoreUrl
+    ) {
+        this.webClient = webClientBuilder.baseUrl(agentCoreUrl).build();
     }
 
     /**
@@ -26,13 +29,14 @@ public class TaskDispatcherService {
      *
      * @param instruction 用户指令
      * @param context     上下文信息
+     * @param history     历史对话
      * @return 包含 Agent 执行状态的 Flux 流
      */
-    public Flux<String> dispatchTask(String instruction, Object context) {
+    public Flux<String> dispatchTask(String instruction, Object context, Object history) {
         return webClient.post()
                 .uri("/agent/run")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(new TaskRequest(instruction, context))
+                .bodyValue(new TaskRequest(instruction, context, history))
                 .retrieve()
                 .bodyToFlux(String.class); // SSE stream
     }
@@ -43,9 +47,11 @@ public class TaskDispatcherService {
     public static class TaskRequest {
         public String instruction;
         public Object context;
-        public TaskRequest(String instruction, Object context) {
+        public Object history;
+        public TaskRequest(String instruction, Object context, Object history) {
             this.instruction = instruction;
             this.context = context;
+            this.history = history;
         }
     }
 }

@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
+import { apiUrl } from '../services/config';
 
 export interface User {
   id: string;
@@ -18,7 +19,7 @@ export function useUser() {
 
   async function login(id: string) {
     try {
-      const res = await fetch('http://localhost:18080/api/auth/login', {
+      const res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id })
@@ -42,7 +43,7 @@ export function useUser() {
 
   async function register(id: string, nickname: string, redirect = true) {
     try {
-      const res = await fetch('http://localhost:18080/api/auth/register', {
+      const res = await fetch(apiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, nickname })
@@ -78,7 +79,7 @@ export function useUser() {
   async function restoreSession() {
     if (!token.value) return;
     try {
-      const res = await fetch(`http://localhost:18080/api/user/${token.value}`);
+      const res = await fetch(apiUrl(`/api/user/${token.value}`));
       if (res.ok) {
         currentUser.value = await res.json();
       } else {
@@ -93,7 +94,7 @@ export function useUser() {
 
   async function updateAvatar(id: string, avatar: string) {
     try {
-        const res = await fetch(`http://localhost:18080/api/user/${id}/avatar`, {
+        const res = await fetch(apiUrl(`/api/user/${id}/avatar`), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ avatar })

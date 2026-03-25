@@ -5,6 +5,7 @@ import { useUser } from '../composables/useUser';
 import Button from '../components/ui/Button.vue';
 import Input from '../components/ui/Input.vue';
 import Card from '../components/ui/Card.vue';
+import { agentUrl } from '../services/config';
 
 const userId = ref('');
 const nickname = ref('');
@@ -34,7 +35,7 @@ async function handleRegister() {
 
     // 3. Call Node.js Avatar Service
     try {
-        const res = await fetch('http://localhost:3000/features/avatar/generate', {
+        const res = await fetch(agentUrl('/features/avatar/generate'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ nickname: nickname.value })
