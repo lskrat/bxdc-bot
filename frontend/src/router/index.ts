@@ -26,7 +26,7 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach(async (to, from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const { isLoggedIn, restoreSession } = useUser()
   
   // Try to restore session if not logged in but has token
