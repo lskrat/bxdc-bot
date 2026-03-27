@@ -22,6 +22,8 @@ frontend/dist.zip
 # Database & runtime data
 backend/skill-gateway/data/
 backend/skill-gateway/.m2-test/
+backend/skill-gateway/skills-export.csv
+backend/skill-gateway/seed-snapshot.mv.db
 backend/agent-core/memories.db
 
 # Backups
