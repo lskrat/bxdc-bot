@@ -2,6 +2,8 @@ package com.lobsterai.skillgateway;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.domain.EntityScan;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 /**
  * Skill Gateway 应用程序入口类。
@@ -11,6 +13,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * </p>
  */
 @SpringBootApplication
+@EntityScan("com.lobsterai.skillgateway.entity")
+@EnableJpaRepositories("com.lobsterai.skillgateway.repository")
 public class SkillGatewayApplication {
 
     /**

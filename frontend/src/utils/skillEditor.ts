@@ -1,0 +1,394 @@
+export type ExecutionMode = 'CONFIG' | 'OPENCLAW'
+export type ConfigKind = 'api' | 'ssh'
+export type ApiPreset = 'none' | 'current-time'
+export type SshPreset = 'server-resource-status'
+
+export interface ApiConfigDraft {
+  kind: 'api'
+  preset: ApiPreset
+  operation: string
+  method: string
+  endpoint: string
+  responseWrapper: string
+  responseTimestampField: string
+  headersText: string
+  queryText: string
+  bodyText: string
+  apiKeyField: string
+  apiKey: string
+  autoTimestampField: string
+}
+
+export interface SshConfigDraft {
+  kind: 'ssh'
+  preset: SshPreset
+  operation: string
+  lookup: string
+  executor: string
+  command: string
+  readOnly: boolean
+}
+
+export interface OpenClawConfigDraft {
+  kind: 'openclaw'
+  systemPromptMarkdown: string
+  allowedTools: string[]
+  orchestrationMode: 'serial'
+}
+
+export type SkillConfigDraft = ApiConfigDraft | SshConfigDraft | OpenClawConfigDraft
+
+export interface ParseSkillDraftResult {
+  draft: SkillConfigDraft | null
+  error: string | null
+}
+
+type JsonRecord = Record<string, unknown>
+
+const CONFIG_KIND_LABELS: Record<ConfigKind, string> = {
+  api: 'API',
+  ssh: 'SSH',
+}
+
+const API_ALLOWED_KEYS = [
+  'kind',
+  'preset',
+  'profile',
+  'operation',
+  'method',
+  'endpoint',
+  'responseWrapper',
+  'responseTimestampField',
+  'headers',
+  'query',
+  'body',
+  'apiKeyField',
+  'apiKey',
+  'autoTimestampField',
+]
+
+const SSH_ALLOWED_KEYS = [
+  'kind',
+  'preset',
+  'profile',
+  'operation',
+  'lookup',
+  'executor',
+  'command',
+  'readOnly',
+]
+
+const OPENCLAW_ALLOWED_KEYS = ['kind', 'systemPrompt', 'allowedTools', 'orchestration']
+
+function parseConfigurationObject(configuration: string): JsonRecord {
+  const parsed = JSON.parse(configuration || '{}')
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new Error('Configuration 必须是 JSON 对象')
+  }
+  return parsed as JsonRecord
+}
+
+function ensureNoUnknownKeys(record: JsonRecord, allowedKeys: string[]): void {
+  const unknownKeys = Object.keys(record).filter((key) => !allowedKeys.includes(key))
+  if (unknownKeys.length > 0) {
+    throw new Error(`存在当前结构化编辑暂不支持的字段：${unknownKeys.join(', ')}`)
+  }
+}
+
+function readString(record: JsonRecord, key: string, fallback = ''): string {
+  const value = record[key]
+  if (value == null) return fallback
+  if (typeof value !== 'string') {
+    throw new Error(`${key} 必须是字符串`)
+  }
+  return value
+}
+
+function readPreset(record: JsonRecord): string {
+  const preset = record.preset
+  if (preset != null) {
+    if (typeof preset !== 'string') {
+      throw new Error('preset 必须是字符串')
+    }
+    return preset
+  }
+  const profile = record.profile
+  if (profile != null) {
+    if (typeof profile !== 'string') {
+      throw new Error('profile 必须是字符串')
+    }
+    return profile
+  }
+  return ''
+}
+
+function formatJsonText(value: unknown): string {
+  if (value == null) return ''
+  return JSON.stringify(value, null, 2)
+}
+
+function parseJsonText(text: string, fieldName: string): unknown {
+  const trimmed = text.trim()
+  if (!trimmed) return undefined
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    throw new Error(`${fieldName} 必须是合法 JSON`)
+  }
+}
+
+function parseApiDraft(configuration: JsonRecord): ApiConfigDraft {
+  ensureNoUnknownKeys(configuration, API_ALLOWED_KEYS)
+  const preset = readPreset(configuration)
+  return {
+    kind: 'api',
+    preset: preset === 'current-time' ? 'current-time' : 'none',
+    operation: readString(configuration, 'operation', preset === 'current-time' ? 'current-time' : ''),
+    method: readString(configuration, 'method', 'GET'),
+    endpoint: readString(configuration, 'endpoint'),
+    responseWrapper: readString(configuration, 'responseWrapper'),
+    responseTimestampField: readString(configuration, 'responseTimestampField'),
+    headersText: formatJsonText(configuration.headers),
+    queryText: formatJsonText(configuration.query),
+    bodyText: formatJsonText(configuration.body),
+    apiKeyField: readString(configuration, 'apiKeyField'),
+    apiKey: readString(configuration, 'apiKey'),
+    autoTimestampField: readString(configuration, 'autoTimestampField'),
+  }
+}
+
+function parseLegacyTimeDraft(configuration: JsonRecord): ApiConfigDraft {
+  ensureNoUnknownKeys(configuration, ['kind', 'operation', 'method', 'endpoint', 'responseWrapper', 'responseTimestampField'])
+  return {
+    kind: 'api',
+    preset: 'current-time',
+    operation: readString(configuration, 'operation', 'current-time'),
+    method: readString(configuration, 'method', 'GET'),
+    endpoint: readString(configuration, 'endpoint'),
+    responseWrapper: readString(configuration, 'responseWrapper'),
+    responseTimestampField: readString(configuration, 'responseTimestampField'),
+    headersText: '',
+    queryText: '',
+    bodyText: '',
+    apiKeyField: '',
+    apiKey: '',
+    autoTimestampField: '',
+  }
+}
+
+function parseSshDraft(configuration: JsonRecord): SshConfigDraft {
+  ensureNoUnknownKeys(configuration, SSH_ALLOWED_KEYS)
+  const readOnly = configuration.readOnly
+  if (readOnly != null && typeof readOnly !== 'boolean') {
+    throw new Error('readOnly 必须是布尔值')
+  }
+  return {
+    kind: 'ssh',
+    preset: 'server-resource-status',
+    operation: readString(configuration, 'operation', 'server-resource-status'),
+    lookup: readString(configuration, 'lookup', 'server_lookup'),
+    executor: readString(configuration, 'executor', 'ssh_executor'),
+    command: readString(configuration, 'command'),
+    readOnly: readOnly ?? true,
+  }
+}
+
+function parseLegacyMonitorDraft(configuration: JsonRecord): SshConfigDraft {
+  ensureNoUnknownKeys(configuration, ['kind', 'operation', 'lookup', 'executor', 'command', 'readOnly'])
+  const readOnly = configuration.readOnly
+  if (readOnly != null && typeof readOnly !== 'boolean') {
+    throw new Error('readOnly 必须是布尔值')
+  }
+  return {
+    kind: 'ssh',
+    preset: 'server-resource-status',
+    operation: readString(configuration, 'operation', 'server-resource-status'),
+    lookup: readString(configuration, 'lookup', 'server_lookup'),
+    executor: readString(configuration, 'executor', 'ssh_executor'),
+    command: readString(configuration, 'command'),
+    readOnly: readOnly ?? true,
+  }
+}
+
+function parseOpenClawDraft(configuration: JsonRecord): OpenClawConfigDraft {
+  ensureNoUnknownKeys(configuration, OPENCLAW_ALLOWED_KEYS)
+  const allowedTools = configuration.allowedTools
+  const orchestration = configuration.orchestration
+  if (allowedTools != null && (!Array.isArray(allowedTools) || allowedTools.some((tool) => typeof tool !== 'string'))) {
+    throw new Error('allowedTools 必须是字符串数组')
+  }
+  if (!orchestration || Array.isArray(orchestration) || typeof orchestration !== 'object') {
+    throw new Error('orchestration 必须是对象')
+  }
+  const mode = (orchestration as JsonRecord).mode
+  if (mode != null && mode !== 'serial') {
+    throw new Error('当前仅支持 serial 编排模式')
+  }
+  return {
+    kind: 'openclaw',
+    systemPromptMarkdown: readString(configuration, 'systemPrompt'),
+    allowedTools: Array.isArray(allowedTools) ? allowedTools : [],
+    orchestrationMode: 'serial',
+  }
+}
+
+export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind: ConfigKind = 'api'): SkillConfigDraft {
+  if (executionMode === 'OPENCLAW') {
+    return {
+      kind: 'openclaw',
+      systemPromptMarkdown: '',
+      allowedTools: [],
+      orchestrationMode: 'serial',
+    }
+  }
+
+  if (configKind === 'ssh') {
+    return {
+      kind: 'ssh',
+      preset: 'server-resource-status',
+      operation: 'server-resource-status',
+      lookup: 'server_lookup',
+      executor: 'ssh_executor',
+      command: '',
+      readOnly: true,
+    }
+  }
+
+  return {
+    kind: 'api',
+    preset: 'none',
+    operation: '',
+    method: 'GET',
+    endpoint: '',
+    responseWrapper: '',
+    responseTimestampField: '',
+    headersText: '',
+    queryText: '',
+    bodyText: '',
+    apiKeyField: '',
+    apiKey: '',
+    autoTimestampField: '',
+  }
+}
+
+export function parseSkillDraft(executionMode: ExecutionMode, configuration: string): ParseSkillDraftResult {
+  try {
+    const parsed = parseConfigurationObject(configuration)
+    if (executionMode === 'OPENCLAW') {
+      if (parsed.kind !== 'openclaw') {
+        throw new Error('OPENCLAW Skill 的 configuration.kind 必须为 openclaw')
+      }
+      return { draft: parseOpenClawDraft(parsed), error: null }
+    }
+
+    const kind = parsed.kind
+    if (typeof kind !== 'string') {
+      throw new Error('CONFIG Skill 缺少 kind 字段')
+    }
+    switch (kind) {
+      case 'time':
+        return { draft: parseLegacyTimeDraft(parsed), error: null }
+      case 'api':
+        return { draft: parseApiDraft(parsed), error: null }
+      case 'monitor':
+        return { draft: parseLegacyMonitorDraft(parsed), error: null }
+      case 'ssh':
+        return { draft: parseSshDraft(parsed), error: null }
+      case 'openclaw':
+        throw new Error('CONFIG Skill 不能使用 openclaw 配置')
+      default:
+        throw new Error(`暂不支持解析的 CONFIG kind：${kind}`)
+    }
+  } catch (error) {
+    return {
+      draft: null,
+      error: error instanceof Error ? error.message : '配置解析失败',
+    }
+  }
+}
+
+function requireNonEmpty(value: string, label: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    throw new Error(`${label}不能为空`)
+  }
+  return trimmed
+}
+
+export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillConfigDraft): string {
+  if (executionMode === 'OPENCLAW') {
+    if (draft.kind !== 'openclaw') {
+      throw new Error('OPENCLAW Skill 缺少对应草稿数据')
+    }
+    const allowedTools = draft.allowedTools.map((tool) => tool.trim()).filter(Boolean)
+    return JSON.stringify({
+      kind: 'openclaw',
+      systemPrompt: requireNonEmpty(draft.systemPromptMarkdown, '提示词'),
+      allowedTools,
+      orchestration: {
+        mode: 'serial',
+      },
+    })
+  }
+
+  if (draft.kind === 'api') {
+    const headers = parseJsonText(draft.headersText, 'Headers')
+    const query = parseJsonText(draft.queryText, 'Query')
+    const body = parseJsonText(draft.bodyText, 'Body')
+    return JSON.stringify({
+      kind: 'api',
+      ...(draft.preset !== 'none' ? { preset: draft.preset } : {}),
+      operation: requireNonEmpty(draft.operation, '操作标识'),
+      method: requireNonEmpty(draft.method, '请求方法'),
+      endpoint: requireNonEmpty(draft.endpoint, '请求地址'),
+      ...(draft.responseWrapper.trim() ? { responseWrapper: draft.responseWrapper.trim() } : {}),
+      ...(draft.responseTimestampField.trim() ? { responseTimestampField: draft.responseTimestampField.trim() } : {}),
+      ...(headers !== undefined ? { headers } : {}),
+      ...(query !== undefined ? { query } : {}),
+      ...(body !== undefined ? { body } : {}),
+      ...(draft.apiKeyField.trim() ? { apiKeyField: draft.apiKeyField.trim() } : {}),
+      ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
+      ...(draft.autoTimestampField.trim() ? { autoTimestampField: draft.autoTimestampField.trim() } : {}),
+    })
+  }
+
+  if (draft.kind === 'ssh') {
+    return JSON.stringify({
+      kind: 'ssh',
+      preset: draft.preset,
+      operation: requireNonEmpty(draft.operation, '操作标识'),
+      lookup: requireNonEmpty(draft.lookup, '服务器查找器'),
+      executor: requireNonEmpty(draft.executor, '执行器'),
+      command: requireNonEmpty(draft.command, '命令内容'),
+      readOnly: draft.readOnly,
+    })
+  }
+
+  throw new Error('CONFIG Skill 不能序列化为 openclaw 配置')
+}
+
+export function getConfigKindOptions(): Array<{ value: ConfigKind; label: string }> {
+  return (Object.keys(CONFIG_KIND_LABELS) as ConfigKind[]).map((kind) => ({
+    value: kind,
+    label: CONFIG_KIND_LABELS[kind],
+  }))
+}
+
+export function getPresetLabel(kind: ConfigKind, preset: string): string {
+  if (kind === 'api') {
+    return preset === 'current-time' ? '当前时间' : '通用接口'
+  }
+  return '服务器状态巡检'
+}
+
+export function isApiDraft(draft: SkillConfigDraft | null): draft is ApiConfigDraft {
+  return draft?.kind === 'api'
+}
+
+export function isSshDraft(draft: SkillConfigDraft | null): draft is SshConfigDraft {
+  return draft?.kind === 'ssh'
+}
+
+export function isOpenClawDraft(draft: SkillConfigDraft | null): draft is OpenClawConfigDraft {
+  return draft?.kind === 'openclaw'
+}

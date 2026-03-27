@@ -21,6 +21,9 @@ public class Skill {
     @Column(columnDefinition = "TEXT")
     private String configuration; // JSON string for configuration
 
+    @Column
+    private String executionMode = "CONFIG";
+
     private boolean enabled = true;
 
     @Column(nullable = false)
@@ -82,6 +85,14 @@ public class Skill {
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    public String getExecutionMode() {
+        return (executionMode == null || executionMode.isBlank()) ? "CONFIG" : executionMode;
+    }
+
+    public void setExecutionMode(String executionMode) {
+        this.executionMode = executionMode;
     }
 
     public void setEnabled(boolean enabled) {

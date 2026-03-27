@@ -16,6 +16,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.NoSuchElementException;
 import java.util.List;
 import java.util.Map;
@@ -83,7 +84,10 @@ public class SkillController {
         try {
             return ResponseEntity.ok(skillService.updateSkill(id, skillDetails));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            if (e.getMessage() != null && e.getMessage().startsWith("Skill not found")) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 
@@ -209,7 +213,7 @@ public class SkillController {
 
     /**
      * 执行计算运算。
-     * 支持：时间戳转日期、加减乘除、阶乘、平方、开方。
+     * 支持：时间戳转日期、日期差值、加减乘除、阶乘、平方、开方。
      *
      * @param request 包含 operation 和 operands 的请求体
      * @return 成功时 { "result": <value> }，失败时 { "error": "<message>" }
@@ -224,7 +228,7 @@ public class SkillController {
         }
     }
 
-    private Object executeCompute(String operation, List<Number> operands) {
+    private Object executeCompute(String operation, List<Object> operands) {
         if (operation == null || operation.isBlank()) {
             throw new IllegalArgumentException("operation is required");
         }
@@ -274,7 +278,7 @@ public class SkillController {
             }
             case "timestamp_to_date" -> {
                 requireOperands(operands, 1);
-                long ts = operands.get(0).longValue();
+                long ts = toLong(operands.get(0));
                 // 秒级时间戳（< 10^12）自动转为毫秒，兼容常见 Unix 秒级时间戳
                 if (ts > 0 && ts < 10_000_000_000_000L) {
                     ts = ts * 1000;
@@ -282,22 +286,63 @@ public class SkillController {
                 LocalDate date = Instant.ofEpochMilli(ts).atZone(ZoneId.systemDefault()).toLocalDate();
                 yield date.format(DateTimeFormatter.ISO_LOCAL_DATE);
             }
+            case "date_diff_days" -> {
+                requireOperands(operands, 2);
+                LocalDate start = toLocalDate(operands.get(0));
+                LocalDate end = toLocalDate(operands.get(1));
+                yield ChronoUnit.DAYS.between(start, end);
+            }
             default -> throw new IllegalArgumentException("unknown operation: " + operation);
         };
     }
 
-    private static void requireOperands(List<Number> operands, int expected) {
+    private static void requireOperands(List<?> operands, int expected) {
         if (operands.size() != expected) {
             throw new IllegalArgumentException("expected " + expected + " operand(s), got " + operands.size());
         }
     }
 
-    private static double toDouble(Number n) {
-        return n == null ? 0 : n.doubleValue();
+    private static double toDouble(Object n) {
+        if (n instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (n instanceof String value && !value.isBlank()) {
+            try {
+                return Double.parseDouble(value);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("invalid numeric operand: " + value);
+            }
+        }
+        throw new IllegalArgumentException("numeric operand is required");
     }
 
-    private static int toInt(Number n) {
-        return n == null ? 0 : n.intValue();
+    private static int toInt(Object n) {
+        return (int) toLong(n);
+    }
+
+    private static long toLong(Object n) {
+        if (n instanceof Number number) {
+            return number.longValue();
+        }
+        if (n instanceof String value && !value.isBlank()) {
+            try {
+                return Long.parseLong(value);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("invalid numeric operand: " + value);
+            }
+        }
+        throw new IllegalArgumentException("numeric operand is required");
+    }
+
+    private static LocalDate toLocalDate(Object value) {
+        if (!(value instanceof String text) || text.isBlank()) {
+            throw new IllegalArgumentException("date_diff_days requires YYYY-MM-DD date strings");
+        }
+        try {
+            return LocalDate.parse(text.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("invalid date operand: " + text);
+        }
     }
 
     private static BigInteger factorial(int n) {
@@ -355,11 +400,11 @@ public class SkillController {
      */
     public static class ComputeRequest {
         private String operation;
-        private List<Number> operands;
+        private List<Object> operands;
 
         public String getOperation() { return operation; }
         public void setOperation(String operation) { this.operation = operation; }
-        public List<Number> getOperands() { return operands; }
-        public void setOperands(List<Number> operands) { this.operands = operands; }
+        public List<Object> getOperands() { return operands; }
+        public void setOperands(List<Object> operands) { this.operands = operands; }
     }
 }

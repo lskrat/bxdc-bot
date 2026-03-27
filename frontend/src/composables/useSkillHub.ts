@@ -12,8 +12,45 @@ export interface Skill {
   requiresConfirmation?: boolean;
 }
 
+interface ConfigSummary {
+  kindLabel: string | null;
+}
+
 export function getExecutionModeLabel(executionMode?: string): string {
   return executionMode === 'OPENCLAW' ? '自主规划' : '预配置'
+}
+
+export function getConfigSummary(configuration: string): ConfigSummary {
+  try {
+    const parsed = JSON.parse(configuration || '{}') as Record<string, unknown>
+    const rawKind = typeof parsed.kind === 'string' ? parsed.kind : ''
+    if (rawKind === 'api') {
+      return {
+        kindLabel: 'API',
+      }
+    }
+    if (rawKind === 'ssh') {
+      return {
+        kindLabel: 'SSH',
+      }
+    }
+    if (rawKind === 'time') {
+      return {
+        kindLabel: 'API',
+      }
+    }
+    if (rawKind === 'monitor') {
+      return {
+        kindLabel: 'SSH',
+      }
+    }
+  } catch {
+    // Ignore malformed configuration in UI summary.
+  }
+
+  return {
+    kindLabel: null,
+  }
 }
 
 const isSkillHubVisible = ref(false);
@@ -60,16 +97,14 @@ export const BUILT_IN_SKILLS = [
 export function useSkillHub() {
   function toggleSkillHub() {
     isSkillHubVisible.value = !isSkillHubVisible.value;
-    if (isSkillHubVisible.value && skills.value.length === 0) {
+    if (isSkillHubVisible.value) {
       fetchSkills();
     }
   }
 
   function openSkillHub() {
     isSkillHubVisible.value = true;
-    if (skills.value.length === 0) {
-      fetchSkills();
-    }
+    fetchSkills();
   }
 
   function closeSkillHub() {
@@ -83,6 +118,9 @@ export function useSkillHub() {
 
   function closeSkillManagement() {
     isSkillManagementVisible.value = false;
+    if (isSkillHubVisible.value) {
+      fetchSkills();
+    }
   }
 
   async function fetchSkills() {
@@ -165,6 +203,7 @@ export function useSkillHub() {
     closeSkillHub,
     openSkillManagement,
     closeSkillManagement,
+    refreshSkills: fetchSkills,
     fetchSkills,
     createSkill,
     updateSkill,

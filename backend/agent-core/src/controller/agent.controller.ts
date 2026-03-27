@@ -5,17 +5,14 @@ import { MemoryService } from '../mem/memory.service';
 import { SkillManager } from '../skills/skill.manager';
 import { LoggerService } from '../utils/logger.service';
 import { describeGatewayExtendedTool } from '../tools/java-skills';
+import {
+  clearActiveParentToolId,
+  runWithToolTraceContext,
+  setActiveParentToolId,
+  type ToolTraceEvent,
+} from '../tools/tool-trace-context';
 
 type ToolStatus = 'running' | 'completed' | 'failed';
-
-interface NormalizedToolEvent {
-  type: 'tool_status';
-  toolId: string;
-  toolName: string;
-  displayName: string;
-  kind: 'skill' | 'tool';
-  status: ToolStatus;
-}
 
 interface ExtractedToolCall {
   toolId: string;
@@ -197,15 +194,24 @@ export class AgentController {
     if (previousStatus === toolCall.status) return;
 
     seenToolStatuses.set(toolCall.toolId, toolCall.status);
-    const toolInfo = describeGatewayExtendedTool(toolCall.toolName) ?? this.skillManager.describeTool(toolCall.toolName);
-    const event: NormalizedToolEvent = {
+    const gatewayToolInfo = describeGatewayExtendedTool(toolCall.toolName);
+    const toolInfo = gatewayToolInfo ?? this.skillManager.describeTool(toolCall.toolName);
+    const event: ToolTraceEvent = {
       type: 'tool_status',
       toolId: toolCall.toolId,
       toolName: toolCall.toolName,
       displayName: toolInfo.displayName,
       kind: toolInfo.kind,
       status: toolCall.status,
+      executionMode: gatewayToolInfo?.executionMode,
+      executionLabel: gatewayToolInfo?.executionLabel,
     };
+
+    if (toolCall.status === 'running') {
+      setActiveParentToolId(toolCall.toolName, toolCall.toolId);
+    } else {
+      clearActiveParentToolId(toolCall.toolName, toolCall.toolId);
+    }
 
     subject.next({ data: JSON.stringify(event) });
   }
@@ -222,8 +228,10 @@ export class AgentController {
   @Post('run')
   @Sse()
   runTask(@Body() body: { instruction: string; context: any; history?: any[] }): Observable<MessageEvent> {
-    const { instruction, context, history = [] } = body;
+    const { instruction, context, history } = body;
+    const safeHistory = Array.isArray(history) ? history : [];
     const userId = context?.userId;
+    const sessionId = context?.sessionId || 'default-session';
     const subject = new Subject<MessageEvent>();
 
     // In a real app, these would come from config/env
@@ -247,15 +255,20 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
 `;
 
     // Run agent asynchronously
-    (async () => {
+    runWithToolTraceContext(
+      (event) => subject.next({ data: JSON.stringify(event) }),
+      async () => {
       let fullAssistantResponse = '';
       const seenToolStatuses = new Map<string, ToolStatus>();
       try {
+        const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
+          subject.next({ data: JSON.stringify(event) });
+        });
         const agent = await AgentFactory.createAgent(
           gatewayUrl,
           apiToken,
           openAiApiKey,
-          { modelName, baseUrl },
+          { modelName, baseUrl, callbacks: [llmCallbackHandler] },
           this.skillManager,
           userId,
         );
@@ -275,27 +288,13 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
 
         // Combine history (short-term memory) with current instruction
         const messages = [
-          ...history,
+          ...safeHistory,
           { role: 'user', content: fullInstruction }
         ];
-
-        this.logger.logLlm('input', {
-          userId,
-          instruction,
-          historyCount: history.length,
-          fullMessageList: messages
-        });
 
         const stream = await agent.stream({ messages });
 
         for await (const chunk of stream as any) {
-          // Log intermediate interactions
-          if (chunk.agent) {
-            this.logger.logLlm('agent_thought', chunk.agent);
-          } else if (chunk.tools) {
-            this.logger.logLlm('tool_result', chunk.tools);
-          }
-
           subject.next({ data: JSON.stringify(chunk) });
           this.emitToolEvents(subject, chunk, seenToolStatuses);
 
@@ -314,11 +313,6 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
             }
           }
         }
-        
-        this.logger.logLlm('output', {
-          userId,
-          response: fullAssistantResponse
-        });
 
         subject.complete();
 
@@ -327,7 +321,6 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
         console.log(`[Memory] Analysis started. User: "${instruction}", Agent: "${safeAssistantResponse.slice(0, 50)}..."`);
         
         if (instruction) {
-            const sessionId = context?.sessionId || 'default-session';
             await this.memoryService.processTurn({
                 sessionId,
                 userId,
@@ -340,7 +333,10 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
         subject.next({ data: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }) });
         subject.complete();
       }
-    })();
+    }).catch((error) => {
+      subject.next({ data: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }) });
+      subject.complete();
+    });
 
     return subject.asObservable();
   }

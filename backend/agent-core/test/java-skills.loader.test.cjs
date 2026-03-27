@@ -626,6 +626,10 @@ test("skill generator creates an SSH skill", async () => {
     assert.equal(parsed.saveAction, "created");
     assert.equal(parsed.skill.name, "Restart Nginx");
     assert.equal(parsed.skill.configuration.kind, "ssh");
+    assert.equal(parsed.skill.configuration.preset, "server-resource-status");
+    assert.equal(parsed.skill.configuration.operation, "server-resource-status");
+    assert.equal(parsed.skill.configuration.lookup, "server_lookup");
+    assert.equal(parsed.skill.configuration.executor, "ssh_executor");
     assert.equal(parsed.skill.configuration.command, "systemctl restart nginx");
     assert.equal(postCalls.length, 1);
     assert.equal(postCalls[0].url, "http://localhost:18080/api/skills");

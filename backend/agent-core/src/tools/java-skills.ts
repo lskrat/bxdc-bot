@@ -58,7 +58,11 @@ interface SkillMutationPayload {
 
 interface ExtendedSkillConfig {
   kind?: string;
+  preset?: string;
+  profile?: string;
   operation?: string;
+  lookup?: string;
+  executor?: string;
   method?: string;
   endpoint?: string;
   command?: string;
@@ -73,6 +77,35 @@ interface ExtendedSkillConfig {
   apiKey?: string;
   apiKeyField?: string;
   autoTimestampField?: string;
+}
+
+function readPreset(config: ExtendedSkillConfig): string | undefined {
+  const value = config.preset ?? config.profile;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
+function isCurrentTimeSkillConfig(config: ExtendedSkillConfig): boolean {
+  const kind = (config.kind || "").toLowerCase();
+  const operation = (config.operation || "").toLowerCase();
+  const preset = (readPreset(config) || "").toLowerCase();
+  return (
+    kind === "time" // legacy
+    || (kind === "api" && (preset === "current-time" || operation === "current-time"))
+    || operation === "current-time"
+  );
+}
+
+function isServerMonitorSkillConfig(config: ExtendedSkillConfig): boolean {
+  const kind = (config.kind || "").toLowerCase();
+  const operation = (config.operation || "").toLowerCase();
+  const preset = (readPreset(config) || "").toLowerCase();
+  return (
+    kind === "monitor" // legacy
+    || (kind === "ssh" && (preset === "server-resource-status" || operation === "server-resource-status"))
+    || operation === "server-resource-status"
+  );
 }
 
 interface SkillGeneratorInput {
@@ -397,7 +430,10 @@ function buildGeneratedSkill(input: SkillGeneratorInput): {
   } else if (targetType === "ssh") {
     config = {
       kind: "ssh",
-      operation: normalizeGeneratedOperation(name),
+      preset: "server-resource-status",
+      operation: "server-resource-status",
+      lookup: "server_lookup",
+      executor: "ssh_executor",
       command: input.command?.trim(),
     };
   } else if (targetType === "openclaw") {
@@ -880,10 +916,10 @@ export async function loadGatewayExtendedTools(
         func: async (input: string) => {
           try {
             const executionMode = normalizeExecutionMode(skill.executionMode);
-            if (config.kind === "time" || config.operation === "current-time") {
+            if (isCurrentTimeSkillConfig(config)) {
               return await executeCurrentTimeSkill(gatewayUrl, apiToken, config);
             }
-            if (config.operation === "server-resource-status") {
+            if (isServerMonitorSkillConfig(config)) {
               return await executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, input, config);
             }
             if (executionMode === "OPENCLAW" || config.kind === "openclaw") {
@@ -895,8 +931,13 @@ export async function loadGatewayExtendedTools(
                 Array.from(toolLookup.values()),
               );
             }
-            if (config.kind === "api" || config.operation === "api-request" || config.operation === "juhe-joke-list") {
+            if ((config.kind || "").toLowerCase() === "api" || config.operation === "api-request" || config.operation === "juhe-joke-list") {
               return await executeConfiguredApiSkill(gatewayUrl, apiToken, input, config);
+            }
+            if ((config.kind || "").toLowerCase() === "ssh") {
+              return JSON.stringify({
+                error: `Unsupported ssh preset for skill: ${readPreset(config) || "unknown"}`,
+              });
             }
             return JSON.stringify({
               error: `Unsupported extended skill operation: ${config.operation || "unknown"}`,
@@ -923,7 +964,7 @@ export async function loadGatewayExtendedTools(
 
 export class JavaSkillGeneratorTool extends Tool {
   name = "skill_generator";
-  description = "Generates an EXTENSION skill (API, SSH, or OPENCLAW) from a user's description, saves it to SkillGateway, and immediately validates it once. Input must be a JSON string with 'targetType' (one of: 'api', 'ssh', 'openclaw'). For 'api', include 'method' and 'endpoint'. For 'ssh', include 'command'. For 'openclaw', include 'systemPrompt'. You can also include 'rawDescription', 'name', 'description', 'allowOverwrite', etc. If required fields are missing, do not guess; ask the user for them.";
+  description = "Generates an EXTENSION skill (API, SSH, or OPENCLAW) from a user's description, saves it to SkillGateway, and immediately validates it once. Input must be a JSON string with 'targetType' (one of: 'api', 'ssh', 'openclaw'). For 'api', include 'method' and 'endpoint'. For 'ssh', include 'command' (saved as canonical kind=ssh with preset=server-resource-status, using server_lookup + ssh_executor; runtime input should provide serverName or host). For 'openclaw', include 'systemPrompt'. You can also include 'rawDescription', 'name', 'description', 'allowOverwrite', etc. If required fields are missing, do not guess; ask the user for them.";
 
   private gatewayUrl: string;
   private apiToken: string;

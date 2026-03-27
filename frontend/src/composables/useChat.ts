@@ -2,6 +2,7 @@ import { ref, provide, inject, type InjectionKey } from 'vue'
 import { createTask, getEventSourceUrl } from '../services/api'
 import { agentUrl } from '../services/config'
 import { useUser } from './useUser'
+import { type LlmLogEntry, isLlmLogEvent, mergeLlmLogEntries } from '../utils/llmLog'
 
 export type ToolInvocationStatus = 'running' | 'completed' | 'failed'
 
@@ -11,7 +12,15 @@ export interface ToolInvocation {
   displayName: string
   kind: 'skill' | 'tool'
   status: ToolInvocationStatus
+  parentId?: string
+  parentName?: string
+  summary?: string
+  executionMode?: string
+  executionLabel?: string
+  children?: ToolInvocation[]
 }
+
+export type { LlmLogEntry } from '../utils/llmLog'
 
 export interface Message {
   id: string
@@ -19,6 +28,7 @@ export interface Message {
   content: string
   timestamp: number
   toolInvocations?: ToolInvocation[]
+  llmLogs?: LlmLogEntry[]
 }
 
 function asArray<T>(value: T | T[] | undefined | null): T[] {
@@ -63,6 +73,7 @@ export function provideChat() {
   const messages = ref<Message[]>([])
   const isThinking = ref(false)
   const error = ref<string | null>(null)
+  const activeSessionId = ref<string | null>(null)
   const { currentUser } = useUser()
 
   function updateLastAssistantMessage(updater: (message: Message) => Message) {
@@ -79,6 +90,15 @@ export function provideChat() {
 
   function addMessage(message: Message) {
     messages.value = [...messages.value, message]
+  }
+
+  function upsertLlmLogEntry(entry: LlmLogEntry) {
+    updateLastAssistantMessage((last) => {
+      return {
+        ...last,
+        llmLogs: mergeLlmLogEntries(last.llmLogs ?? [], entry),
+      }
+    })
   }
 
   function setLastMessage(content: string) {
@@ -257,6 +277,7 @@ export function provideChat() {
               displayName: describeToolName(toolName),
               kind: inferToolKind(toolName),
               status: 'running' as ToolInvocationStatus,
+              children: [],
             }
           })
           .filter(Boolean) as ToolInvocation[]
@@ -274,6 +295,7 @@ export function provideChat() {
         displayName: describeToolName(toolName),
         kind: inferToolKind(toolName),
         status: content.startsWith('error') ? 'failed' : 'completed',
+        children: [],
       }]
     })
   }
@@ -285,6 +307,11 @@ export function provideChat() {
     displayName: string
     kind: 'skill' | 'tool'
     status: ToolInvocationStatus
+    parentToolId?: string
+    parentToolName?: string
+    summary?: string
+    executionMode?: string
+    executionLabel?: string
   } {
     return data?.type === 'tool_status'
       && typeof data.toolId === 'string'
@@ -294,15 +321,91 @@ export function provideChat() {
       && ['running', 'completed', 'failed'].includes(data.status)
   }
 
+  function upsertChildToolInvocation(children: ToolInvocation[], toolEvent: {
+    toolId: string
+    toolName: string
+    displayName: string
+    kind: 'skill' | 'tool'
+    status: ToolInvocationStatus
+    summary?: string
+  }) {
+    const nextChildren = [...children]
+    const existingIndex = nextChildren.findIndex((tool) => tool.id === toolEvent.toolId)
+    const previous = existingIndex >= 0 ? nextChildren[existingIndex] : null
+    const nextChild: ToolInvocation = {
+      id: toolEvent.toolId,
+      name: toolEvent.toolName,
+      displayName: toolEvent.displayName,
+      kind: toolEvent.kind,
+      status: toolEvent.status,
+      summary: toolEvent.summary,
+      children: previous?.children ?? [],
+    }
+
+    if (existingIndex >= 0) {
+      nextChildren.splice(existingIndex, 1, nextChild)
+    } else {
+      nextChildren.push(nextChild)
+    }
+
+    return nextChildren
+  }
+
   function upsertToolInvocation(toolEvent: {
     toolId: string
     toolName: string
     displayName: string
     kind: 'skill' | 'tool'
     status: ToolInvocationStatus
+    parentToolId?: string
+    parentToolName?: string
+    summary?: string
+    executionMode?: string
+    executionLabel?: string
   }) {
     updateLastAssistantMessage((last) => {
       const toolInvocations = [...(last.toolInvocations ?? [])]
+      if (toolEvent.parentToolId || toolEvent.parentToolName) {
+        const parentIndex = toolInvocations.findIndex((tool) => tool.id === toolEvent.parentToolId)
+        const fallbackParentIndex = parentIndex >= 0
+          ? parentIndex
+          : toolInvocations.findIndex((tool) => tool.name === toolEvent.parentToolName)
+        const targetParentIndex = parentIndex >= 0 ? parentIndex : fallbackParentIndex
+        const parent: ToolInvocation = targetParentIndex >= 0 && toolInvocations[targetParentIndex]
+          ? toolInvocations[targetParentIndex]
+          : {
+            id: toolEvent.parentToolId || toolEvent.parentToolName || toolEvent.toolId,
+            name: toolEvent.parentToolName || toolEvent.parentToolId || toolEvent.toolName,
+            displayName: toolEvent.parentToolName || toolEvent.parentToolId || toolEvent.displayName,
+            kind: 'skill' as const,
+            status: 'running' as ToolInvocationStatus,
+            children: [],
+          }
+
+        const nextParent: ToolInvocation = {
+          ...parent,
+          children: upsertChildToolInvocation(parent.children ?? [], {
+            toolId: toolEvent.toolId,
+            toolName: toolEvent.toolName,
+            displayName: toolEvent.displayName,
+            kind: toolEvent.kind,
+            status: toolEvent.status,
+            summary: toolEvent.summary,
+          }),
+        }
+
+        if (targetParentIndex >= 0) {
+          toolInvocations.splice(targetParentIndex, 1, nextParent)
+        } else {
+          toolInvocations.push(nextParent)
+        }
+
+        return {
+          ...last,
+          toolInvocations,
+        }
+      }
+
       const existingIndex = toolInvocations.findIndex((tool) => tool.id === toolEvent.toolId)
       const aliasIndex = existingIndex >= 0
         ? -1
@@ -327,6 +430,10 @@ export function provideChat() {
         displayName: nextDisplayName,
         kind: toolEvent.kind,
         status: toolEvent.status,
+        summary: toolEvent.summary,
+        executionMode: toolEvent.executionMode,
+        executionLabel: toolEvent.executionLabel,
+        children: previousTool?.children ?? [],
       }
 
       if (targetIndex >= 0) {
@@ -345,11 +452,15 @@ export function provideChat() {
   function settleLastToolInvocations(status: ToolInvocationStatus) {
     updateLastAssistantMessage((last) => ({
       ...last,
-      toolInvocations: (last.toolInvocations ?? []).map((tool) => (
-        tool.status === 'running'
-          ? { ...tool, status }
-          : tool
-      )),
+      toolInvocations: (last.toolInvocations ?? []).map((tool) => ({
+        ...tool,
+        status: tool.status === 'running' ? status : tool.status,
+        children: (tool.children ?? []).map((child) => (
+          child.status === 'running'
+            ? { ...child, status }
+            : child
+        )),
+      })),
     }))
   }
 
@@ -376,6 +487,7 @@ export function provideChat() {
         }))
 
       const { id } = await createTask(content, userId, history)
+      activeSessionId.value = id
       const url = getEventSourceUrl(id)
 
       addMessage({
@@ -384,6 +496,7 @@ export function provideChat() {
         content: '',
         timestamp: Date.now(),
         toolInvocations: [],
+        llmLogs: [],
       })
 
       const eventSource = new EventSource(url)
@@ -402,6 +515,13 @@ export function provideChat() {
             }
 
             console.log('Received JSON data:', data)
+            if (isLlmLogEvent(data)) {
+              if (activeSessionId.value && data.entry.sessionId === activeSessionId.value) {
+                upsertLlmLogEntry(data.entry)
+              }
+              return
+            }
+
             if (isToolStatusEvent(data)) {
               upsertToolInvocation(data)
               return
@@ -416,6 +536,8 @@ export function provideChat() {
                   displayName: toolInvocation.displayName,
                   kind: toolInvocation.kind,
                   status: toolInvocation.status,
+                  executionMode: toolInvocation.executionMode,
+                  executionLabel: toolInvocation.executionLabel,
                 })
               })
             }
@@ -445,6 +567,7 @@ export function provideChat() {
         eventSource.close()
         settleLastToolInvocations('completed')
         isThinking.value = false
+        activeSessionId.value = null
       })
 
       eventSource.addEventListener('error', (e) => {
@@ -452,11 +575,13 @@ export function provideChat() {
         eventSource.close()
         settleLastToolInvocations('failed')
         isThinking.value = false
+        activeSessionId.value = null
       })
     } catch (err) {
       console.error('Failed to send message:', err)
       error.value = err instanceof Error ? err.message : 'Failed to send message'
       isThinking.value = false
+      activeSessionId.value = null
     }
   }
 
@@ -482,7 +607,8 @@ export function provideChat() {
             role: 'assistant',
             content: greetingContent,
             timestamp: Date.now(),
-            toolInvocations: []
+            toolInvocations: [],
+            llmLogs: [],
           })
         }
     } catch (e) {

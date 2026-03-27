@@ -51,9 +51,12 @@ class SkillControllerCrudTest {
     void getAllSkills_returnsSeededSkills() throws Exception {
         mockMvc.perform(get("/api/skills"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(greaterThanOrEqualTo(2)))
+                .andExpect(jsonPath("$.length()").value(greaterThanOrEqualTo(4)))
                 .andExpect(jsonPath("$[*].name").value(hasItem("获取时间")))
-                .andExpect(jsonPath("$[*].name").value(hasItem("服务器资源状态")));
+                .andExpect(jsonPath("$[*].name").value(hasItem("服务器资源状态")))
+                .andExpect(jsonPath("$[*].name").value(hasItem("查询距离生日还有几天")))
+                .andExpect(jsonPath("$[?(@.name=='获取时间')].executionMode").value(hasItem("CONFIG")))
+                .andExpect(jsonPath("$[?(@.name=='查询距离生日还有几天')].executionMode").value(hasItem("OPENCLAW")));
     }
 
     @Test
@@ -64,7 +67,8 @@ class SkillControllerCrudTest {
                   "name": "%s",
                   "description": "Created by CRUD integration test",
                   "type": "EXTENSION",
-                  "configuration": "{\\"kind\\":\\"time\\",\\"operation\\":\\"current-time\\"}",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"api\\",\\"preset\\":\\"current-time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
                   "enabled": true,
                   "requiresConfirmation": false
                 }
@@ -76,6 +80,7 @@ class SkillControllerCrudTest {
                         .content(createBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.name").value(skillName))
+                .andExpect(jsonPath("$.executionMode").value("CONFIG"))
                 .andExpect(jsonPath("$.enabled").value(true))
                 .andExpect(jsonPath("$.requiresConfirmation").value(false));
 
@@ -87,7 +92,8 @@ class SkillControllerCrudTest {
                   "name": "%s",
                   "description": "Updated by CRUD integration test",
                   "type": "EXTENSION",
-                  "configuration": "{\\"kind\\":\\"monitor\\",\\"operation\\":\\"server-resource-status\\"}",
+                  "executionMode": "OPENCLAW",
+                  "configuration": "{\\"kind\\":\\"openclaw\\",\\"systemPrompt\\":\\"## Planner: use tools carefully\\",\\"allowedTools\\":[\\"compute\\",\\"获取时间\\"],\\"orchestration\\":{\\"mode\\":\\"serial\\"}}",
                   "enabled": false,
                   "requiresConfirmation": true
                 }
@@ -99,6 +105,7 @@ class SkillControllerCrudTest {
                         .content(updateBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.description").value("Updated by CRUD integration test"))
+                .andExpect(jsonPath("$.executionMode").value("OPENCLAW"))
                 .andExpect(jsonPath("$.enabled").value(false))
                 .andExpect(jsonPath("$.requiresConfirmation").value(true));
 
@@ -108,5 +115,120 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(get("/api/skills/{id}", createdSkill.getId()))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void createSkill_defaultsExecutionModeToConfigWhenMissing() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "default-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "Defaults execution mode",
+                  "type": "EXTENSION",
+                  "configuration": "{\\"kind\\":\\"api\\",\\"preset\\":\\"current-time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.executionMode").value("CONFIG"));
+    }
+
+    @Test
+    void createSkill_rejectsExecutionModeAndConfigurationMismatch() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "invalid-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "Invalid openclaw payload",
+                  "type": "EXTENSION",
+                  "executionMode": "OPENCLAW",
+                  "configuration": "{\\"kind\\":\\"monitor\\",\\"operation\\":\\"server-resource-status\\",\\"lookup\\":\\"server_lookup\\",\\"executor\\":\\"ssh_executor\\",\\"command\\":\\"uptime\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("OPENCLAW executionMode requires kind=openclaw"));
+    }
+
+    @Test
+    void createSkill_allowsOpenclawWithoutAllowedTools() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "prompt-only-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "Prompt only openclaw",
+                  "type": "EXTENSION",
+                  "executionMode": "OPENCLAW",
+                  "configuration": "{\\"kind\\":\\"openclaw\\",\\"systemPrompt\\":\\"# Prompt only\\",\\"allowedTools\\":[],\\"orchestration\\":{\\"mode\\":\\"serial\\"}}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.executionMode").value("OPENCLAW"))
+                .andExpect(jsonPath("$.configuration").value("{\"kind\":\"openclaw\",\"systemPrompt\":\"# Prompt only\",\"allowedTools\":[],\"orchestration\":{\"mode\":\"serial\"}}"));
+    }
+
+    @Test
+    void createSkill_legacyTimeKindIsNormalizedToCanonicalApiKind() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "legacy-time-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "Legacy time config",
+                  "type": "EXTENSION",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configuration").value("{\"kind\":\"api\",\"operation\":\"current-time\",\"method\":\"GET\",\"endpoint\":\"https://example.com/time\",\"preset\":\"current-time\"}"));
+    }
+
+    @Test
+    void createSkill_acceptsCanonicalSshPresetConfig() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "canonical-ssh-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "Canonical ssh config",
+                  "type": "EXTENSION",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"ssh\\",\\"preset\\":\\"server-resource-status\\",\\"operation\\":\\"server-resource-status\\",\\"lookup\\":\\"server_lookup\\",\\"executor\\":\\"ssh_executor\\",\\"command\\":\\"uptime\\",\\"readOnly\\":true}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.configuration").value("{\"kind\":\"ssh\",\"preset\":\"server-resource-status\",\"operation\":\"server-resource-status\",\"lookup\":\"server_lookup\",\"executor\":\"ssh_executor\",\"command\":\"uptime\",\"readOnly\":true}"));
     }
 }

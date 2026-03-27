@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { useSkillHub, BUILT_IN_SKILLS } from '../composables/useSkillHub';
+import { useSkillHub, BUILT_IN_SKILLS, getExecutionModeLabel, getConfigSummary } from '../composables/useSkillHub';
 import { AppIcon, CalculatorIcon, ExtensionIcon } from 'tdesign-icons-vue-next';
 import SkillManagementModal from './SkillManagementModal.vue';
 
-const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillManagement } = useSkillHub();
+const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillManagement, refreshSkills } = useSkillHub();
 </script>
 
 <template>
@@ -38,9 +38,14 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillMan
       <div class="section">
         <div class="section-header">
           <h3 class="section-title">Extended Skills</h3>
-          <t-button size="small" theme="default" variant="outline" @click="openSkillManagement">
-            管理
-          </t-button>
+          <div class="section-actions">
+            <t-button size="small" theme="default" variant="outline" @click="refreshSkills">
+              刷新
+            </t-button>
+            <t-button size="small" theme="default" variant="outline" @click="openSkillManagement">
+              管理
+            </t-button>
+          </div>
         </div>
         <div v-if="isLoading" class="loading-state">
           <t-loading text="Loading skills..." />
@@ -54,7 +59,15 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillMan
         <t-list v-else :split="true">
           <t-list-item v-for="skill in skills" :key="skill.id">
             <template #action>
-              <t-tag theme="success" variant="light">Extended</t-tag>
+              <div class="skill-tags">
+                <t-tag theme="success" variant="light">Extended</t-tag>
+                <t-tag :theme="skill.executionMode === 'OPENCLAW' ? 'warning' : 'primary'" variant="light">
+                  {{ getExecutionModeLabel(skill.executionMode) }}
+                </t-tag>
+                <t-tag v-if="skill.executionMode === 'CONFIG' && getConfigSummary(skill.configuration).kindLabel" theme="default" variant="light">
+                  {{ getConfigSummary(skill.configuration).kindLabel }}
+                </t-tag>
+              </div>
             </template>
             <t-list-item-meta :title="skill.name" :description="skill.description || 'No description provided.'">
               <template #image>
@@ -90,6 +103,16 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillMan
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+
+.section-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.skill-tags {
+  display: flex;
+  gap: 8px;
 }
 
 .skill-icon {

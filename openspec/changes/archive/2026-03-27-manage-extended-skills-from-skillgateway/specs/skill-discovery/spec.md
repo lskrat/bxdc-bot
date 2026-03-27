@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Dynamic Skill Discovery
 The Agent Core SHALL dynamically discover and load available Extended Skills from the SkillGateway at startup or upon request, rather than relying on hardcoded lists.

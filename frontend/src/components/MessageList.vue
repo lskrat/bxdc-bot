@@ -1,16 +1,22 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
-import { useChat } from '../composables/useChat'
+import { useChat, type LlmLogEntry } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 
 const { messages, isThinking, sendMessage } = useChat()
 const { currentUser } = useUser()
+const activeLogMessageId = ref<string | null>(null)
 
 function formatToolStatus(status: 'running' | 'completed' | 'failed') {
   if (status === 'completed') return '已完成'
   if (status === 'failed') return '调用失败'
   return '调用中'
+}
+
+function formatToolSummary(summary?: string) {
+  if (!summary) return ''
+  return summary.length > 120 ? `${summary.slice(0, 117)}...` : summary
 }
 
 function formatTime(timestamp: number) {
@@ -19,6 +25,54 @@ function formatTime(timestamp: number) {
     minute: '2-digit',
   }).format(timestamp)
 }
+
+function formatLogTime(timestamp: string) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(timestamp))
+}
+
+function formatLogDirection(direction: 'request' | 'response') {
+  return direction === 'request' ? '请求参数' : '响应内容'
+}
+
+function stringifyLogPayload(payload: unknown) {
+  return JSON.stringify(payload ?? {}, null, 2)
+}
+
+function openLogViewer(messageId: string) {
+  activeLogMessageId.value = messageId
+}
+
+function handleLogDialogVisibilityChange(visible: boolean) {
+  if (!visible) {
+    activeLogMessageId.value = null
+  }
+}
+
+function closeLogViewer() {
+  activeLogMessageId.value = null
+}
+
+function openLatestLogViewer() {
+  if (latestAssistantMessage.value) {
+    activeLogMessageId.value = latestAssistantMessage.value.id
+  }
+}
+
+const activeLogMessage = computed(() =>
+  (messages?.value ?? []).find((message) => message.id === activeLogMessageId.value) ?? null,
+)
+
+const activeLogEntries = computed<LlmLogEntry[]>(() => activeLogMessage.value?.llmLogs ?? [])
+
+const latestAssistantMessage = computed(() =>
+  [...(messages?.value ?? [])].reverse().find((message) => message.role === 'assistant') ?? null,
+)
+
+const latestAssistantLogCount = computed(() => latestAssistantMessage.value?.llmLogs?.length ?? 0)
 
 function getAvatarUrl(emoji: string) {
   // Check if it's already a URL
@@ -69,6 +123,7 @@ const chatItems = computed(() =>
     rawContent: message.content,
     confirmationRequest: message.role === 'assistant' ? parseConfirmationRequest(message.content) : null,
     toolInvocations: message.toolInvocations ?? [],
+    llmLogs: message.llmLogs ?? [],
     showThinking: message.role === 'assistant' && isThinking.value && index === list.length - 1,
     name: message.role === 'assistant' ? 'BXDC.bot' : '你',
     datetime: formatTime(message.timestamp),
@@ -79,6 +134,15 @@ const chatItems = computed(() =>
 
 <template>
   <div class="message-list">
+    <div v-if="latestAssistantMessage" class="message-list-toolbar">
+      <t-button size="small" variant="outline" @click="openLatestLogViewer">
+        日志查看
+      </t-button>
+      <span class="message-list-toolbar-text">
+        {{ latestAssistantLogCount > 0 ? `当前回复 ${latestAssistantLogCount} 条日志` : '当前回复暂无日志' }}
+      </span>
+    </div>
+
     <div
       v-if="chatItems.length === 0 && !isThinking"
       class="empty-state"
@@ -148,11 +212,45 @@ const chatItems = computed(() =>
               class="tool-status-item"
               :class="`tool-status-item--${tool.status}`"
             >
-              <span class="tool-status-name">{{ tool.displayName }}</span>
-              <span class="tool-status-separator">·</span>
-              <span class="tool-status-text">{{ formatToolStatus(tool.status) }}</span>
-              <span v-if="tool.status === 'completed'" class="tool-status-check">✓</span>
+              <div class="tool-status-main">
+                <span class="tool-status-name">{{ tool.displayName }}</span>
+                <t-tag
+                  v-if="tool.executionLabel"
+                  size="small"
+                  variant="light"
+                  :theme="tool.executionMode === 'OPENCLAW' ? 'warning' : 'primary'"
+                >
+                  {{ tool.executionLabel }}
+                </t-tag>
+                <span class="tool-status-separator">·</span>
+                <span class="tool-status-text">{{ formatToolStatus(tool.status) }}</span>
+                <span v-if="tool.status === 'completed'" class="tool-status-check">✓</span>
+              </div>
+              <div v-if="tool.children?.length" class="tool-children-list">
+                <div
+                  v-for="child in tool.children"
+                  :key="child.id"
+                  class="tool-child-item"
+                  :class="`tool-child-item--${child.status}`"
+                >
+                  <span class="tool-child-name">{{ child.displayName }}</span>
+                  <span class="tool-status-separator">·</span>
+                  <span class="tool-status-text">{{ formatToolStatus(child.status) }}</span>
+                  <span v-if="child.summary" class="tool-status-separator">·</span>
+                  <span v-if="child.summary" class="tool-child-summary">{{ formatToolSummary(child.summary) }}</span>
+                </div>
+              </div>
             </div>
+          </div>
+
+          <div
+            v-if="item.role === 'assistant' && item.llmLogs.length"
+            class="llm-log-actions"
+          >
+            <t-button size="small" variant="outline" @click="openLogViewer(item.id)">
+              日志查看
+            </t-button>
+            <span class="llm-log-count">共 {{ item.llmLogs.length }} 条</span>
           </div>
         </div>
       </template>
@@ -165,6 +263,52 @@ const chatItems = computed(() =>
         />
       </template>
     </TChat>
+
+    <t-dialog
+      :visible="activeLogMessageId !== null"
+      header="LLM 调用日志"
+      width="880px"
+      top="48px"
+      :footer="false"
+      destroy-on-close
+      @update:visible="handleLogDialogVisibilityChange"
+      @close="closeLogViewer"
+    >
+      <div class="llm-log-viewer">
+        <div v-if="activeLogEntries.length === 0" class="llm-log-empty">
+          当前消息暂无可展示的 LLM 日志
+        </div>
+        <div v-else class="llm-log-list">
+          <div
+            v-for="entry in activeLogEntries"
+            :key="entry.id"
+            class="llm-log-item"
+            :class="`llm-log-item--${entry.direction}`"
+          >
+            <div class="llm-log-header">
+              <div class="llm-log-meta">
+                <t-tag :theme="entry.direction === 'request' ? 'primary' : 'success'" variant="light">
+                  {{ formatLogDirection(entry.direction) }}
+                </t-tag>
+                <span class="llm-log-summary">{{ entry.summary }}</span>
+              </div>
+              <span class="llm-log-time">{{ formatLogTime(entry.timestamp) }}</span>
+            </div>
+
+            <div v-if="entry.modelName" class="llm-log-model">
+              模型：{{ entry.modelName }}
+            </div>
+
+            <div class="llm-log-section">
+              <div class="llm-log-section-title">
+                {{ entry.direction === 'request' ? '送给大模型的参数' : '大模型返回的内容' }}
+              </div>
+              <pre class="llm-log-payload">{{ stringifyLogPayload(entry.direction === 'request' ? entry.request : entry.response) }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </t-dialog>
   </div>
 </template>
 
@@ -173,6 +317,9 @@ const chatItems = computed(() =>
   flex: 1;
   min-height: 0;
   padding: 16px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 @media (min-width: 768px) {
@@ -182,7 +329,21 @@ const chatItems = computed(() =>
 }
 
 .chat-panel {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.message-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.message-list-toolbar-text {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
 }
 
 .message-content-block {
@@ -199,13 +360,20 @@ const chatItems = computed(() =>
 }
 
 .tool-status-item {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   align-self: flex-start;
   gap: 6px;
   font-size: 12px;
   line-height: 1.4;
   color: var(--td-text-color-secondary);
+}
+
+.tool-status-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .tool-status-item--running {
@@ -223,6 +391,38 @@ const chatItems = computed(() =>
   white-space: nowrap;
 }
 
+.tool-children-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--td-component-stroke);
+}
+
+.tool-child-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--td-text-color-secondary);
+}
+
+.tool-child-item--running {
+  color: var(--td-brand-color);
+}
+
+.tool-child-item--failed {
+  color: var(--td-error-color);
+}
+
+.tool-child-name,
+.tool-child-summary {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tool-status-separator {
   opacity: 0.65;
 }
@@ -230,6 +430,100 @@ const chatItems = computed(() =>
 .tool-status-check {
   color: var(--td-success-color);
   font-weight: 700;
+}
+
+.llm-log-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 8px;
+}
+
+.llm-log-count {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+}
+
+.llm-log-viewer {
+  max-height: min(70vh, 720px);
+  overflow: auto;
+}
+
+.llm-log-empty {
+  color: var(--td-text-color-placeholder);
+}
+
+.llm-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.llm-log-item {
+  border: 1px solid var(--td-border-level-2-color);
+  border-radius: var(--td-radius-medium);
+  padding: 12px;
+  background: var(--td-bg-color-container);
+}
+
+.llm-log-item--request {
+  border-left: 4px solid var(--td-brand-color);
+}
+
+.llm-log-item--response {
+  border-left: 4px solid var(--td-success-color);
+}
+
+.llm-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.llm-log-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.llm-log-summary {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+}
+
+.llm-log-time,
+.llm-log-model {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+}
+
+.llm-log-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-log-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--td-text-color-secondary);
+}
+
+.llm-log-payload {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border-radius: var(--td-radius-medium);
+  background: var(--td-bg-color-page);
+  color: var(--td-text-color-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .thinking-indicator {

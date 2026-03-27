@@ -5,6 +5,7 @@ node_modules/
 dist/
 dist-ssr/
 target/
+frontend/dist.zip
 
 # IDE & OS
 .DS_Store
@@ -20,6 +21,7 @@ target/
 
 # Database & runtime data
 backend/skill-gateway/data/
+backend/skill-gateway/.m2-test/
 backend/agent-core/memories.db
 
 # Backups
