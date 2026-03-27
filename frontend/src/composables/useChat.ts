@@ -26,6 +26,28 @@ function asArray<T>(value: T | T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [value]
 }
 
+function normalizeToolName(toolCall: any, fallback?: string): string | null {
+  const name = toolCall?.name
+    ?? toolCall?.function?.name
+    ?? toolCall?.kwargs?.name
+    ?? fallback
+
+  return typeof name === 'string' && name.trim() ? name.trim() : null
+}
+
+function normalizeToolId(toolCall: any, fallback: string): string {
+  const id = toolCall?.id ?? toolCall?.tool_call_id ?? toolCall?.function?.id
+  return typeof id === 'string' && id.trim() ? id.trim() : fallback
+}
+
+function inferToolKind(toolName: string): 'skill' | 'tool' {
+  return toolName.startsWith('skill_')
+    || toolName.startsWith('extended_')
+    || toolName.startsWith('extended-')
+    ? 'skill'
+    : 'tool'
+}
+
 export interface ChatState {
   messages: ReturnType<typeof ref<Message[]>>
   isThinking: ReturnType<typeof ref<boolean>>
@@ -216,20 +238,24 @@ export function provideChat() {
       .replace(/_/g, '-')
   }
 
+  function isGenericToolDisplayName(toolName: string, displayName: string): boolean {
+    return displayName === describeToolName(toolName)
+  }
+
   function extractToolInvocationsFromChunk(data: any): ToolInvocation[] {
     return getChunkMessages(data).flatMap((message, messageIndex): ToolInvocation[] => {
       const toolCalls = getToolCallEntries(message)
       if (toolCalls.length > 0) {
         return toolCalls
           .map((toolCall, toolIndex) => {
-            const toolName = toolCall?.name ?? toolCall?.function?.name
-            if (typeof toolName !== 'string' || !toolName.trim()) return null
+            const toolName = normalizeToolName(toolCall)
+            if (!toolName) return null
 
             return {
-              id: toolCall?.id ?? `${toolName}:${messageIndex}:${toolIndex}`,
+              id: normalizeToolId(toolCall, `${toolName}:${messageIndex}:${toolIndex}`),
               name: toolName,
               displayName: describeToolName(toolName),
-              kind: (toolName.startsWith('skill_') ? 'skill' : 'tool') as 'skill' | 'tool',
+              kind: inferToolKind(toolName),
               status: 'running' as ToolInvocationStatus,
             }
           })
@@ -238,15 +264,15 @@ export function provideChat() {
 
       if (!isToolMessage(message)) return []
 
-      const toolName = message?.name ?? message?.kwargs?.name
-      if (typeof toolName !== 'string' || !toolName.trim()) return []
+      const toolName = normalizeToolName(message, message?.kwargs?.name)
+      if (!toolName) return []
 
       const content = String(message?.content ?? message?.kwargs?.content ?? '').toLowerCase()
       return [{
-        id: message?.tool_call_id ?? message?.kwargs?.tool_call_id ?? toolName,
+        id: normalizeToolId(message, toolName),
         name: toolName,
         displayName: describeToolName(toolName),
-        kind: toolName.startsWith('skill_') ? 'skill' : 'tool',
+        kind: inferToolKind(toolName),
         status: content.startsWith('error') ? 'failed' : 'completed',
       }]
     })
@@ -278,17 +304,33 @@ export function provideChat() {
     updateLastAssistantMessage((last) => {
       const toolInvocations = [...(last.toolInvocations ?? [])]
       const existingIndex = toolInvocations.findIndex((tool) => tool.id === toolEvent.toolId)
+      const aliasIndex = existingIndex >= 0
+        ? -1
+        : toolInvocations.findIndex((tool) => (
+          tool.name === toolEvent.toolName
+          && (
+            isGenericToolDisplayName(tool.name, tool.displayName)
+            || isGenericToolDisplayName(toolEvent.toolName, toolEvent.displayName)
+          )
+        ))
+      const targetIndex = existingIndex >= 0 ? existingIndex : aliasIndex
+      const previousTool = targetIndex >= 0 ? toolInvocations[targetIndex] : null
+      const nextDisplayName = previousTool
+        && isGenericToolDisplayName(toolEvent.toolName, toolEvent.displayName)
+        && !isGenericToolDisplayName(previousTool.name, previousTool.displayName)
+        ? previousTool.displayName
+        : toolEvent.displayName
 
       const nextTool: ToolInvocation = {
         id: toolEvent.toolId,
         name: toolEvent.toolName,
-        displayName: toolEvent.displayName,
+        displayName: nextDisplayName,
         kind: toolEvent.kind,
         status: toolEvent.status,
       }
 
-      if (existingIndex >= 0) {
-        toolInvocations.splice(existingIndex, 1, nextTool)
+      if (targetIndex >= 0) {
+        toolInvocations.splice(targetIndex, 1, nextTool)
       } else {
         toolInvocations.push(nextTool)
       }

@@ -8,9 +8,11 @@ export interface Skill {
   type: string;
   configuration: string;
   enabled: boolean;
+  requiresConfirmation?: boolean;
 }
 
 const isSkillHubVisible = ref(false);
+const isSkillManagementVisible = ref(false);
 const skills = ref<Skill[]>([]);
 const isLoading = ref(false);
 const error = ref<string | null>(null);
@@ -61,6 +63,15 @@ export function useSkillHub() {
     isSkillHubVisible.value = false;
   }
 
+  function openSkillManagement() {
+    isSkillManagementVisible.value = true;
+    fetchSkills();
+  }
+
+  function closeSkillManagement() {
+    isSkillManagementVisible.value = false;
+  }
+
   async function fetchSkills() {
     isLoading.value = true;
     error.value = null;
@@ -78,14 +89,72 @@ export function useSkillHub() {
     }
   }
 
+  async function createSkill(payload: Omit<Skill, 'id'>) {
+    const res = await fetch(apiUrl('/api/skills'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to create skill');
+    }
+    await fetchSkills();
+  }
+
+  async function updateSkill(id: number, payload: Omit<Skill, 'id'>) {
+    const res = await fetch(apiUrl(`/api/skills/${id}`), {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update skill');
+    }
+    await fetchSkills();
+  }
+
+  async function deleteSkill(id: number) {
+    const res = await fetch(apiUrl(`/api/skills/${id}`), {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      throw new Error('Failed to delete skill');
+    }
+    await fetchSkills();
+  }
+
+  async function toggleSkillEnabled(skill: Skill, enabled: boolean) {
+    await updateSkill(skill.id, {
+      name: skill.name,
+      description: skill.description,
+      type: skill.type,
+      configuration: skill.configuration,
+      enabled,
+      requiresConfirmation: skill.requiresConfirmation ?? false,
+    });
+  }
+
   return {
     isSkillHubVisible,
+    isSkillManagementVisible,
     skills,
     isLoading,
     error,
     toggleSkillHub,
     openSkillHub,
     closeSkillHub,
+    openSkillManagement,
+    closeSkillManagement,
     fetchSkills,
+    createSkill,
+    updateSkill,
+    deleteSkill,
+    toggleSkillEnabled,
   };
 }

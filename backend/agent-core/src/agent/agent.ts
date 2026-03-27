@@ -1,6 +1,14 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
-import { JavaSshTool, JavaApiTool, JavaComputeTool, JavaLinuxScriptTool, JavaServerLookupTool } from "../tools/java-skills";
+import {
+  JavaSshTool,
+  JavaApiTool,
+  JavaApiSkillGeneratorTool,
+  JavaComputeTool,
+  JavaLinuxScriptTool,
+  JavaServerLookupTool,
+  loadGatewayExtendedTools,
+} from "../tools/java-skills";
 import type { SkillManager } from "../skills/skill.manager";
 
 /**
@@ -19,7 +27,7 @@ export class AgentFactory {
    * @param openAiApiKey OpenAI API Key
    * @returns 配置好的 Agent 实例
    */
-  static createAgent(
+  static async createAgent(
     gatewayUrl: string,
     apiToken: string,
     openAiApiKey: string,
@@ -27,12 +35,15 @@ export class AgentFactory {
     skillManager?: SkillManager,
     userId?: string
   ) {
+    const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId);
     const tools = [
       new JavaSshTool(gatewayUrl, apiToken, userId),
       new JavaApiTool(gatewayUrl, apiToken),
+      new JavaApiSkillGeneratorTool(gatewayUrl, apiToken),
       new JavaComputeTool(gatewayUrl, apiToken),
       new JavaLinuxScriptTool(gatewayUrl, apiToken),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),
+      ...gatewayExtendedTools,
       ...(skillManager?.getLangChainTools() || []),
     ];
 

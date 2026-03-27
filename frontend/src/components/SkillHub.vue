@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useSkillHub, BUILT_IN_SKILLS } from '../composables/useSkillHub';
 import { AppIcon, CalculatorIcon, ExtensionIcon } from 'tdesign-icons-vue-next';
+import SkillManagementModal from './SkillManagementModal.vue';
 
-const { isSkillHubVisible, skills, isLoading, error, closeSkillHub } = useSkillHub();
+const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillManagement } = useSkillHub();
 </script>
 
 <template>
@@ -35,7 +36,12 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub } = useSkillH
       </div>
 
       <div class="section">
-        <h3 class="section-title">Extended Skills</h3>
+        <div class="section-header">
+          <h3 class="section-title">Extended Skills</h3>
+          <t-button size="small" theme="default" variant="outline" @click="openSkillManagement">
+            管理
+          </t-button>
+        </div>
         <div v-if="isLoading" class="loading-state">
           <t-loading text="Loading skills..." />
         </div>
@@ -62,6 +68,7 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub } = useSkillH
       </div>
     </div>
   </t-drawer>
+  <SkillManagementModal />
 </template>
 
 <style scoped>
@@ -74,8 +81,15 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub } = useSkillH
 .section-title {
   font-size: 16px;
   font-weight: 600;
-  margin-bottom: 12px;
+  margin: 0;
   color: var(--td-text-color-primary);
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
 }
 
 .skill-icon {

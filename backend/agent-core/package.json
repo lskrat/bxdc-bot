@@ -5,7 +5,8 @@
   "scripts": {
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "build": "nest build"
+    "build": "nest build",
+    "test:tools": "npm run build && node --test test/java-skills.loader.test.cjs"
   },
   "dependencies": {
     "@langchain/core": "^1.1.31",

@@ -4,6 +4,7 @@ import { AgentFactory } from '../agent/agent';
 import { MemoryService } from '../mem/memory.service';
 import { SkillManager } from '../skills/skill.manager';
 import { LoggerService } from '../utils/logger.service';
+import { describeGatewayExtendedTool } from '../tools/java-skills';
 
 type ToolStatus = 'running' | 'completed' | 'failed';
 
@@ -125,7 +126,7 @@ function normalizeToolStatus(message: any): ToolStatus {
   return 'completed';
 }
 
-function extractStartedToolCalls(message: any): ExtractedToolCall[] {
+function extractStartedToolCalls(message: any, messageIndex: number): ExtractedToolCall[] {
   if (!isAssistantMessage(message)) return [];
 
   return getToolCallEntries(message)
@@ -134,7 +135,9 @@ function extractStartedToolCalls(message: any): ExtractedToolCall[] {
       if (!toolName) return null;
 
       return {
-        toolId: normalizeToolId(toolCall, `${toolName}:${index}`),
+        // Keep fallback id aligned with frontend `extractToolInvocationsFromChunk`
+        // so tool_status can upsert and replace initial generic displayName.
+        toolId: normalizeToolId(toolCall, `${toolName}:${messageIndex}:${index}`),
         toolName,
         status: 'running' as const,
       };
@@ -170,8 +173,10 @@ export class AgentController {
   ) {}
 
   private emitToolEvents(subject: Subject<MessageEvent>, chunk: any, seenToolStatuses: Map<string, ToolStatus>) {
-    for (const message of getChunkMessages(chunk)) {
-      const startedCalls = extractStartedToolCalls(message);
+    const chunkMessages = getChunkMessages(chunk);
+    for (let messageIndex = 0; messageIndex < chunkMessages.length; messageIndex += 1) {
+      const message = chunkMessages[messageIndex];
+      const startedCalls = extractStartedToolCalls(message, messageIndex);
       for (const startedCall of startedCalls) {
         this.emitToolEvent(subject, startedCall, seenToolStatuses);
       }
@@ -192,7 +197,7 @@ export class AgentController {
     if (previousStatus === toolCall.status) return;
 
     seenToolStatuses.set(toolCall.toolId, toolCall.status);
-    const toolInfo = this.skillManager.describeTool(toolCall.toolName);
+    const toolInfo = describeGatewayExtendedTool(toolCall.toolName) ?? this.skillManager.describeTool(toolCall.toolName);
     const event: NormalizedToolEvent = {
       type: 'tool_status',
       toolId: toolCall.toolId,
@@ -230,15 +235,6 @@ export class AgentController {
     const modelName = process.env.OPENAI_MODEL_NAME || 'gpt-4';
     const baseUrl = process.env.OPENAI_API_BASE;
 
-    const agent = AgentFactory.createAgent(
-      gatewayUrl,
-      apiToken,
-      openAiApiKey,
-      { modelName, baseUrl },
-      this.skillManager,
-      userId,
-    );
-
     const skillContext = this.skillManager.buildSkillPromptContext();
     
     // Add confirmation instructions
@@ -255,6 +251,15 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
       let fullAssistantResponse = '';
       const seenToolStatuses = new Map<string, ToolStatus>();
       try {
+        const agent = await AgentFactory.createAgent(
+          gatewayUrl,
+          apiToken,
+          openAiApiKey,
+          { modelName, baseUrl },
+          this.skillManager,
+          userId,
+        );
+
         // Retrieve relevant long-term memories based on current instruction
         const memories = await this.memoryService.searchMemories(instruction, userId, 10);
         console.log(`[Memory] Retrieved ${memories.length} memories for user ${userId}`);
