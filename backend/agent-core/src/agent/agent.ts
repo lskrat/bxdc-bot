@@ -3,7 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import {
   JavaSshTool,
   JavaApiTool,
-  JavaApiSkillGeneratorTool,
+  JavaSkillGeneratorTool,
   JavaComputeTool,
   JavaLinuxScriptTool,
   JavaServerLookupTool,
@@ -31,22 +31,10 @@ export class AgentFactory {
     gatewayUrl: string,
     apiToken: string,
     openAiApiKey: string,
-    config?: { modelName?: string, baseUrl?: string },
+    config?: { modelName?: string, baseUrl?: string, callbacks?: any[] },
     skillManager?: SkillManager,
     userId?: string
   ) {
-    const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId);
-    const tools = [
-      new JavaSshTool(gatewayUrl, apiToken, userId),
-      new JavaApiTool(gatewayUrl, apiToken),
-      new JavaApiSkillGeneratorTool(gatewayUrl, apiToken),
-      new JavaComputeTool(gatewayUrl, apiToken),
-      new JavaLinuxScriptTool(gatewayUrl, apiToken),
-      new JavaServerLookupTool(gatewayUrl, apiToken, userId),
-      ...gatewayExtendedTools,
-      ...(skillManager?.getLangChainTools() || []),
-    ];
-
     const model = new ChatOpenAI({
       modelName: config?.modelName || "gpt-4", // Or use OneAPI compatible model
       openAIApiKey: openAiApiKey,
@@ -54,7 +42,26 @@ export class AgentFactory {
         baseURL: config?.baseUrl,
       },
       temperature: 0,
+      callbacks: config?.callbacks,
     });
+
+    const baseTools = [
+      new JavaSshTool(gatewayUrl, apiToken, userId),
+      new JavaApiTool(gatewayUrl, apiToken),
+      new JavaSkillGeneratorTool(gatewayUrl, apiToken),
+      new JavaComputeTool(gatewayUrl, apiToken),
+      new JavaLinuxScriptTool(gatewayUrl, apiToken),
+      new JavaServerLookupTool(gatewayUrl, apiToken, userId),
+    ];
+    const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
+      plannerModel: model,
+      availableTools: baseTools,
+    });
+    const tools = [
+      ...baseTools,
+      ...gatewayExtendedTools,
+      ...(skillManager?.getLangChainTools() || []),
+    ];
 
     return createReactAgent({
       llm: model,

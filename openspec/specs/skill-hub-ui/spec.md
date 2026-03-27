@@ -11,12 +11,12 @@ The system SHALL provide a visible mechanism to access the Skill Hub from the ma
 - **THEN** the Skill Hub drawer/modal opens
 
 ### Requirement: Skill Listing
-The Skill Hub SHALL list all available skills, categorized by type.
+The Skill Hub SHALL list all available skills, categorized by type, including the built-in skill generator.
 
 #### Scenario: List Built-in Skills
 - **WHEN** the Skill Hub is opened
 - **THEN** a section "Built-in Skills" is displayed
-- **AND** it lists "Interface calls (API)" and "Calculation (Compute)"
+- **AND** it lists "Interface calls (API)", "Calculation (Compute)", and "Skill Generator" (or equivalent name)
 
 #### Scenario: List Extended Skills
 - **WHEN** the Skill Hub is opened

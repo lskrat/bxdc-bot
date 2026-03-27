@@ -1,14 +1,19 @@
 import { ref } from 'vue';
-import { apiUrl } from '../services/config';
+import { agentUrl, apiUrl } from '../services/config';
 
 export interface Skill {
   id: number;
   name: string;
   description: string;
   type: string;
+  executionMode?: 'CONFIG' | 'OPENCLAW';
   configuration: string;
   enabled: boolean;
   requiresConfirmation?: boolean;
+}
+
+export function getExecutionModeLabel(executionMode?: string): string {
+  return executionMode === 'OPENCLAW' ? '自主规划' : '预配置'
 }
 
 const isSkillHubVisible = ref(false);
@@ -38,6 +43,14 @@ export const BUILT_IN_SKILLS = [
     id: -3,
     name: 'SSH Execution (Linux Script)',
     description: 'Execute shell commands on a preconfigured Linux server with serverId and command.',
+    type: 'BUILTIN',
+    configuration: '{}',
+    enabled: true,
+  },
+  {
+    id: -4,
+    name: 'Skill Generator',
+    description: 'Automatically generate and register new API, SSH, or OPENCLAW skills based on natural language descriptions.',
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
@@ -90,7 +103,7 @@ export function useSkillHub() {
   }
 
   async function createSkill(payload: Omit<Skill, 'id'>) {
-    const res = await fetch(apiUrl('/api/skills'), {
+    const res = await fetch(agentUrl('/features/skills'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -105,7 +118,7 @@ export function useSkillHub() {
   }
 
   async function updateSkill(id: number, payload: Omit<Skill, 'id'>) {
-    const res = await fetch(apiUrl(`/api/skills/${id}`), {
+    const res = await fetch(agentUrl(`/features/skills/${id}`), {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -120,7 +133,7 @@ export function useSkillHub() {
   }
 
   async function deleteSkill(id: number) {
-    const res = await fetch(apiUrl(`/api/skills/${id}`), {
+    const res = await fetch(agentUrl(`/features/skills/${id}`), {
       method: 'DELETE',
     });
     if (!res.ok) {
@@ -134,6 +147,7 @@ export function useSkillHub() {
       name: skill.name,
       description: skill.description,
       type: skill.type,
+      executionMode: skill.executionMode ?? 'CONFIG',
       configuration: skill.configuration,
       enabled,
       requiresConfirmation: skill.requiresConfirmation ?? false,
