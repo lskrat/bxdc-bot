@@ -1,3 +1,6 @@
+-- Requires spring.jpa.defer-datasource-initialization=true when using spring.sql.init.mode=always,
+-- so Hibernate creates tables before this script (see application.properties / application-prod.example.properties).
+
 ALTER TABLE IF EXISTS skills
 ADD COLUMN IF NOT EXISTS requires_confirmation BOOLEAN DEFAULT FALSE;
 

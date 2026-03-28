@@ -138,6 +138,7 @@ spring.sql.init.mode=always
 spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
 spring.h2.console.enabled=false
 spring.jpa.hibernate.ddl-auto=update
+spring.jpa.defer-datasource-initialization=true
 
 server.address=127.0.0.1
 server.port=18080
@@ -155,6 +156,7 @@ export JAVA_GATEWAY_TOKEN=your-secure-token-here
 配置说明：
 
 - `spring.datasource.*`：H2 数据库位置和账号
+- `spring.jpa.defer-datasource-initialization=true`：**必须保留**。使用 `--spring.config.location` 指向单独 properties 文件时，会覆盖 JAR 内默认配置；若缺少此项，`schema.sql` 会在 Hibernate 建表之前执行，启动会报 `Table "SKILLS" not found`（见 11.7 节）
 - `server.address`：建议改成 `127.0.0.1`，避免直接暴露网关端口
 - `server.port`：网关监听端口，默认 `18080`
 - `agent.core.url`：网关调用 `agent-core` 的地址
@@ -524,6 +526,22 @@ npm run build
 - `OPENAI_MODEL_NAME`
 - `MEM0_URL`
 - 服务器出网权限和目标地址连通性
+
+### 11.7 Skill Gateway 启动失败：`Table "SKILLS" not found`（`schema.sql`）
+
+典型堆栈：`BeanCreationException` → `dataSourceScriptDatabaseInitializer` → `UPDATE skills SET requires_confirmation ...`。
+
+原因：`spring.sql.init.mode=always` 会执行 `schema.sql`，其中的 `UPDATE skills` 要求表已由 Hibernate 建好。若 **`spring.jpa.defer-datasource-initialization` 未设为 `true`**，`schema.sql` 会在空库上先于 Hibernate 执行，就会报「表不存在」。
+
+常见触发方式：启动命令使用 `--spring.config.location=.../application-prod.properties` 时，**只会加载该文件**，JAR 里 `application.properties` 中的 `defer-datasource-initialization=true` 不会生效；若生产 properties 是从文档复制的旧片段且漏了该项，就会复现。
+
+处理：在 `application-prod.properties` 中增加（或核对）与 `backend/skill-gateway/src/main/resources/application-prod.example.properties` 一致：
+
+```properties
+spring.jpa.defer-datasource-initialization=true
+```
+
+也可改用 `--spring.config.additional-location=...` 在保留 JAR 默认配置的基础上叠加生产文件（以你实际 Spring Boot 版本行为为准）。
 
 ## 12. 变更配置后的重启建议
 
