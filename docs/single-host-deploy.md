@@ -265,6 +265,21 @@ mkdir -p /opt/fishtank/agent-core
 - `SKILLs/`
 - `.env`
 
+若使用第 5.2 节打好的离线包 `agent-core-deploy.tar.gz`（包内路径为 `agent-core/...`），**请在 `/opt/fishtank` 下解压**，使 `dist/main.js` 落在 systemd 期望的位置，避免多一层目录：
+
+```bash
+cd /opt/fishtank
+tar xzvf agent-core/agent-core-deploy.tar.gz
+```
+
+若在 `/opt/fishtank/agent-core` 目录内直接解压，可能出现 `/opt/fishtank/agent-core/agent-core/dist/...`，与 `ExecStart` 中的路径不一致；此时应将内层 `agent-core` 下的内容移到 `/opt/fishtank/agent-core`，或删除外层后重新按上文在 `/opt/fishtank` 解压。
+
+解压后自检：
+
+```bash
+test -f /opt/fishtank/agent-core/dist/main.js && echo "dist OK"
+```
+
 启动命令：
 
 ```bash
@@ -273,6 +288,8 @@ node dist/main.js
 ```
 
 ### 6.3 部署 Skill Gateway
+
+`skill-gateway` 为单个可执行 `jar`，**无需解压**；将 `skill-gateway-0.0.1-SNAPSHOT.jar` 与 `application-prod.properties` 上传到同一目录即可。
 
 ```bash
 mkdir -p /opt/fishtank/skill-gateway
@@ -286,6 +303,15 @@ cd /opt/fishtank/skill-gateway
 export JAVA_GATEWAY_TOKEN=your-secure-token-here
 java -jar skill-gateway-0.0.1-SNAPSHOT.jar \
   --spring.config.location=/opt/fishtank/skill-gateway/application-prod.properties
+```
+
+### 6.4 本机健康检查
+
+在服务器上 **`agent-core` 与 `skill-gateway` 均已启动**（手动或 systemd，见第 7 节）后，可用下面命令确认本机端口正常；若连接被拒绝，多为进程未启动、路径未解压完整，或端口与 `.env` / `application-prod.properties` 不一致。
+
+```bash
+curl -sS http://127.0.0.1:3000/health
+curl -sS http://127.0.0.1:18080/api/health
 ```
 
 ## 7. systemd 托管
