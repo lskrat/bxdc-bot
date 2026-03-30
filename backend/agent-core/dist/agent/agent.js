@@ -8,10 +8,10 @@ class AgentFactory {
     static async createAgent(gatewayUrl, apiToken, openAiApiKey, config, skillManager, userId) {
         const model = new openai_1.ChatOpenAI({
             modelName: config?.modelName || "gpt-4",
-            openAIApiKey: openAiApiKey,
-            configuration: {
-                baseURL: config?.baseUrl,
-            },
+            apiKey: openAiApiKey,
+            ...(config?.baseUrl
+                ? { configuration: { baseURL: config.baseUrl.replace(/\/+$/, "") } }
+                : {}),
             temperature: 0,
             callbacks: config?.callbacks,
         });

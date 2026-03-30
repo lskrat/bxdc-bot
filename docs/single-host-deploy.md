@@ -123,6 +123,8 @@ MEM0_URL=http://127.0.0.1:8001
 - `JAVA_GATEWAY_TOKEN`：调用 `skill-gateway` 的鉴权 token，必须与网关侧保持一致
 - `MEM0_URL`：记忆服务地址，可为本机或远端
 
+登录用户可在前端「大模型设置」中配置各自的 `OPENAI_API_BASE` / 模型名 / API Key（存于 `skill-gateway` 数据库，首版为明文字段）。`agent-core` 执行任务时会用用户已保存的非空项覆盖上述环境变量对应项；未配置的项仍使用 `.env` 中的默认值。头像「AI 推荐」等由网关代理到 `agent-core` 的请求也会在网关侧按「用户配置 + 本机环境变量」合并后再转发。为在未填写用户配置时仍可使用服务端默认 Key，可在 **`skill-gateway` 进程环境**中同样设置 `OPENAI_API_KEY`（以及可选的 `OPENAI_MODEL_NAME`、`OPENAI_API_BASE`），与 `agent-core` 保持一致即可。API Key 仅保存在服务端，请勿在浏览器控制台或前端状态中持久化明文。
+
 ### 4.3 Skill Gateway 配置
 
 文件来源：`backend/skill-gateway/src/main/resources/application-prod.example.properties`

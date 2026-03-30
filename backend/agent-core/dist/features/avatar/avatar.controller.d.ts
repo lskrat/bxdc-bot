@@ -1,13 +1,19 @@
 import { LoggerService } from '../../utils/logger.service';
 export declare class AvatarController {
     private readonly logger;
-    private avatarService;
     constructor(logger: LoggerService);
-    private getService;
+    private serviceForRequest;
     generateAvatar(body: {
         nickname: string;
+        llmApiBase?: string;
+        llmModelName?: string;
+        llmApiKey?: string;
     }): Promise<{
         avatar: string;
+        error?: undefined;
+    } | {
+        avatar: string;
+        error: string;
     }>;
     generateGreeting(body: {
         nickname: string;

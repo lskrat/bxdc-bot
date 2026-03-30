@@ -13,7 +13,7 @@ export class UserController {
     }
     
     try {
-      const chat = new ChatOpenAI({ openAIApiKey: apiKey, modelName: 'gpt-4o-mini', temperature: 0.7 });
+      const chat = new ChatOpenAI({ apiKey, modelName: 'gpt-4o-mini', temperature: 0.7 });
       const response = await chat.invoke([
         new SystemMessage("You are an emoji generator. User gives a nickname, you return a SINGLE emoji that best represents it. No text, just the emoji."),
         new HumanMessage(body.nickname)

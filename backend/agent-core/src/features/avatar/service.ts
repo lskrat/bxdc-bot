@@ -9,11 +9,9 @@ export class AvatarService {
 
   constructor(apiKey: string, modelName: string = "gpt-4", baseUrl?: string) {
     this.llm = new ChatOpenAI({
-      openAIApiKey: apiKey,
+      apiKey,
       modelName: modelName,
-      configuration: {
-        baseURL: baseUrl,
-      },
+      ...(baseUrl ? { configuration: { baseURL: baseUrl.replace(/\/+$/, "") } } : {}),
       temperature: 0.7, // Higher creativity for avatar/greeting
     });
   }

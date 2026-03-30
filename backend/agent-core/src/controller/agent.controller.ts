@@ -11,6 +11,7 @@ import {
   setActiveParentToolId,
   type ToolTraceEvent,
 } from '../tools/tool-trace-context';
+import { pickMergedLlm } from '../utils/llm-merge';
 
 type ToolStatus = 'running' | 'completed' | 'failed';
 
@@ -237,11 +238,11 @@ export class AgentController {
     // In a real app, these would come from config/env
     const gatewayUrl = process.env.JAVA_GATEWAY_URL || 'http://localhost:18080';
     const apiToken = process.env.JAVA_GATEWAY_TOKEN || 'your-secure-token-here';
-    
-    // Model configuration
-    const openAiApiKey = process.env.OPENAI_API_KEY;
-    const modelName = process.env.OPENAI_MODEL_NAME || 'gpt-4';
-    const baseUrl = process.env.OPENAI_API_BASE;
+
+    const llm = pickMergedLlm(context);
+    const openAiApiKey = llm.apiKey;
+    const modelName = llm.modelName;
+    const baseUrl = llm.baseUrl;
 
     const skillContext = this.skillManager.buildSkillPromptContext();
     

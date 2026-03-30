@@ -8,6 +8,13 @@ export interface User {
   avatar: string;
 }
 
+export interface LlmSettingsResponse {
+  apiBase: string | null;
+  modelName: string | null;
+  hasApiKey: boolean;
+  hasEffectiveApiKey: boolean;
+}
+
 // Global state
 const currentUser = ref<User | null>(null);
 const token = ref<string | null>(localStorage.getItem('user_id'));
@@ -109,6 +116,30 @@ export function useUser() {
     }
   }
 
+  async function fetchLlmSettings(userId: string): Promise<LlmSettingsResponse> {
+    const res = await fetch(apiUrl(`/api/user/${userId}/llm-settings`));
+    if (!res.ok) {
+      throw new Error('Failed to load LLM settings');
+    }
+    return res.json();
+  }
+
+  async function saveLlmSettings(
+    userId: string,
+    body: { apiBase: string; modelName: string; apiKey?: string }
+  ): Promise<LlmSettingsResponse> {
+    const res = await fetch(apiUrl(`/api/user/${userId}/llm-settings`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error || 'Save failed');
+    }
+    return res.json();
+  }
+
   return {
     currentUser,
     isLoggedIn,
@@ -116,6 +147,8 @@ export function useUser() {
     register,
     logout,
     restoreSession,
-    updateAvatar
+    updateAvatar,
+    fetchLlmSettings,
+    saveLlmSettings,
   };
 }

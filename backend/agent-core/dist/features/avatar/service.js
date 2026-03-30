@@ -10,11 +10,9 @@ class AvatarService {
     CACHE_TTL = 1000 * 60 * 60;
     constructor(apiKey, modelName = "gpt-4", baseUrl) {
         this.llm = new openai_1.ChatOpenAI({
-            openAIApiKey: apiKey,
+            apiKey,
             modelName: modelName,
-            configuration: {
-                baseURL: baseUrl,
-            },
+            ...(baseUrl ? { configuration: { baseURL: baseUrl.replace(/\/+$/, "") } } : {}),
             temperature: 0.7,
         });
     }

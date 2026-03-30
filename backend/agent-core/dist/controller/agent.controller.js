@@ -21,6 +21,7 @@ const skill_manager_1 = require("../skills/skill.manager");
 const logger_service_1 = require("../utils/logger.service");
 const java_skills_1 = require("../tools/java-skills");
 const tool_trace_context_1 = require("../tools/tool-trace-context");
+const llm_merge_1 = require("../utils/llm-merge");
 function asArray(value) {
     if (!value)
         return [];
@@ -199,9 +200,10 @@ let AgentController = class AgentController {
         const subject = new rxjs_1.Subject();
         const gatewayUrl = process.env.JAVA_GATEWAY_URL || 'http://localhost:18080';
         const apiToken = process.env.JAVA_GATEWAY_TOKEN || 'your-secure-token-here';
-        const openAiApiKey = process.env.OPENAI_API_KEY;
-        const modelName = process.env.OPENAI_MODEL_NAME || 'gpt-4';
-        const baseUrl = process.env.OPENAI_API_BASE;
+        const llm = (0, llm_merge_1.pickMergedLlm)(context);
+        const openAiApiKey = llm.apiKey;
+        const modelName = llm.modelName;
+        const baseUrl = llm.baseUrl;
         const skillContext = this.skillManager.buildSkillPromptContext();
         const confirmationContext = `
 [Tool Confirmation Instructions]

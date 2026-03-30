@@ -1,6 +1,8 @@
 package com.lobsterai.skillgateway.controller;
 
+import com.lobsterai.skillgateway.entity.User;
 import com.lobsterai.skillgateway.orchestration.AgentStreamConsumer;
+import com.lobsterai.skillgateway.service.UserService;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -19,13 +21,15 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TaskController {
 
     private final AgentStreamConsumer agentStreamConsumer;
+    private final UserService userService;
     // In-memory storage for task instructions. In production, use a database or cache.
     private final Map<String, TaskContext> taskContexts = new ConcurrentHashMap<>();
     // Store active subscriptions to cancel them if needed
     private final Map<String, Disposable> activeSubscriptions = new ConcurrentHashMap<>();
 
-    public TaskController(AgentStreamConsumer agentStreamConsumer) {
+    public TaskController(AgentStreamConsumer agentStreamConsumer, UserService userService) {
         this.agentStreamConsumer = agentStreamConsumer;
+        this.userService = userService;
     }
 
     @PostMapping
@@ -54,6 +58,10 @@ public class TaskController {
         Map<String, Object> executionContext = new HashMap<>();
         if (context.getUserId() != null) {
             executionContext.put("userId", context.getUserId());
+            User u = userService.getUser(context.getUserId());
+            if (u != null) {
+                userService.userLlmOverridesFromDb(u).forEach(executionContext::put);
+            }
         }
         executionContext.put("sessionId", id);
 

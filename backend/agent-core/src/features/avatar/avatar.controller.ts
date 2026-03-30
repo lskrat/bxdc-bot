@@ -1,40 +1,47 @@
-import { Controller, Post, Body, Inject } from '@nestjs/common';
+import { Controller, Post, Body } from '@nestjs/common';
 import { AvatarService } from './service';
 import { randomUUID } from 'crypto';
 import { LoggerService } from '../../utils/logger.service';
+import { pickMergedLlm } from '../../utils/llm-merge';
 
 @Controller('features/avatar')
 export class AvatarController {
-  private avatarService: AvatarService;
-
   constructor(private readonly logger: LoggerService) {}
 
-  private getService(): AvatarService {
-    if (!this.avatarService) {
-      this.avatarService = new AvatarService(
-        process.env.OPENAI_API_KEY || '',
-        process.env.OPENAI_MODEL_NAME || 'gpt-4',
-        process.env.OPENAI_API_BASE
-      );
-    }
-    return this.avatarService;
+  private serviceForRequest(overrides: { llmApiBase?: string; llmModelName?: string; llmApiKey?: string }) {
+    const llm = pickMergedLlm(overrides);
+    return new AvatarService(llm.apiKey || '', llm.modelName, llm.baseUrl);
   }
 
   @Post('generate')
-  async generateAvatar(@Body() body: { nickname: string }) {
+  async generateAvatar(
+    @Body()
+    body: {
+      nickname: string;
+      llmApiBase?: string;
+      llmModelName?: string;
+      llmApiKey?: string;
+    },
+  ) {
     if (!body.nickname) {
       return { avatar: '👤' };
     }
-    const emoji = await this.getService().generateAvatar(body.nickname);
+    const llm = pickMergedLlm(body);
+    if (!llm.apiKey) {
+      return { avatar: '👤', error: 'NO_API_KEY' };
+    }
+    const svc = this.serviceForRequest(body);
+    const emoji = await svc.generateAvatar(body.nickname);
     return { avatar: emoji };
   }
 
   @Post('greeting')
   async generateGreeting(@Body() body: { nickname: string; avatar: string }) {
     const start = Date.now();
+    const svc = this.serviceForRequest({});
     const content = !body.nickname
       ? '欢迎回来！'
-      : await this.getService().generateGreeting(body.nickname, body.avatar || '👤');
+      : await svc.generateGreeting(body.nickname, body.avatar || '👤');
 
     const duration = Date.now() - start;
     this.logger.logLlm('output', {

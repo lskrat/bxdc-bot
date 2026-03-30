@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import ChatView from '../views/ChatView.vue'
 import LoginView from '../views/LoginView.vue'
 import RegisterView from '../views/RegisterView.vue'
+import SettingsView from '../views/SettingsView.vue'
 import { useUser } from '../composables/useUser'
 
 const router = createRouter({
@@ -22,6 +23,12 @@ const router = createRouter({
       path: '/register',
       name: 'register',
       component: RegisterView
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: SettingsView,
+      meta: { requiresAuth: true }
     }
   ],
 })

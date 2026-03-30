@@ -17,30 +17,34 @@ const common_1 = require("@nestjs/common");
 const service_1 = require("./service");
 const crypto_1 = require("crypto");
 const logger_service_1 = require("../../utils/logger.service");
+const llm_merge_1 = require("../../utils/llm-merge");
 let AvatarController = class AvatarController {
     logger;
-    avatarService;
     constructor(logger) {
         this.logger = logger;
     }
-    getService() {
-        if (!this.avatarService) {
-            this.avatarService = new service_1.AvatarService(process.env.OPENAI_API_KEY || '', process.env.OPENAI_MODEL_NAME || 'gpt-4', process.env.OPENAI_API_BASE);
-        }
-        return this.avatarService;
+    serviceForRequest(overrides) {
+        const llm = (0, llm_merge_1.pickMergedLlm)(overrides);
+        return new service_1.AvatarService(llm.apiKey || '', llm.modelName, llm.baseUrl);
     }
     async generateAvatar(body) {
         if (!body.nickname) {
             return { avatar: '👤' };
         }
-        const emoji = await this.getService().generateAvatar(body.nickname);
+        const llm = (0, llm_merge_1.pickMergedLlm)(body);
+        if (!llm.apiKey) {
+            return { avatar: '👤', error: 'NO_API_KEY' };
+        }
+        const svc = this.serviceForRequest(body);
+        const emoji = await svc.generateAvatar(body.nickname);
         return { avatar: emoji };
     }
     async generateGreeting(body) {
         const start = Date.now();
+        const svc = this.serviceForRequest({});
         const content = !body.nickname
             ? '欢迎回来！'
-            : await this.getService().generateGreeting(body.nickname, body.avatar || '👤');
+            : await svc.generateGreeting(body.nickname, body.avatar || '👤');
         const duration = Date.now() - start;
         this.logger.logLlm('output', {
             feature: 'greeting',

@@ -37,10 +37,11 @@ export class AgentFactory {
   ) {
     const model = new ChatOpenAI({
       modelName: config?.modelName || "gpt-4", // Or use OneAPI compatible model
-      openAIApiKey: openAiApiKey,
-      configuration: {
-        baseURL: config?.baseUrl,
-      },
+      // Use `apiKey` — @langchain/openai v1 BaseChatOpenAI reads `apiKey`, not `openAIApiKey`, so user-configured keys were previously ignored.
+      apiKey: openAiApiKey,
+      ...(config?.baseUrl
+        ? { configuration: { baseURL: config.baseUrl.replace(/\/+$/, "") } }
+        : {}),
       temperature: 0,
       callbacks: config?.callbacks,
     });

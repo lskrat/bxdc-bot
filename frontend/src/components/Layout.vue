@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useRouter } from 'vue-router';
 import { useUser } from '../composables/useUser';
 import { useSkillHub } from '../composables/useSkillHub';
 import { useServerLedger } from '../composables/useServerLedger';
@@ -7,6 +8,7 @@ import SkillHub from './SkillHub.vue';
 import ServerLedger from './ServerLedger.vue';
 import { AppIcon, ServerIcon } from 'tdesign-icons-vue-next';
 
+const router = useRouter();
 const { currentUser, logout } = useUser();
 const { toggleSkillHub } = useSkillHub();
 const { toggleServerLedger } = useServerLedger();
@@ -31,6 +33,9 @@ const { toggleServerLedger } = useServerLedger();
           <t-button theme="default" variant="text" @click="toggleSkillHub">
             <template #icon><AppIcon /></template>
             SkillHub
+          </t-button>
+          <t-button v-if="currentUser" theme="default" variant="text" @click="router.push('/settings')">
+            大模型设置
           </t-button>
           
           <div class="user-info" v-if="currentUser">
