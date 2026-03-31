@@ -89,13 +89,11 @@ mvn -v
 
 ```env
 VITE_API_URL=http://127.0.0.1:18080
-VITE_AGENT_URL=http://127.0.0.1:3000
 ```
 
 说明：
 
-- `VITE_API_URL`：聊天任务、登录注册等接口走这里
-- `VITE_AGENT_URL`：欢迎语、头像生成等接口直接访问 `agent-core`
+- `VITE_API_URL`：浏览器 **仅** 访问 skill-gateway（聊天任务、登录注册、Skill CRUD、问候语 BFF、头像生成代理等）；不再配置 `VITE_AGENT_URL`。
 
 ### 4.2 Agent Core 配置
 
@@ -334,14 +332,6 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
-
-    location /features/ {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
 }
 ```
 
@@ -349,10 +339,9 @@ server {
 
 ```env
 VITE_API_URL=http://127.0.0.1:8080
-VITE_AGENT_URL=http://127.0.0.1:8080
 ```
 
-这样浏览器就只访问一个入口，更接近生产部署方式。
+浏览器只经 `/api` 进入 skill-gateway；无需再代理 `/features` 到 agent-core。
 
 ## 10. 常见问题
 

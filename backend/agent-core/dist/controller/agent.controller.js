@@ -22,6 +22,8 @@ const logger_service_1 = require("../utils/logger.service");
 const java_skills_1 = require("../tools/java-skills");
 const tool_trace_context_1 = require("../tools/tool-trace-context");
 const llm_merge_1 = require("../utils/llm-merge");
+const tool_prompt_compat_1 = require("../utils/tool-prompt-compat");
+const messages_1 = require("@langchain/core/messages");
 function asArray(value) {
     if (!value)
         return [];
@@ -206,11 +208,7 @@ let AgentController = class AgentController {
         const baseUrl = llm.baseUrl;
         const skillContext = this.skillManager.buildSkillPromptContext();
         const confirmationContext = `
-[Tool Confirmation Instructions]
-If a tool returns a response with status "CONFIRMATION_REQUIRED", you MUST NOT proceed with the action.
-Instead, you MUST output the confirmation request to the user exactly as requested by the tool, and ask for their approval.
-If the user approves, you should call the tool again, this time including '"confirmed": true' in the tool parameters.
-If the user denies, acknowledge the cancellation and do not execute the tool.
+[确认流程] 若工具返回 CONFIRMATION_REQUIRED：先原样把需确认的内容给用户并等待答复；用户同意则再次调用该工具且在参数中加入 "confirmed": true；拒绝则说明已取消，不再执行。
 `;
         (0, tool_trace_context_1.runWithToolTraceContext)((event) => subject.next({ data: JSON.stringify(event) }), async () => {
             let fullAssistantResponse = '';
@@ -219,19 +217,25 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
                 const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
                     subject.next({ data: JSON.stringify(event) });
                 });
-                const agent = await agent_1.AgentFactory.createAgent(gatewayUrl, apiToken, openAiApiKey, { modelName, baseUrl, callbacks: [llmCallbackHandler] }, this.skillManager, userId);
+                const { agent, tools } = await agent_1.AgentFactory.createAgent(gatewayUrl, apiToken, openAiApiKey, { modelName, baseUrl, callbacks: [llmCallbackHandler] }, this.skillManager, userId);
                 const memories = await this.memoryService.searchMemories(instruction, userId, 10);
                 console.log(`[Memory] Retrieved ${memories.length} memories for user ${userId}`);
                 if (memories.length > 0) {
                     console.log(`[Memory] First memory: ${memories[0]}`);
                 }
                 const memoryContext = memories.length > 0
-                    ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
+                    ? `【记忆摘录】（按当前问题从长期记忆检索）\n${memories.map((m) => `- ${m}`).join('\n')}\n\n与本轮对话相关时可适度引用，不必逐条或全文套用；无关则忽略。用户未问及不要主动罗列。\n\n`
                     : '';
-                const fullInstruction = `${skillContext}${confirmationContext}${memoryContext}User Instruction:\n${instruction}`;
+                const toolPromptCompat = (0, tool_prompt_compat_1.isAgentToolPromptCompatEnabled)();
+                const toolsPromptSection = toolPromptCompat && tools.length > 0
+                    ? `\n\n${(0, tool_prompt_compat_1.formatToolsBlockForSystemPrompt)(tools)}`
+                    : '';
+                const systemContent = `${skillContext}${confirmationContext}${memoryContext}${toolsPromptSection}`.trimEnd();
+                const historyMessages = safeHistory.map((item) => (0, messages_1.coerceMessageLikeToMessage)(item));
                 const messages = [
-                    ...safeHistory,
-                    { role: 'user', content: fullInstruction }
+                    ...(systemContent ? [new messages_1.SystemMessage(systemContent)] : []),
+                    ...historyMessages,
+                    new messages_1.HumanMessage(instruction),
                 ];
                 const stream = await agent.stream({ messages });
                 for await (const chunk of stream) {

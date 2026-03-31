@@ -1,6 +1,6 @@
 import { ref, provide, inject, type InjectionKey } from 'vue'
 import { createTask, getEventSourceUrl } from '../services/api'
-import { agentUrl } from '../services/config'
+import { apiUrl } from '../services/config'
 import { useUser } from './useUser'
 import { type LlmLogEntry, isLlmLogEvent, mergeLlmLogEntries } from '../utils/llmLog'
 
@@ -590,7 +590,7 @@ export function provideChat() {
     if (!currentUser.value) return
 
     try {
-        const res = await fetch(agentUrl('/features/avatar/greeting'), {
+        const res = await fetch(apiUrl(`/api/user/${currentUser.value.id}/greeting`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 

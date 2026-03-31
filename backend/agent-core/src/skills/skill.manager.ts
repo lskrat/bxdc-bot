@@ -213,15 +213,12 @@ export class SkillManager {
     if (skills.length === 0) return '';
 
     const lines = skills.map((skill) => {
-      const metadataSuffix = skill.metadataSummary ? ` | metadata: ${skill.metadataSummary}` : '';
-      return `- ${skill.name}: ${skill.description}${metadataSuffix}`;
+      const meta = skill.metadataSummary ? ` · ${skill.metadataSummary}` : '';
+      return `- ${skill.name}：${skill.description}${meta}`;
     });
 
     return [
-      '[Available Skills]',
-      'You can load a skill on demand when it is directly relevant.',
-      'Only use a skill tool when the current request clearly matches the skill description.',
-      'The tool will return the full SKILL.md instructions only after you choose it.',
+      '技能：仅当当前任务与下列某条明显相关时，再调用对应的 skill_* 工具加载完整 SKILL；无关不要调用。',
       ...lines,
       '',
     ].join('\n');

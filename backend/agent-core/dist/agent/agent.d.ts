@@ -1,23 +1,14 @@
+import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import type { SkillManager } from "../skills/skill.manager";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+export type AgentWithTools = {
+    agent: ReturnType<typeof createReactAgent>;
+    tools: StructuredToolInterface[];
+};
 export declare class AgentFactory {
     static createAgent(gatewayUrl: string, apiToken: string, openAiApiKey: string, config?: {
         modelName?: string;
         baseUrl?: string;
         callbacks?: any[];
-    }, skillManager?: SkillManager, userId?: string): Promise<import("node_modules/@langchain/langgraph/dist/graph/state.cjs").CompiledStateGraph<import("node_modules/@langchain/langgraph/dist/graph/annotation.cjs").StateType<{
-        messages: import("node_modules/@langchain/langgraph/dist/channels/base.cjs").BaseChannel<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[], import("node_modules/@langchain/langgraph/dist/constants.cjs").OverwriteValue<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[]> | import("node_modules/@langchain/langgraph/dist/graph/messages_reducer.cjs").Messages, unknown>;
-    }>, import("node_modules/@langchain/langgraph/dist/graph/annotation.cjs").UpdateType<{
-        messages: import("node_modules/@langchain/langgraph/dist/channels/base.cjs").BaseChannel<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[], import("node_modules/@langchain/langgraph/dist/constants.cjs").OverwriteValue<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[]> | import("node_modules/@langchain/langgraph/dist/graph/messages_reducer.cjs").Messages, unknown>;
-    }>, any, {
-        messages: import("node_modules/@langchain/langgraph/dist/channels/base.cjs").BaseChannel<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[], import("node_modules/@langchain/langgraph/dist/constants.cjs").OverwriteValue<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[]> | import("node_modules/@langchain/langgraph/dist/graph/messages_reducer.cjs").Messages, unknown>;
-    }, {
-        messages: import("node_modules/@langchain/langgraph/dist/channels/base.cjs").BaseChannel<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[], import("node_modules/@langchain/langgraph/dist/constants.cjs").OverwriteValue<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[]> | import("node_modules/@langchain/langgraph/dist/graph/messages_reducer.cjs").Messages, unknown>;
-        structuredResponse: {
-            (annotation: import("node_modules/@langchain/langgraph/dist/graph/annotation.cjs").SingleReducer<Record<string, any>, Record<string, any>>): import("node_modules/@langchain/langgraph/dist/channels/base.cjs").BaseChannel<Record<string, any>, Record<string, any> | import("node_modules/@langchain/langgraph/dist/constants.cjs").OverwriteValue<Record<string, any>>, unknown>;
-            (): import("node_modules/@langchain/langgraph/dist/channels/last_value.cjs").LastValue<Record<string, any>>;
-            Root: <S extends import("node_modules/@langchain/langgraph/dist/graph/annotation.cjs").StateDefinition>(sd: S) => import("node_modules/@langchain/langgraph/dist/graph/annotation.cjs").AnnotationRoot<S>;
-        };
-    } & {
-        messages: import("node_modules/@langchain/langgraph/dist/channels/base.cjs").BaseChannel<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[], import("node_modules/@langchain/langgraph/dist/constants.cjs").OverwriteValue<import("@langchain/core/messages").BaseMessage<import("@langchain/core/messages").MessageStructure<import("@langchain/core/messages").MessageToolSet>, import("@langchain/core/messages").MessageType>[]> | import("node_modules/@langchain/langgraph/dist/graph/messages_reducer.cjs").Messages, unknown>;
-    }, import("node_modules/@langchain/langgraph/dist/graph/annotation.cjs").StateDefinition, unknown, unknown, unknown>>;
+    }, skillManager?: SkillManager, userId?: string): Promise<AgentWithTools>;
 }

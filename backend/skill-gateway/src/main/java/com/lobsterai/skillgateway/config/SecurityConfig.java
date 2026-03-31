@@ -53,6 +53,10 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/skills", "/api/skills/*").permitAll()
+                // Browser Skill CRUD via gateway (no X-Agent-Token); execution paths still require token below
+                .requestMatchers(HttpMethod.POST, "/api/skills").permitAll()
+                .requestMatchers(HttpMethod.PUT, "/api/skills/*").permitAll()
+                .requestMatchers(HttpMethod.DELETE, "/api/skills/*").permitAll()
                 .requestMatchers("/api/skills/**").authenticated()
                 .anyRequest().permitAll()
             )
@@ -108,7 +112,7 @@ public class SecurityConfig {
                 throws ServletException, IOException {
             boolean isSkillRoute = request.getRequestURI().startsWith("/api/skills");
             boolean isReadOnlySkillRequest = "GET".equalsIgnoreCase(request.getMethod());
-            if (!isSkillRoute || isReadOnlySkillRequest) {
+            if (!isSkillRoute || isReadOnlySkillRequest || isBrowserSkillCrud(request)) {
                 filterChain.doFilter(request, response);
                 return;
             }
@@ -127,6 +131,33 @@ public class SecurityConfig {
                     );
             SecurityContextHolder.getContext().setAuthentication(authentication);
             filterChain.doFilter(request, response);
+        }
+
+        /**
+         * POST /api/skills and PUT/DELETE /api/skills/{numericId} are used by the browser via skill-gateway;
+         * agent-core continues to use X-Agent-Token for execution endpoints (/api/skills/ssh, etc.).
+         */
+        private static boolean isBrowserSkillCrud(HttpServletRequest request) {
+            String uri = request.getRequestURI();
+            int q = uri.indexOf('?');
+            if (q >= 0) {
+                uri = uri.substring(0, q);
+            }
+            if (uri.length() > 1 && uri.endsWith("/")) {
+                uri = uri.substring(0, uri.length() - 1);
+            }
+            String method = request.getMethod();
+            if ("POST".equalsIgnoreCase(method) && "/api/skills".equals(uri)) {
+                return true;
+            }
+            if (!"PUT".equalsIgnoreCase(method) && !"DELETE".equalsIgnoreCase(method)) {
+                return false;
+            }
+            if (!uri.startsWith("/api/skills/")) {
+                return false;
+            }
+            String rest = uri.substring("/api/skills/".length());
+            return !rest.isEmpty() && rest.chars().allMatch(Character::isDigit);
         }
     }
 }

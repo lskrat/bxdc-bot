@@ -1,5 +1,5 @@
 import { ref } from 'vue';
-import { agentUrl, apiUrl } from '../services/config';
+import { apiUrl } from '../services/config';
 
 export interface Skill {
   id: number;
@@ -141,7 +141,7 @@ export function useSkillHub() {
   }
 
   async function createSkill(payload: Omit<Skill, 'id'>) {
-    const res = await fetch(agentUrl('/features/skills'), {
+    const res = await fetch(apiUrl('/api/skills'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -156,7 +156,7 @@ export function useSkillHub() {
   }
 
   async function updateSkill(id: number, payload: Omit<Skill, 'id'>) {
-    const res = await fetch(agentUrl(`/features/skills/${id}`), {
+    const res = await fetch(apiUrl(`/api/skills/${id}`), {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -171,7 +171,7 @@ export function useSkillHub() {
   }
 
   async function deleteSkill(id: number) {
-    const res = await fetch(agentUrl(`/features/skills/${id}`), {
+    const res = await fetch(apiUrl(`/api/skills/${id}`), {
       method: 'DELETE',
     });
     if (!res.ok) {

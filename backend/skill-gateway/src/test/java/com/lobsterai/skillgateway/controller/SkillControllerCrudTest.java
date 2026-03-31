@@ -118,6 +118,28 @@ class SkillControllerCrudTest {
     }
 
     @Test
+    void createSkill_withoutAgentToken_succeedsForBrowserGatewayPath() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "browser-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "Browser CRUD without X-Agent-Token",
+                  "type": "EXTENSION",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"api\\",\\"preset\\":\\"current-time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value(skillName));
+    }
+
+    @Test
     void createSkill_defaultsExecutionModeToConfigWhenMissing() throws Exception {
         String skillName = TEST_SKILL_PREFIX + "default-" + System.nanoTime();
         String createBody = """

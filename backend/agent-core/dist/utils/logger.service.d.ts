@@ -77,12 +77,20 @@ export declare class LoggerService {
         toJSONNotImplemented(): import("@langchain/core/load/serializable").SerializedNotImplemented;
     };
     private appendLlmEntry;
-    private sanitizeInvocationParams;
+    private flattenChatModelMessages;
+    private extractInvocationLike;
+    private buildOpenAiChatCompletionsBody;
+    private legacySanitizeToOpenAiWireMessages;
+    private extractToolNameFromCall;
+    private collectRawToolCallsFromMessage;
+    private collectToolsInvokedFromGenerations;
+    private buildOpenAiChatCompletionResponse;
+    private inferMessageRole;
     private sanitizeMessages;
-    private sanitizeLlmOutput;
     private extractModelName;
-    private buildRequestSummary;
+    private buildWireRequestSummary;
     private buildResponseSummary;
+    private isSensitiveLogKey;
     private sanitizeValue;
 }
 export {};

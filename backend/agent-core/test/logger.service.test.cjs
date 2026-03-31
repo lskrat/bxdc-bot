@@ -43,15 +43,58 @@ test("LoggerService emits structured request and response llm log events", async
       "run-1",
     );
 
-    assert.equal(events.length, 2);
+    await handler.handleChatModelStart(
+      { kwargs: { modelName: "gpt-4o-mini" } },
+      [[{ kwargs: { role: "user", content: "run tool" } }]],
+      "run-2",
+      undefined,
+      { model: "gpt-4o-mini" },
+    );
+
+    await handler.handleLLMEnd(
+      {
+        generations: [[{
+          text: "",
+          message: {
+            kwargs: {
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "java_ssh", arguments: "{}" },
+                },
+              ],
+            },
+          },
+        }]],
+        llmOutput: {},
+      },
+      "run-2",
+    );
+
+    assert.equal(events.length, 4);
     assert.equal(events[0].type, "llm_log");
     assert.equal(events[0].entry.direction, "request");
     assert.equal(events[0].entry.sessionId, "session-1");
-    assert.equal(events[0].entry.request.params.apiKey, "[redacted]");
+    assert.equal(events[0].entry.request.method, "POST");
+    assert.equal(events[0].entry.request.path, "/v1/chat/completions");
+    assert.equal(events[0].entry.request.body.apiKey, "[redacted]");
+    assert.ok(Array.isArray(events[0].entry.request.body.messages));
     assert.equal(events[1].entry.direction, "response");
     assert.equal(events[1].entry.invocationId, "run-1");
-    assert.equal(events[1].entry.response.generations[0].content, "hello");
-    assert.equal(capturedWrites.length, 2);
+    assert.equal(events[1].entry.response.object, "chat.completion");
+    assert.equal(events[1].entry.response.choices[0].message.content, "hello");
+    const toolResp = events[3].entry.response;
+    assert.deepEqual(toolResp.tools_invoked, ["java_ssh"]);
+    assert.ok(Array.isArray(toolResp.choices[0].message.tool_names));
+    assert.equal(toolResp.choices[0].message.tool_names[0], "java_ssh");
+    assert.equal(
+      toolResp.choices[0].message.tool_calls[0].function.name,
+      "java_ssh",
+    );
+    assert.ok(events[3].entry.summary.includes("java_ssh"));
+    assert.equal(capturedWrites.length, 4);
   } finally {
     fs.appendFileSync = originalAppendFileSync;
   }

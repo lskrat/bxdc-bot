@@ -112,6 +112,14 @@ public class UserService {
                 Map.of("Content-Type", "application/json"), payload);
     }
 
+    /**
+     * Proxies login greeting to agent-core (browser must not call agent directly).
+     */
+    public Object proxyAvatarGreeting(Map<String, Object> payload) {
+        return apiProxyService.callApi(agentCoreUrl + "/features/avatar/greeting", "POST",
+                Map.of("Content-Type", "application/json"), payload);
+    }
+
     public User register(String id, String nickname) {
         if (id == null || !id.matches("\\d{6}")) {
             throw new IllegalArgumentException("User ID must be exactly 6 digits.");

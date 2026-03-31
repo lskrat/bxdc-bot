@@ -95,4 +95,21 @@ public class UserController {
             return ResponseEntity.status(502).body(Map.of("error", "Avatar service error: " + e.getMessage()));
         }
     }
+
+    /**
+     * Proxies to agent-core {@code POST /features/avatar/greeting} so the browser only talks to skill-gateway.
+     */
+    @PostMapping("/{id}/greeting")
+    public ResponseEntity<?> greeting(@PathVariable String id, @RequestBody Map<String, Object> body) {
+        User user = userService.getUser(id);
+        if (user == null) {
+            return ResponseEntity.notFound().build();
+        }
+        try {
+            Object res = userService.proxyAvatarGreeting(body);
+            return ResponseEntity.ok(res);
+        } catch (Exception e) {
+            return ResponseEntity.status(502).body(Map.of("error", "Greeting service error: " + e.getMessage()));
+        }
+    }
 }

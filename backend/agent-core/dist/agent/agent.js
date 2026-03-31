@@ -4,6 +4,8 @@ exports.AgentFactory = void 0;
 const prebuilt_1 = require("@langchain/langgraph/prebuilt");
 const openai_1 = require("@langchain/openai");
 const java_skills_1 = require("../tools/java-skills");
+const tool_prompt_compat_1 = require("../utils/tool-prompt-compat");
+const xml_tool_call_compat_1 = require("../utils/xml-tool-call-compat");
 class AgentFactory {
     static async createAgent(gatewayUrl, apiToken, openAiApiKey, config, skillManager, userId) {
         const model = new openai_1.ChatOpenAI({
@@ -32,10 +34,13 @@ class AgentFactory {
             ...gatewayExtendedTools,
             ...(skillManager?.getLangChainTools() || []),
         ];
-        return (0, prebuilt_1.createReactAgent)({
+        const toolPromptCompat = (0, tool_prompt_compat_1.isAgentToolPromptCompatEnabled)();
+        const agent = (0, prebuilt_1.createReactAgent)({
             llm: model,
-            tools: tools,
+            tools: toolPromptCompat ? [] : tools,
+            postModelHook: toolPromptCompat ? (0, xml_tool_call_compat_1.createXmlToolCallPostHook)(tools) : undefined,
         });
+        return { agent, tools };
     }
 }
 exports.AgentFactory = AgentFactory;

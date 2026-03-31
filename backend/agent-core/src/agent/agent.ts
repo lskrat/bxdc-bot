@@ -10,6 +10,14 @@ import {
   loadGatewayExtendedTools,
 } from "../tools/java-skills";
 import type { SkillManager } from "../skills/skill.manager";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+import { isAgentToolPromptCompatEnabled } from "../utils/tool-prompt-compat";
+import { createXmlToolCallPostHook } from "../utils/xml-tool-call-compat";
+
+export type AgentWithTools = {
+  agent: ReturnType<typeof createReactAgent>;
+  tools: StructuredToolInterface[];
+};
 
 /**
  * Agent 工厂类。
@@ -34,7 +42,7 @@ export class AgentFactory {
     config?: { modelName?: string, baseUrl?: string, callbacks?: any[] },
     skillManager?: SkillManager,
     userId?: string
-  ) {
+  ): Promise<AgentWithTools> {
     const model = new ChatOpenAI({
       modelName: config?.modelName || "gpt-4", // Or use OneAPI compatible model
       // Use `apiKey` — @langchain/openai v1 BaseChatOpenAI reads `apiKey`, not `openAIApiKey`, so user-configured keys were previously ignored.
@@ -58,16 +66,20 @@ export class AgentFactory {
       plannerModel: model,
       availableTools: baseTools,
     });
-    const tools = [
+    const tools: StructuredToolInterface[] = [
       ...baseTools,
       ...gatewayExtendedTools,
       ...(skillManager?.getLangChainTools() || []),
     ];
 
-    return createReactAgent({
+    const toolPromptCompat = isAgentToolPromptCompatEnabled();
+    const agent = createReactAgent({
       llm: model,
-      tools: tools,
-      // Checkpointer can be added here for persistence
+      // 兼容模式：工具说明仅走系统 prompt，不向 API 传 tools，便于对照网关请求体
+      tools: toolPromptCompat ? [] : tools,
+      // 兼容模式下部分模型把工具调用写在 content 的 XML 里；用 hook 解析并执行，避免空 ToolNode
+      postModelHook: toolPromptCompat ? createXmlToolCallPostHook(tools) : undefined,
     });
+    return { agent, tools };
   }
 }

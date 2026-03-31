@@ -16,10 +16,9 @@
 浏览器
   -> nginx:80/443
      -> /            -> frontend/dist
-     -> /api/        -> 127.0.0.1:18080   (skill-gateway)
-     -> /features/   -> 127.0.0.1:3000    (agent-core)
+     -> /api/        -> 127.0.0.1:18080   (skill-gateway，含 BFF)
 
-skill-gateway -> agent-core
+skill-gateway -> agent-core（仅服务端，本机 3000）
 agent-core -> mem0 / 大模型接口
 ```
 
@@ -76,20 +75,13 @@ agent-core -> mem0 / 大模型接口
 
 ```env
 VITE_API_URL=https://your-domain.example.com
-VITE_AGENT_URL=https://your-domain.example.com
 ```
 
 配置说明：
 
-- `VITE_API_URL`：前端访问 `skill-gateway` 的基础地址
-- `VITE_AGENT_URL`：前端访问 `agent-core` 的基础地址
+- `VITE_API_URL`：前端访问 `skill-gateway` 的基础地址（**唯一**浏览器 API 基址；Skill、问候等均由网关在服务端调用 `agent-core`）。
 
-当前代码中：
-
-- 聊天任务、登录注册等走 `VITE_API_URL`
-- 欢迎语、头像生成等接口直接走 `VITE_AGENT_URL`
-
-如果采用同域名反向代理，这两个值都写成同一个域名即可，例如 `https://your-domain.example.com`。
+同域名反向代理时，将 `VITE_API_URL` 设为对外网关地址即可，例如 `https://your-domain.example.com`。
 
 ### 4.2 Agent Core 配置
 
@@ -408,14 +400,6 @@ server {
 
     location /api/ {
         proxy_pass http://127.0.0.1:18080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-
-    location /features/ {
-        proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

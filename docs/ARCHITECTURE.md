@@ -21,25 +21,24 @@ Fishtank（原名 BXDC.bot）是一个支持多用户、多会话的企业级 Ag
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         FRONTEND (Vue 3 SPA)                                 │
 │                         Port: 5173 (Vite dev)                                │
-│  - 聊天界面 (TDesign Chat)  - 用户认证  - 任务提交  - SSE 事件订阅            │
+│  - 聊天界面  - 用户认证  - 任务与 SSE  - Skill Hub（仅调网关）                  │
 └────────────────────────────────┬────────────────────────────────────────────┘
                                  │
-                                 │ HTTP POST /api/tasks
-                                 │ EventSource /api/tasks/{id}/events
-                                 │ Auth: /api/auth/*, /api/user/*
+                                 │ 仅 HTTP(S) → skill-gateway（VITE_API_URL）
+                                 │ /api/tasks、/api/user/*、/api/skills CRUD、问候 BFF 等
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    SKILL GATEWAY (Spring Boot)                               │
 │                    Port: 18080                                               │
-│  - API 网关  - 任务调度  - 权限控制  - Skill 执行  - 审计日志  - SSE 转发      │
+│  - BFF / 任务调度  - Skill 执行（agent 带 Token）  - SSE 转发至 agent         │
 └────────────────────────────────┬────────────────────────────────────────────┘
                                  │
-                                 │ HTTP POST /agent/run (SSE 响应)
+                                 │ 服务端 HTTP POST /agent/run、/memory/add、/features/* 代理
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      AGENT CORE (NestJS)                                     │
 │                      Port: 3000                                              │
-│  - LangGraph ReAct Agent  - 记忆管理  - Tool 封装  - 流式输出                 │
+│  - 不对浏览器暴露为必需入口；由网关调用                                        │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -91,10 +90,10 @@ fishtank/
 - `src/composables/useUser.ts` - 用户状态
 - `src/services/api.ts` - API 调用（`VITE_API_URL` 默认 `http://localhost:18080`）
 
-**API 对接**：
-- `POST /api/tasks` - 创建任务
-- `GET /api/tasks/{id}/events` - SSE 事件流
-- `/api/auth/*`、`/api/user/*` - 认证与用户接口
+**API 对接**（浏览器只使用 `VITE_API_URL` 指向的 skill-gateway）：
+- `POST /api/tasks`、`GET /api/tasks/{id}/events` - 对话与 SSE
+- `/api/auth/*`、`/api/user/*` - 认证、资料、LLM 设置、头像生成与 **登录问候**（`POST /api/user/{id}/greeting` 网关转发 agent）
+- `GET/POST/PUT/DELETE /api/skills` - Skill 列表与 CRUD（不经 agent-core 代理）
 
 ---
 
@@ -203,7 +202,7 @@ fishtank/
 
 | 配置项 | 位置 | 默认值 |
 |--------|------|--------|
-| `VITE_API_URL` | frontend | `http://localhost:18080` |
+| `VITE_API_URL` | frontend | `http://localhost:18080`（浏览器仅访问网关） |
 | `JAVA_GATEWAY_URL` | agent-core | `http://localhost:18080` |
 | Agent URL | skill-gateway TaskDispatcherService | `http://localhost:3000` |
 
