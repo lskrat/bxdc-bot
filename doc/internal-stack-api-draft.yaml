@@ -1,0 +1,554 @@
+openapi: 3.0.3
+info:
+  title: Fishtank black-box API draft (skill-gateway + agent-core consumer surface)
+  version: 0.2.0
+  description: |
+    契约草稿，与 `internal-stack-frontend-gateway-refactor.md` 第 1 节对齐。
+    - **skill-gateway**：浏览器经 `VITE_API_URL` 访问的唯一入口（含原直连 agent 的 Skill CRUD、问候语等 BFF）；agent-core 经 `JAVA_GATEWAY_URL` 调用的工具路径与此前缀一致。
+    - **agent-core**：仅由 **skill-gateway**（`agent.core.url`）或机器间调用访问；浏览器不再使用 `VITE_AGENT_URL` 直连。
+
+    SSE 端点在 OpenAPI 中仅作标注，运行时以 `text/event-stream` 为准。
+servers:
+  - url: "{gatewayBase}"
+    description: skill-gateway（示例占位，替换为实际 VITE_API_URL / 内网地址）
+    variables:
+      gatewayBase:
+        default: http://localhost:18080
+  - url: "{agentBase}"
+    description: agent-core（仅服务端；`agent.core.url`，非浏览器基址）
+    variables:
+      agentBase:
+        default: http://localhost:3000
+
+tags:
+  - name: skill-gateway-public
+    description: 前端 → skill-gateway（`VITE_API_URL`）
+  - name: agent-consumer
+    description: skill-gateway → agent-core（`agent.core.url`，非浏览器直连）
+  - name: gateway-tools
+    description: agent-core → skill-gateway 工具面（`JAVA_GATEWAY_URL`，部分需 X-Agent-Token / X-User-Id）
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [skill-gateway-public]
+      summary: 注册
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, nickname]
+              properties:
+                id: { type: string, description: 六位数字用户 id }
+                nickname: { type: string, maxLength: 10 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Bad request
+
+  /api/auth/login:
+    post:
+      tags: [skill-gateway-public]
+      summary: 登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401":
+          description: Invalid user
+
+  /api/user/{id}:
+    get:
+      tags: [skill-gateway-public]
+      summary: 获取用户
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "404": { description: Not found }
+
+  /api/user/{id}/avatar:
+    put:
+      tags: [skill-gateway-public]
+      summary: 更新头像
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [avatar]
+              properties:
+                avatar: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+
+  /api/user/{id}/llm-settings:
+    get:
+      tags: [skill-gateway-public]
+      summary: 读取 LLM 设置（脱敏）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LlmSettingsResponse" }
+    put:
+      tags: [skill-gateway-public]
+      summary: 保存 LLM 设置
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LlmSettingsUpdate" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LlmSettingsResponse" }
+
+  /api/user/{id}/greeting:
+    post:
+      tags: [skill-gateway-public]
+      summary: 登录后问候（网关转发 agent-core POST /features/avatar/greeting）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nickname: { type: string }
+                avatar: { type: string }
+      responses:
+        "200":
+          description: 与 agent-core 响应一致（含 LangChain 形态 agent.messages）
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "404": { description: User not found }
+        "502": { description: 上游 agent 不可用 }
+
+  /api/user/{id}/avatar/generate:
+    post:
+      tags: [skill-gateway-public]
+      summary: AI 生成头像（网关合并 LLM 后转发 agent）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nickname]
+              properties:
+                nickname: { type: string }
+      responses:
+        "200":
+          description: 代理 agent-core 响应（含 avatar 等字段）
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/skills:
+    get:
+      tags: [skill-gateway-public, gateway-tools]
+      summary: Skill 列表
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SkillSummary" }
+    post:
+      tags: [skill-gateway-public, gateway-tools]
+      summary: 创建 Skill（浏览器经网关无需 Token；agent-core 工具链仍可用 X-Agent-Token）
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /api/tasks:
+    post:
+      tags: [skill-gateway-public]
+      summary: 创建对话任务
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTaskRequest" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateTaskResponse" }
+
+  /api/tasks/{id}/events:
+    get:
+      tags: [skill-gateway-public]
+      summary: SSE 任务事件流
+      description: produces text/event-stream；事件体为 JSON 字符串行。
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /api/server-ledgers:
+    get:
+      tags: [skill-gateway-public]
+      summary: 服务器台账列表
+      parameters:
+        - { name: X-User-Id, in: header, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+    post:
+      tags: [skill-gateway-public]
+      summary: 创建台账
+      parameters:
+        - { name: X-User-Id, in: header, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Created ledger
+
+  /api/server-ledgers/{ledgerId}:
+    put:
+      tags: [skill-gateway-public]
+      summary: 更新台账
+      parameters:
+        - { name: X-User-Id, in: header, required: true, schema: { type: string } }
+        - { name: ledgerId, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [skill-gateway-public]
+      summary: 删除台账
+      parameters:
+        - { name: X-User-Id, in: header, required: true, schema: { type: string } }
+        - { name: ledgerId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: OK }
+
+  /health:
+    get:
+      tags: [agent-consumer]
+      summary: agent-core 健康检查
+      servers:
+        - url: "{agentBase}"
+          variables:
+            agentBase:
+              default: http://localhost:3000
+      responses:
+        "200": { description: OK }
+
+  /agent/run:
+    post:
+      tags: [agent-consumer]
+      summary: 运行 Agent（SSE）
+      description: |
+        网关调用。body 含 instruction、context（含 userId、sessionId、可选 llm 覆盖）、history。
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentRunRequest" }
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+  /memory/add:
+    post:
+      tags: [agent-consumer]
+      summary: 写入记忆（注册等场景）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, text]
+              properties:
+                userId: { type: string }
+                text: { type: string }
+                role: { type: string, enum: [user, assistant, system] }
+      responses:
+        "200": { description: OK }
+
+  /features/avatar/generate:
+    post:
+      tags: [agent-consumer]
+      summary: 生成头像（网关代理时携带合并后的 LLM 字段）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nickname: { type: string }
+                llmApiBase: { type: string, nullable: true }
+                llmModelName: { type: string, nullable: true }
+                llmApiKey: { type: string, nullable: true }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /features/avatar/greeting:
+    post:
+      tags: [agent-consumer]
+      summary: 登录后问候
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nickname: { type: string }
+                avatar: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /features/skills:
+    post:
+      tags: [agent-consumer]
+      summary: 创建 Skill（agent 代理至网关）
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+
+  /features/skills/{skillId}:
+    put:
+      tags: [agent-consumer]
+      summary: 更新 Skill
+      parameters:
+        - { name: skillId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+    delete:
+      tags: [agent-consumer]
+      summary: 删除 Skill
+      parameters:
+        - { name: skillId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /api/skills/{id}:
+    get:
+      tags: [gateway-tools]
+      summary: 按 id 获取 Skill
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillSummary" }
+        "404": { description: Not found }
+    put:
+      tags: [skill-gateway-public, gateway-tools]
+      summary: 更新 Skill（浏览器经网关无需 Token；agent 调用可带 X-Agent-Token）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [skill-gateway-public, gateway-tools]
+      summary: 删除 Skill（浏览器经网关无需 Token；agent 调用可带 X-Agent-Token）
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: OK }
+
+  /api/skills/server-lookup:
+    get:
+      tags: [gateway-tools]
+      summary: 按名称解析服务器
+      parameters:
+        - { name: name, in: query, required: true, schema: { type: string } }
+        - { name: X-User-Id, in: header, required: true, schema: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ip: { type: string }
+                  username: { type: string }
+                  password: { type: string }
+        "404": { description: Not found }
+
+  /api/skills/ssh:
+    post:
+      tags: [gateway-tools]
+      summary: SSH 执行
+      parameters:
+        - { name: X-User-Id, in: header, required: false, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /api/skills/api:
+    post:
+      tags: [gateway-tools]
+      summary: 通用 HTTP 代理
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: JSON 或原文
+
+  /api/skills/linux-script:
+    post:
+      tags: [gateway-tools]
+      summary: Linux 脚本执行
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/skills/compute:
+    post:
+      tags: [gateway-tools]
+      summary: 内置计算工具
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { type: object }
+
+components:
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        nickname: { type: string }
+        avatar: { type: string }
+    LlmSettingsResponse:
+      type: object
+      properties:
+        apiBase: { type: string, nullable: true }
+        modelName: { type: string, nullable: true }
+        hasApiKey: { type: boolean }
+        hasEffectiveApiKey: { type: boolean }
+    LlmSettingsUpdate:
+      type: object
+      properties:
+        apiBase: { type: string }
+        modelName: { type: string }
+        apiKey: { type: string, description: 可空字符串表示清除 }
+    CreateTaskRequest:
+      type: object
+      properties:
+        content: { type: string }
+        userId: { type: string, nullable: true }
+        history:
+          type: array
+          items: { type: object, additionalProperties: true }
+    CreateTaskResponse:
+      type: object
+      properties:
+        id: { type: string }
+    AgentRunRequest:
+      type: object
+      required: [instruction]
+      properties:
+        instruction: { type: string }
+        context:
+          type: object
+          additionalProperties: true
+          description: 含 userId、sessionId、可选 llmApiBase 等
+        history:
+          type: array
+          items: { type: object, additionalProperties: true }
+    SkillSummary:
+      type: object
+      additionalProperties: true
+      description: Skill 实体，字段与 JPA 实体对齐，此处不展开
