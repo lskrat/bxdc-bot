@@ -28,6 +28,7 @@ class AgentFactory {
         const gatewayExtendedTools = await (0, java_skills_1.loadGatewayExtendedTools)(gatewayUrl, apiToken, userId, {
             plannerModel: model,
             availableTools: baseTools,
+            disabledExtendedSkillIds: config?.disabledExtendedSkillIds,
         });
         const tools = [
             ...baseTools,

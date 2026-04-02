@@ -11,6 +11,7 @@ import reactor.core.Disposable;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,6 +62,10 @@ public class TaskController {
             User u = userService.getUser(context.getUserId());
             if (u != null) {
                 userService.userLlmOverridesFromDb(u).forEach(executionContext::put);
+                List<String> disabledSkillIds = userService.getDisabledExtendedSkillIds(u);
+                if (!disabledSkillIds.isEmpty()) {
+                    executionContext.put("disabledExtendedSkillIds", disabledSkillIds);
+                }
             }
         }
         executionContext.put("sessionId", id);

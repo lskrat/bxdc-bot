@@ -3,6 +3,10 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { Injectable } from '@nestjs/common';
 import { DynamicTool } from '@langchain/core/tools';
+import {
+  getCompatToolInvocationReminderForLoadedSkill,
+  isAgentToolPromptCompatEnabled,
+} from '../utils/tool-prompt-compat';
 import { RegisteredSkill, SkillFrontmatter, SkillMetadata, SkillMetadataValue } from './types';
 
 const SKILL_FILE_NAME = 'SKILL.md';
@@ -11,6 +15,8 @@ const DEFAULT_SKILLS_DIR_NAME = 'SKILLs';
 const MAX_DESCRIPTION_LENGTH = 180;
 const MAX_METADATA_SUMMARY_LENGTH = 160;
 const MAX_METADATA_ENTRIES = 6;
+/** 兼容模式写入技能列表与 tool 说明的 compact hint 上限（渐进披露） */
+export const MAX_COMPAT_TOOL_HINT_LENGTH = 220;
 
 function truncate(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
@@ -72,6 +78,14 @@ function serializeMetadataValue(value: SkillMetadataValue): string {
       .join(', ');
   }
   return '';
+}
+
+function parseCompatToolHint(frontmatter: SkillFrontmatter): string {
+  const raw = frontmatter.compat_tool_hint;
+  if (typeof raw !== 'string') return '';
+  const normalized = normalizeText(raw);
+  if (!normalized) return '';
+  return truncate(normalized, MAX_COMPAT_TOOL_HINT_LENGTH);
 }
 
 function summarizeMetadata(metadata: SkillMetadata): string {
@@ -173,12 +187,14 @@ export class SkillManager {
       const metadata = (frontmatter.metadata && typeof frontmatter.metadata === 'object' && !Array.isArray(frontmatter.metadata)
         ? frontmatter.metadata
         : {}) as SkillMetadata;
+      const compatToolHint = parseCompatToolHint(frontmatter);
 
       return {
         id,
         toolName: normalizeToolName(id),
         name,
         description,
+        compatToolHint,
         metadata,
         metadataSummary: summarizeMetadata(metadata),
         skillPath,
@@ -212,13 +228,19 @@ export class SkillManager {
     const skills = this.listSkills();
     if (skills.length === 0) return '';
 
+    const compat = isAgentToolPromptCompatEnabled();
     const lines = skills.map((skill) => {
       const meta = skill.metadataSummary ? ` · ${skill.metadataSummary}` : '';
-      return `- ${skill.name}：${skill.description}${meta}`;
+      const hintSeg = compat && skill.compatToolHint ? ` · 首轮要点：${skill.compatToolHint}` : '';
+      return `- ${skill.name}：${skill.description}${hintSeg}${meta}`;
     });
 
+    const compatNote = isAgentToolPromptCompatEnabled()
+      ? '（兼容模式：请按【可用工具】中的 XML（须写全 `</arguments></tool_call>`）或 ```json 块调用 skill_*。）'
+      : '';
+
     return [
-      '技能：仅当当前任务与下列某条明显相关时，再调用对应的 skill_* 工具加载完整 SKILL；无关不要调用。',
+      `技能：仅当当前任务与下列某条明显相关时，再调用对应的 skill_* 工具加载完整 SKILL；无关不要调用。${compatNote}`,
       ...lines,
       '',
     ].join('\n');
@@ -228,11 +250,16 @@ export class SkillManager {
     const metadataBlock = skill.metadataSummary ? `Metadata: ${skill.metadataSummary}\n` : '';
     const reasonBlock = normalizeText(reason) ? `Why loaded: ${normalizeText(reason)}\n` : '';
 
+    const compatReminder = isAgentToolPromptCompatEnabled()
+      ? getCompatToolInvocationReminderForLoadedSkill()
+      : '';
+
     return [
       `Skill loaded: ${skill.name}`,
       `Skill id: ${skill.id}`,
       metadataBlock.trimEnd(),
       reasonBlock.trimEnd(),
+      compatReminder.trimEnd(),
       'Follow the instructions below for the current request when relevant:',
       skill.prompt,
     ]
@@ -241,6 +268,7 @@ export class SkillManager {
   }
 
   getLangChainTools(): DynamicTool[] {
+    const compat = isAgentToolPromptCompatEnabled();
     return this.listSkills().map((skill) => new DynamicTool({
       name: skill.toolName,
       description: [
@@ -248,6 +276,7 @@ export class SkillManager {
         `Use this only when the user request clearly matches the skill.`,
         `Description: ${skill.description}.`,
         skill.metadataSummary ? `Metadata: ${skill.metadataSummary}.` : '',
+        compat && skill.compatToolHint ? `Compat call hint: ${skill.compatToolHint}` : '',
         'Input should briefly explain why this skill is needed.',
       ]
         .filter(Boolean)

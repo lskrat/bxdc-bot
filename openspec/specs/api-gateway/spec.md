@@ -104,3 +104,55 @@ API 网关 MUST 支持前端应用程序的跨源资源共享 (CORS)。
 - **THEN** 事件中包含事件类型、会话或任务标识、时间戳与日志 payload
 - **AND** 前端可以据此恢复当前对话中的日志顺序
 
+### Requirement: 用户 LLM 设置 REST 接口
+
+API 网关 MUST 提供已认证用户读写自身 LLM 连接设置的 HTTP 接口，包括保存与更新兼容 OpenAI 的 base URL、模型名与 API Key。
+
+#### Scenario: 保存设置成功
+
+- **WHEN** 已认证用户提交有效的 LLM 设置负载
+- **THEN** 服务器持久化该用户的配置
+- **AND** 响应不包含完整 API Key 明文
+
+#### Scenario: 未认证请求被拒绝
+
+- **WHEN** 请求缺少有效认证
+- **THEN** 服务器拒绝访问用户 LLM 设置接口
+
+### Requirement: 任务上下文传递用户 LLM 配置
+
+任务创建或转发至 `agent-core` 的路径 MUST 携带足够信息，使 Agent 能解析当前用户的 LLM 覆盖配置（例如通过受信服务端根据 `userId` 注入，或经鉴权的内部查询）；不得依赖前端在每次任务中明文传递 API Key。
+
+#### Scenario: 已登录用户发起聊天任务
+
+- **WHEN** 已登录用户创建聊天任务
+- **THEN** 下游 Agent 执行可使用该用户的 LLM 设置（若已配置）
+- **AND** API Key 不在浏览器与公开日志中暴露
+
+### Requirement: 用户扩展 Skill 可用性 REST 接口
+
+API 网关 MUST 提供已登录用户读写自身「可配置 EXTENSION Skill 禁用列表」的 HTTP 接口：`GET` 返回当前禁用 id 与可切换的 Skill 清单，`PUT` 以完整列表覆盖保存。
+
+#### Scenario: 读取与保存
+
+- **WHEN** 客户端请求 `GET /api/user/{id}/skill-availability` 且该用户存在
+- **THEN** 响应包含 `disabledSkillIds` 与 `skills` 数组
+
+- **WHEN** 客户端 `PUT` 提交 `disabledSkillIds` 数组
+- **THEN** 服务器持久化并在响应中返回更新后的状态
+
+#### Scenario: 未知用户
+
+- **WHEN** `userId` 在库中不存在
+- **THEN** 服务器返回 404
+
+### Requirement: 任务上下文传递 Skill 可用性
+
+对已关联 `userId` 且用户存在于库中的任务，网关在调用 `agent-core` 时 MUST 将非空的用户禁用 EXTENSION Skill id 列表注入执行上下文（例如 `disabledExtendedSkillIds`），以便 Agent 在绑定网关扩展工具时应用相同过滤。
+
+#### Scenario: 已登录且存在禁用项
+
+- **WHEN** 用户已保存非空禁用列表并发起任务
+- **THEN** 下游 `agent-core` 收到的上下文中包含该列表（或等价字段）
+- **AND** 被禁用 id 对应的 EXTENSION 工具不会进入本轮工具绑定
+

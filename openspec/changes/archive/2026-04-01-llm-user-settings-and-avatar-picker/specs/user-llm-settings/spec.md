@@ -4,7 +4,7 @@
 
 定义登录用户级 OpenAI 兼容 LLM 连接参数（API base URL、模型名、API Key）的持久化、鉴权、掩码展示，以及在 Agent 执行与可选附属能力中的解析优先级。
 
-## Requirements
+## ADDED Requirements
 
 ### Requirement: 用户级 LLM 连接参数持久化
 

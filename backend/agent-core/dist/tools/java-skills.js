@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.JavaApiTool = exports.JavaServerLookupTool = exports.JavaLinuxScriptTool = exports.JavaComputeTool = exports.JavaSshTool = exports.JavaSkillGeneratorTool = void 0;
+exports.filterExtensionSkillsByDisabledIds = filterExtensionSkillsByDisabledIds;
 exports.describeGatewayExtendedTool = describeGatewayExtendedTool;
 exports.loadGatewayExtendedTools = loadGatewayExtendedTools;
 const messages_1 = require("@langchain/core/messages");
@@ -39,6 +40,14 @@ function formatToolError(error) {
     catch {
         return String(error);
     }
+}
+function filterExtensionSkillsByDisabledIds(skills, disabledIds) {
+    if (!disabledIds?.length)
+        return skills;
+    const set = new Set(disabledIds.map((s) => String(s).trim()).filter((s) => s.length > 0));
+    if (set.size === 0)
+        return skills;
+    return skills.filter((skill) => !set.has(String(skill.id)));
 }
 function readPreset(config) {
     const value = config.preset ?? config.profile;
@@ -693,7 +702,7 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
             },
         });
         const skills = Array.isArray(response.data) ? response.data : [];
-        const extensionSkills = skills.filter((skill) => skill.enabled && (skill.type || "").toUpperCase() === "EXTENSION");
+        const extensionSkills = filterExtensionSkillsByDisabledIds(skills.filter((skill) => skill.enabled && (skill.type || "").toUpperCase() === "EXTENSION"), options?.disabledExtendedSkillIds);
         const toolLookup = new Map();
         (options?.availableTools || []).forEach((tool) => {
             toolLookup.set(tool.name, tool);

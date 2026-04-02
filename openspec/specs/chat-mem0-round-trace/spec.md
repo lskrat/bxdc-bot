@@ -1,11 +1,8 @@
 # chat-mem0-round-trace Specification
 
 ## Purpose
-
-定义对话界面中「本轮 mem0 读取 / 写入轨迹」的端到端行为：后端经 SSE 暴露、前端挂载到当前助手消息并可在对话框中查看。
-
+TBD - created by archiving change chat-mem0-round-trace. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: SSE 推送 mem0 轨迹事件
 
 系统 SHALL 在用户对话任务关联的 SSE 流中推送结构化事件，用以表示本轮与 mem0 的交互，且事件 MUST 包含 `sessionId` 以便客户端过滤到当前任务。
@@ -49,3 +46,4 @@
 - **WHEN** SSE 数据中包含客户端不识别的 `type`
 - **THEN** 客户端 MUST 忽略该条而不崩溃
 - **AND** 其余消息处理逻辑 MUST 继续工作
+

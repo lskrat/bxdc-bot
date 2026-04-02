@@ -29,6 +29,13 @@ public class User {
     @Column(length = 2048)
     private String llmApiKey;
 
+    /**
+     * JSON array of stringified numeric ids for EXTENSION skills the user disabled (e.g. {@code ["1","2"]}).
+     */
+    @JsonIgnore
+    @Column(name = "disabled_extended_skill_ids", length = 4000)
+    private String disabledExtendedSkillIdsJson;
+
     public String getId() {
         return id;
     }
@@ -83,5 +90,13 @@ public class User {
 
     public void setLlmApiKey(String llmApiKey) {
         this.llmApiKey = llmApiKey;
+    }
+
+    public String getDisabledExtendedSkillIdsJson() {
+        return disabledExtendedSkillIdsJson;
+    }
+
+    public void setDisabledExtendedSkillIdsJson(String disabledExtendedSkillIdsJson) {
+        this.disabledExtendedSkillIdsJson = disabledExtendedSkillIdsJson;
     }
 }

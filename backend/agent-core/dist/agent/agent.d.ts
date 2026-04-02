@@ -10,5 +10,6 @@ export declare class AgentFactory {
         modelName?: string;
         baseUrl?: string;
         callbacks?: any[];
+        disabledExtendedSkillIds?: string[];
     }, skillManager?: SkillManager, userId?: string): Promise<AgentWithTools>;
 }

@@ -46,6 +46,19 @@ interface GatewaySkill {
   requiresConfirmation?: boolean;
 }
 
+/** Filter gateway EXTENSION skills by user-disabled ids (string form of numeric DB id). Unknown ids are harmless. */
+export function filterExtensionSkillsByDisabledIds(
+  skills: GatewaySkill[],
+  disabledIds?: string[] | undefined,
+): GatewaySkill[] {
+  if (!disabledIds?.length) return skills;
+  const set = new Set(
+    disabledIds.map((s) => String(s).trim()).filter((s) => s.length > 0),
+  );
+  if (set.size === 0) return skills;
+  return skills.filter((skill) => !set.has(String(skill.id)));
+}
+
 interface SkillMutationPayload {
   name: string;
   description: string;
@@ -886,6 +899,8 @@ export async function loadGatewayExtendedTools(
   options?: {
     plannerModel?: any;
     availableTools?: Array<DynamicTool | Tool>;
+    /** When set (e.g. from logged-in user prefs), exclude matching gateway EXTENSION skills from tools and compat prompt. */
+    disabledExtendedSkillIds?: string[];
   },
 ): Promise<DynamicTool[]> {
   try {
@@ -896,8 +911,11 @@ export async function loadGatewayExtendedTools(
     });
 
     const skills = Array.isArray(response.data) ? response.data as GatewaySkill[] : [];
-    const extensionSkills = skills.filter(
-      (skill) => skill.enabled && (skill.type || "").toUpperCase() === "EXTENSION"
+    const extensionSkills = filterExtensionSkillsByDisabledIds(
+      skills.filter(
+        (skill) => skill.enabled && (skill.type || "").toUpperCase() === "EXTENSION",
+      ),
+      options?.disabledExtendedSkillIds,
     );
     const toolLookup = new Map<string, DynamicTool | Tool>();
     (options?.availableTools || []).forEach((tool) => {
@@ -1070,7 +1088,6 @@ export class JavaSshTool extends Tool {
   async _call(input: string): Promise<string> {
     try {
       const params = JSON.parse(input);
-      
       // Basic confirmation logic for SSH
       const dangerousPattern = /rm\s+-rf|mkfs|dd\s+if=|shutdown|reboot/;
       if (!params.confirmed && dangerousPattern.test(params.command)) {

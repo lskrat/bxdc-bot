@@ -2,8 +2,11 @@ package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.dto.LlmSettingsResponse;
 import com.lobsterai.skillgateway.dto.LlmSettingsUpdateRequest;
+import com.lobsterai.skillgateway.dto.SkillAvailabilityResponse;
+import com.lobsterai.skillgateway.dto.SkillAvailabilityUpdateRequest;
 import com.lobsterai.skillgateway.entity.User;
 import com.lobsterai.skillgateway.service.UserService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
@@ -60,6 +63,38 @@ public class UserController {
             return ResponseEntity.ok(r);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
+        }
+    }
+
+    /**
+     * EXTENSION (DB) skills availability for the logged-in user. Same trust model as llm-settings (path id = session token).
+     */
+    @GetMapping("/{id}/skill-availability")
+    public ResponseEntity<?> getSkillAvailability(@PathVariable String id) {
+        if (id == null || id.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        SkillAvailabilityResponse r = userService.getSkillAvailability(id);
+        if (r == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(r);
+    }
+
+    @PutMapping("/{id}/skill-availability")
+    public ResponseEntity<?> putSkillAvailability(
+            @PathVariable String id,
+            @RequestBody(required = false) SkillAvailabilityUpdateRequest body) {
+        if (id == null || id.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        try {
+            SkillAvailabilityResponse r = userService.updateSkillAvailability(id, body != null ? body : new SkillAvailabilityUpdateRequest());
+            return ResponseEntity.ok(r);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 

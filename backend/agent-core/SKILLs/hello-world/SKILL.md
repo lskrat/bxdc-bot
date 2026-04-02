@@ -1,6 +1,7 @@
 ---
 name: hello-world
 description: A demo skill used to verify that the agent can discover, load, and follow SKILL.md instructions on demand.
+compat_tool_hint: "与【可用工具】一致：XML <tool_call><name>skill_hello_world</name><arguments>{\"input\":\"加载理由\"}</arguments></tool_call>，或 ```json 块内 {\"name\":\"skill_hello_world\",\"arguments\":{\"input\":\"…\"}}。"
 metadata:
   category: demo
   triggers:

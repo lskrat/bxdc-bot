@@ -9,18 +9,20 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SkillManager = void 0;
+exports.SkillManager = exports.MAX_COMPAT_TOOL_HINT_LENGTH = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const js_yaml_1 = __importDefault(require("js-yaml"));
 const common_1 = require("@nestjs/common");
 const tools_1 = require("@langchain/core/tools");
+const tool_prompt_compat_1 = require("../utils/tool-prompt-compat");
 const SKILL_FILE_NAME = 'SKILL.md';
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const DEFAULT_SKILLS_DIR_NAME = 'SKILLs';
 const MAX_DESCRIPTION_LENGTH = 180;
 const MAX_METADATA_SUMMARY_LENGTH = 160;
 const MAX_METADATA_ENTRIES = 6;
+exports.MAX_COMPAT_TOOL_HINT_LENGTH = 220;
 function truncate(value, maxLength) {
     if (value.length <= maxLength)
         return value;
@@ -78,6 +80,15 @@ function serializeMetadataValue(value) {
             .join(', ');
     }
     return '';
+}
+function parseCompatToolHint(frontmatter) {
+    const raw = frontmatter.compat_tool_hint;
+    if (typeof raw !== 'string')
+        return '';
+    const normalized = normalizeText(raw);
+    if (!normalized)
+        return '';
+    return truncate(normalized, exports.MAX_COMPAT_TOOL_HINT_LENGTH);
 }
 function summarizeMetadata(metadata) {
     const summary = Object.entries(metadata)
@@ -165,11 +176,13 @@ let SkillManager = class SkillManager {
             const metadata = (frontmatter.metadata && typeof frontmatter.metadata === 'object' && !Array.isArray(frontmatter.metadata)
                 ? frontmatter.metadata
                 : {});
+            const compatToolHint = parseCompatToolHint(frontmatter);
             return {
                 id,
                 toolName: normalizeToolName(id),
                 name,
                 description,
+                compatToolHint,
                 metadata,
                 metadataSummary: summarizeMetadata(metadata),
                 skillPath,
@@ -202,12 +215,17 @@ let SkillManager = class SkillManager {
         const skills = this.listSkills();
         if (skills.length === 0)
             return '';
+        const compat = (0, tool_prompt_compat_1.isAgentToolPromptCompatEnabled)();
         const lines = skills.map((skill) => {
             const meta = skill.metadataSummary ? ` · ${skill.metadataSummary}` : '';
-            return `- ${skill.name}：${skill.description}${meta}`;
+            const hintSeg = compat && skill.compatToolHint ? ` · 首轮要点：${skill.compatToolHint}` : '';
+            return `- ${skill.name}：${skill.description}${hintSeg}${meta}`;
         });
+        const compatNote = (0, tool_prompt_compat_1.isAgentToolPromptCompatEnabled)()
+            ? '（兼容模式：请按【可用工具】中的 XML（须写全 `</arguments></tool_call>`）或 ```json 块调用 skill_*。）'
+            : '';
         return [
-            '技能：仅当当前任务与下列某条明显相关时，再调用对应的 skill_* 工具加载完整 SKILL；无关不要调用。',
+            `技能：仅当当前任务与下列某条明显相关时，再调用对应的 skill_* 工具加载完整 SKILL；无关不要调用。${compatNote}`,
             ...lines,
             '',
         ].join('\n');
@@ -215,11 +233,15 @@ let SkillManager = class SkillManager {
     buildToolResult(skill, reason) {
         const metadataBlock = skill.metadataSummary ? `Metadata: ${skill.metadataSummary}\n` : '';
         const reasonBlock = normalizeText(reason) ? `Why loaded: ${normalizeText(reason)}\n` : '';
+        const compatReminder = (0, tool_prompt_compat_1.isAgentToolPromptCompatEnabled)()
+            ? (0, tool_prompt_compat_1.getCompatToolInvocationReminderForLoadedSkill)()
+            : '';
         return [
             `Skill loaded: ${skill.name}`,
             `Skill id: ${skill.id}`,
             metadataBlock.trimEnd(),
             reasonBlock.trimEnd(),
+            compatReminder.trimEnd(),
             'Follow the instructions below for the current request when relevant:',
             skill.prompt,
         ]
@@ -227,6 +249,7 @@ let SkillManager = class SkillManager {
             .join('\n\n');
     }
     getLangChainTools() {
+        const compat = (0, tool_prompt_compat_1.isAgentToolPromptCompatEnabled)();
         return this.listSkills().map((skill) => new tools_1.DynamicTool({
             name: skill.toolName,
             description: [
@@ -234,6 +257,7 @@ let SkillManager = class SkillManager {
                 `Use this only when the user request clearly matches the skill.`,
                 `Description: ${skill.description}.`,
                 skill.metadataSummary ? `Metadata: ${skill.metadataSummary}.` : '',
+                compat && skill.compatToolHint ? `Compat call hint: ${skill.compatToolHint}` : '',
                 'Input should briefly explain why this skill is needed.',
             ]
                 .filter(Boolean)

@@ -298,6 +298,14 @@ http://127.0.0.1:5173
 - SSE 是否能持续收到消息
 - 欢迎语和头像生成功能是否正常
 
+### 8.4 扩展 Skill 可用性（可选）
+
+`skill-gateway` 在 `users` 表增加 `disabled_extended_skill_ids`（JSON 数组字符串）。本地 `spring.jpa.hibernate.ddl-auto=update` 时首次启动会自动建列。
+
+- **API**：`GET` / `PUT` `http://127.0.0.1:18080/api/user/{numericUserId}/skill-availability`；JSON 使用 `disabledSkillIds`（字符串 id 数组）与 `skills`（可切换清单）。未知用户返回 404。
+- **链路**：已登录用户保存禁用列表后，网关在向 `agent-core` 转发任务时会把 `disabledExtendedSkillIds` 写入执行上下文；Agent 仅对网关 **EXTENSION** 工具按 id 过滤，磁盘 `SKILL.md` 工具不受影响。
+- **前端**：设置页「扩展 Skill 可用性」在登录后加载并即时保存。
+
 ## 9. 可选：在 Mac 上模拟单域名访问
 
 如果你希望本地访问方式更接近 `docs/single-host-deploy.md` 的生产结构，可以在 macOS 安装 `nginx` 后做本地代理。

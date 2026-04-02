@@ -1,11 +1,8 @@
 # agent-tool-prompt-compat Specification
 
 ## Purpose
-
-定义 Agent 在调用大模型时，是否将工具名称、说明与参数结构以文本形式写入系统 prompt（兼容模式），以及默认行为与 native 工具通道的关系。
-
+TBD - created by archiving change llm-tool-prompt-compat-mode. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: 工具说明兼容模式默认关闭
 
 系统在未显式开启兼容模式时 MUST 不将「完整工具目录」作为额外文本追加到系统 prompt；工具定义仅通过模型 API 既有的 tools / function 通道传递（与当前 LangChain ReAct 行为一致）。
@@ -43,3 +40,19 @@
 - **WHEN** 某一工具的参数 schema 序列化后超过实现规定的单工具长度上限
 - **THEN** 系统 MUST 对该工具的 schema 文本进行截断或摘要并继续处理其余工具
 - **AND** 整体工具块超过总长度上限时 MUST 按实现策略截断并仍返回可用请求
+
+### Requirement: 兼容模式工具目录必须反映 Skill 可用性过滤
+
+在兼容模式开启且任务带有有效 `userId` 时，系统向系统消息追加的「可用工具」目录中，凡对应**可配置（非文件系统）** Skill 的工具条目，MUST 仅包含对该用户可用的项；该集合 MUST 与同一请求中提交给模型 API 的 native 工具列表中的同一子集一致。磁盘 `SKILL.md` 对应的工具条目不受用户禁用列表约束。无 `userId` 的任务 MUST NOT 应用用户级禁用过滤。
+
+#### Scenario: 用户禁用某可配置 Skill 后的兼容模式请求
+
+- **WHEN** 兼容模式为开启、任务带 `userId`，且当前用户已将某一可配置 Skill 标记为禁用
+- **THEN** 系统消息中的工具目录不包含该 Skill 对应工具项
+- **AND** 模型 API 的 tools 数组中也不包含该工具定义
+
+#### Scenario: 非可配置类工具不受影响
+
+- **WHEN** 存在非「可配置 Skill」类工具仍被 Agent 绑定
+- **THEN** 兼容模式工具目录继续包含这些工具（受既有长度截断策略约束）
+

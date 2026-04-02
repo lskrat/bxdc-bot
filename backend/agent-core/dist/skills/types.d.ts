@@ -5,6 +5,7 @@ export type SkillMetadata = Record<string, SkillMetadataValue>;
 export interface SkillFrontmatter {
     name?: string;
     description?: string;
+    compat_tool_hint?: string;
     metadata?: SkillMetadata;
     [key: string]: unknown;
 }
@@ -13,6 +14,7 @@ export interface RegisteredSkill {
     toolName: string;
     name: string;
     description: string;
+    compatToolHint: string;
     metadata: SkillMetadata;
     metadataSummary: string;
     skillPath: string;

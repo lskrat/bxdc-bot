@@ -39,7 +39,12 @@ export class AgentFactory {
     gatewayUrl: string,
     apiToken: string,
     openAiApiKey: string,
-    config?: { modelName?: string, baseUrl?: string, callbacks?: any[] },
+    config?: {
+      modelName?: string;
+      baseUrl?: string;
+      callbacks?: any[];
+      disabledExtendedSkillIds?: string[];
+    },
     skillManager?: SkillManager,
     userId?: string
   ): Promise<AgentWithTools> {
@@ -65,6 +70,7 @@ export class AgentFactory {
     const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
       plannerModel: model,
       availableTools: baseTools,
+      disabledExtendedSkillIds: config?.disabledExtendedSkillIds,
     });
     const tools: StructuredToolInterface[] = [
       ...baseTools,

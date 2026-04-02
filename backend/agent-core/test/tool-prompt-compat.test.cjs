@@ -30,9 +30,11 @@ test("formatToolsBlockForSystemPrompt includes header and tool name", () => {
   });
   const block = formatToolsBlockForSystemPrompt([tool]);
   assert.ok(block.includes("【可用工具】"));
+  assert.ok(block.includes("兼容模式"));
   assert.ok(block.includes("test_compat_tool"));
   assert.ok(block.includes("A test tool"));
   assert.ok(block.includes("参数 JSON Schema"));
+  assert.ok(block.includes("须闭合"));
 });
 
 test("formatToolsBlockForSystemPrompt omits extra tools when total cap exceeded", () => {

@@ -31,6 +31,19 @@ function asArray<T>(value: T | T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [value];
 }
 
+/** From task execution context (skill-gateway): user-disabled EXTENSION skill DB ids. */
+function pickDisabledExtendedSkillIds(context: unknown): string[] | undefined {
+  if (!context || typeof context !== 'object') return undefined;
+  const raw = (context as Record<string, unknown>).disabledExtendedSkillIds;
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const out = raw
+    .filter((x): x is string => typeof x === 'string')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (out.length === 0) return undefined;
+  return [...new Set(out)];
+}
+
 function getChunkMessages(chunk: any): any[] {
   if (!chunk || typeof chunk !== 'object') return [];
 
@@ -237,6 +250,7 @@ export class AgentController {
     const { instruction, context, history } = body;
     const safeHistory = Array.isArray(history) ? history : [];
     const userId = context?.userId;
+    const disabledExtendedSkillIds = userId ? pickDisabledExtendedSkillIds(context) : undefined;
     const sessionId = context?.sessionId || 'default-session';
     const subject = new Subject<MessageEvent>();
 
@@ -269,7 +283,12 @@ export class AgentController {
           gatewayUrl,
           apiToken,
           openAiApiKey,
-          { modelName, baseUrl, callbacks: [llmCallbackHandler] },
+          {
+            modelName,
+            baseUrl,
+            callbacks: [llmCallbackHandler],
+            ...(disabledExtendedSkillIds ? { disabledExtendedSkillIds } : {}),
+          },
           this.skillManager,
           userId,
         );

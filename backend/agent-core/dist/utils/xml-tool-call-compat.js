@@ -1,9 +1,119 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.extractToolCallsFromJsonValue = extractToolCallsFromJsonValue;
+exports.extractFencedJsonToolCallsFromAssistantContent = extractFencedJsonToolCallsFromAssistantContent;
+exports.extractPlainTextToolCallsFromAssistantContent = extractPlainTextToolCallsFromAssistantContent;
+exports.extractXmlArgumentsPayload = extractXmlArgumentsPayload;
 exports.extractXmlToolCallsFromAssistantContent = extractXmlToolCallsFromAssistantContent;
 exports.createXmlToolCallPostHook = createXmlToolCallPostHook;
 const node_crypto_1 = require("node:crypto");
 const messages_1 = require("@langchain/core/messages");
+const FENCED_JSON_RE = /```(?:json)?\s*\n?([\s\S]*?)```/gi;
+function parseJsonObjectString(raw) {
+    const t = raw.trim();
+    if (!t)
+        return null;
+    try {
+        const v = JSON.parse(t);
+        return v !== null && typeof v === "object" && !Array.isArray(v)
+            ? v
+            : null;
+    }
+    catch {
+        return null;
+    }
+}
+function normalizeArgumentsField(raw) {
+    if (raw == null)
+        return {};
+    if (typeof raw === "string") {
+        const obj = parseJsonObjectString(raw);
+        if (obj)
+            return obj;
+        return { input: raw };
+    }
+    if (typeof raw === "object" && !Array.isArray(raw)) {
+        return raw;
+    }
+    return {};
+}
+function extractToolCallsFromJsonValue(parsed) {
+    if (parsed == null)
+        return [];
+    if (Array.isArray(parsed)) {
+        return parsed.flatMap((item) => extractToolCallsFromJsonValue(item));
+    }
+    if (typeof parsed !== "object")
+        return [];
+    const o = parsed;
+    if (Array.isArray(o.tool_calls)) {
+        return o.tool_calls.flatMap((item) => extractToolCallsFromJsonValue(item));
+    }
+    const fn = o.function;
+    if (fn && typeof fn === "object" && !Array.isArray(fn)) {
+        const f = fn;
+        const name = typeof f.name === "string" ? f.name.trim() : "";
+        if (!name)
+            return [];
+        return [{ name, args: normalizeArgumentsField(f.arguments) }];
+    }
+    const name = (typeof o.name === "string" && o.name.trim()) ||
+        (typeof o.tool === "string" && o.tool.trim()) ||
+        (typeof o.tool_name === "string" && o.tool_name.trim()) ||
+        "";
+    if (!name)
+        return [];
+    const args = "arguments" in o || "args" in o || "parameters" in o
+        ? normalizeArgumentsField(o.arguments ?? o.args ?? o.parameters)
+        : typeof o.input === "string" || (o.input && typeof o.input === "object")
+            ? normalizeArgumentsField(o.input)
+            : {};
+    return [{ name, args }];
+}
+function extractFencedJsonToolCallsFromAssistantContent(content) {
+    const toolCalls = [];
+    if (!content || typeof content !== "string") {
+        return { toolCalls, strippedContent: "" };
+    }
+    FENCED_JSON_RE.lastIndex = 0;
+    const strippedContent = content.replace(FENCED_JSON_RE, (full, inner) => {
+        const text = inner.trim();
+        if (!text)
+            return full;
+        let parsed;
+        try {
+            parsed = JSON.parse(text);
+        }
+        catch {
+            return full;
+        }
+        const extracted = extractToolCallsFromJsonValue(parsed);
+        if (extracted.length === 0)
+            return full;
+        toolCalls.push(...extracted);
+        return "";
+    }).trim();
+    return { toolCalls, strippedContent };
+}
+function extractPlainTextToolCallsFromAssistantContent(content) {
+    const xml = extractXmlToolCallsFromAssistantContent(content);
+    const json = extractFencedJsonToolCallsFromAssistantContent(xml.strippedContent);
+    return {
+        toolCalls: [...xml.toolCalls, ...json.toolCalls],
+        strippedContent: json.strippedContent,
+    };
+}
+function extractXmlArgumentsPayload(inner) {
+    const openMatch = inner.match(/<\s*arguments\s*>/i);
+    if (!openMatch || openMatch.index === undefined)
+        return null;
+    const start = openMatch.index + openMatch[0].length;
+    const afterOpen = inner.slice(start);
+    const closedMatch = afterOpen.match(/^([\s\S]*?)<\s*\/\s*arguments\s*>/i);
+    if (closedMatch)
+        return closedMatch[1].trim();
+    return afterOpen.trim() || null;
+}
 function extractXmlToolCallsFromAssistantContent(content) {
     const toolCalls = [];
     if (!content || typeof content !== "string") {
@@ -12,18 +122,17 @@ function extractXmlToolCallsFromAssistantContent(content) {
     const blockRe = /<tool_call\b[^>]*>([\s\S]*?)<\/tool_call>/gi;
     const strippedContent = content.replace(blockRe, (_full, inner) => {
         const n = inner.match(/<\s*name\s*>([^<]+)<\/\s*name\s*>/i);
-        const a = inner.match(/<\s*arguments\s*>([\s\S]*?)<\/\s*arguments\s*>/i);
         if (!n?.[1])
             return "";
         const name = n[1].trim();
         let args = {};
-        if (a?.[1]) {
-            const raw = a[1].trim();
+        const rawArgs = extractXmlArgumentsPayload(inner);
+        if (rawArgs) {
             try {
-                args = JSON.parse(raw);
+                args = JSON.parse(rawArgs);
             }
             catch {
-                args = { input: raw };
+                args = { input: rawArgs };
             }
         }
         toolCalls.push({ name, args });
@@ -53,7 +162,7 @@ function createXmlToolCallPostHook(tools) {
         if (last.tool_calls?.length)
             return {};
         const raw = getAssistantStringContent(last);
-        const { toolCalls, strippedContent } = extractXmlToolCallsFromAssistantContent(raw);
+        const { toolCalls, strippedContent } = extractPlainTextToolCallsFromAssistantContent(raw);
         if (toolCalls.length === 0)
             return {};
         const lcToolCalls = toolCalls.map((tc) => ({

@@ -29,6 +29,20 @@ function asArray(value) {
         return [];
     return Array.isArray(value) ? value : [value];
 }
+function pickDisabledExtendedSkillIds(context) {
+    if (!context || typeof context !== 'object')
+        return undefined;
+    const raw = context.disabledExtendedSkillIds;
+    if (!Array.isArray(raw) || raw.length === 0)
+        return undefined;
+    const out = raw
+        .filter((x) => typeof x === 'string')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    if (out.length === 0)
+        return undefined;
+    return [...new Set(out)];
+}
 function getChunkMessages(chunk) {
     if (!chunk || typeof chunk !== 'object')
         return [];
@@ -198,6 +212,7 @@ let AgentController = class AgentController {
         const { instruction, context, history } = body;
         const safeHistory = Array.isArray(history) ? history : [];
         const userId = context?.userId;
+        const disabledExtendedSkillIds = userId ? pickDisabledExtendedSkillIds(context) : undefined;
         const sessionId = context?.sessionId || 'default-session';
         const subject = new rxjs_1.Subject();
         const gatewayUrl = process.env.JAVA_GATEWAY_URL || 'http://localhost:18080';
@@ -217,7 +232,12 @@ let AgentController = class AgentController {
                 const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
                     subject.next({ data: JSON.stringify(event) });
                 });
-                const { agent, tools } = await agent_1.AgentFactory.createAgent(gatewayUrl, apiToken, openAiApiKey, { modelName, baseUrl, callbacks: [llmCallbackHandler] }, this.skillManager, userId);
+                const { agent, tools } = await agent_1.AgentFactory.createAgent(gatewayUrl, apiToken, openAiApiKey, {
+                    modelName,
+                    baseUrl,
+                    callbacks: [llmCallbackHandler],
+                    ...(disabledExtendedSkillIds ? { disabledExtendedSkillIds } : {}),
+                }, this.skillManager, userId);
                 const memories = await this.memoryService.searchMemories(instruction, userId, 10);
                 console.log(`[Memory] Retrieved ${memories.length} memories for user ${userId}`);
                 if (memories.length > 0) {

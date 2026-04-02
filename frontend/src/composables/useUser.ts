@@ -15,6 +15,17 @@ export interface LlmSettingsResponse {
   hasEffectiveApiKey: boolean;
 }
 
+export interface SkillOptionDto {
+  id: number;
+  name: string;
+  description: string;
+}
+
+export interface SkillAvailabilityResponse {
+  disabledSkillIds: string[];
+  skills: SkillOptionDto[];
+}
+
 // Global state
 const currentUser = ref<User | null>(null);
 const token = ref<string | null>(localStorage.getItem('user_id'));
@@ -140,6 +151,30 @@ export function useUser() {
     return res.json();
   }
 
+  async function fetchSkillAvailability(userId: string): Promise<SkillAvailabilityResponse> {
+    const res = await fetch(apiUrl(`/api/user/${userId}/skill-availability`));
+    if (!res.ok) {
+      throw new Error('Failed to load skill availability');
+    }
+    return res.json();
+  }
+
+  async function saveSkillAvailability(
+    userId: string,
+    disabledSkillIds: string[]
+  ): Promise<SkillAvailabilityResponse> {
+    const res = await fetch(apiUrl(`/api/user/${userId}/skill-availability`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ disabledSkillIds }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error || 'Save failed');
+    }
+    return res.json();
+  }
+
   return {
     currentUser,
     isLoggedIn,
@@ -150,5 +185,7 @@ export function useUser() {
     updateAvatar,
     fetchLlmSettings,
     saveLlmSettings,
+    fetchSkillAvailability,
+    saveSkillAvailability,
   };
 }

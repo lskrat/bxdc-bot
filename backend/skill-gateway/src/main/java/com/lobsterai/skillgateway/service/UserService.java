@@ -1,7 +1,12 @@
 package com.lobsterai.skillgateway.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.dto.LlmSettingsResponse;
 import com.lobsterai.skillgateway.dto.LlmSettingsUpdateRequest;
+import com.lobsterai.skillgateway.dto.SkillAvailabilityResponse;
+import com.lobsterai.skillgateway.dto.SkillAvailabilityUpdateRequest;
+import com.lobsterai.skillgateway.dto.SkillOptionDto;
 import com.lobsterai.skillgateway.entity.User;
 import com.lobsterai.skillgateway.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
@@ -10,20 +15,32 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
 public class UserService {
 
+    private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {
+    };
+
     private final UserRepository userRepository;
     private final ApiProxyService apiProxyService;
+    private final SkillService skillService;
+    private final ObjectMapper objectMapper;
 
     @Value("${agent.core.url:http://localhost:3000}")
     private String agentCoreUrl;
 
-    public UserService(UserRepository userRepository, ApiProxyService apiProxyService) {
+    public UserService(
+            UserRepository userRepository,
+            ApiProxyService apiProxyService,
+            SkillService skillService,
+            ObjectMapper objectMapper) {
         this.userRepository = userRepository;
         this.apiProxyService = apiProxyService;
+        this.skillService = skillService;
+        this.objectMapper = objectMapper;
     }
 
     private static String trimOrNull(String s) {
@@ -173,5 +190,45 @@ public class UserService {
     public User getUser(String id) {
         if (id == null) return null;
         return userRepository.findById(id).orElse(null);
+    }
+
+    /**
+     * Parsed disable list for gateway EXTENSION skills (DB numeric id as string). Empty if unset or invalid JSON.
+     */
+    public List<String> getDisabledExtendedSkillIds(User user) {
+        if (user == null || user.getDisabledExtendedSkillIdsJson() == null || user.getDisabledExtendedSkillIdsJson().isBlank()) {
+            return List.of();
+        }
+        try {
+            List<String> list = objectMapper.readValue(user.getDisabledExtendedSkillIdsJson(), STRING_LIST_TYPE);
+            if (list == null) {
+                return List.of();
+            }
+            return list.stream().map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    public SkillAvailabilityResponse getSkillAvailability(String userId) {
+        User user = userRepository.findById(userId).orElse(null);
+        if (user == null) {
+            return null;
+        }
+        List<SkillOptionDto> options = skillService.getAllSkills().stream()
+                .filter(s -> "EXTENSION".equalsIgnoreCase(s.getType()) && s.isEnabled())
+                .map(s -> new SkillOptionDto(s.getId(), s.getName(),
+                        s.getDescription() != null ? s.getDescription() : ""))
+                .toList();
+        return new SkillAvailabilityResponse(getDisabledExtendedSkillIds(user), options);
+    }
+
+    public SkillAvailabilityResponse updateSkillAvailability(String userId, SkillAvailabilityUpdateRequest req) throws Exception {
+        User user = userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("User not found"));
+        List<String> incoming = (req != null && req.disabledSkillIds != null) ? req.disabledSkillIds : List.of();
+        List<String> normalized = incoming.stream().map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+        user.setDisabledExtendedSkillIdsJson(objectMapper.writeValueAsString(normalized));
+        userRepository.save(user);
+        return getSkillAvailability(userId);
     }
 }
