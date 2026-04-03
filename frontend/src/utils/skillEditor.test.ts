@@ -9,7 +9,7 @@ describe('skillEditor', () => {
   it('parses legacy CONFIG time draft into canonical api draft', () => {
     const result = parseSkillDraft(
       'CONFIG',
-      '{"kind":"time","operation":"current-time","method":"GET","endpoint":"https://example.com/time","responseWrapper":"QZOutputJson","responseTimestampField":"t"}',
+      '{"kind":"time","operation":"current-time","method":"GET","endpoint":"https://example.com/time","responseTimestampField":"t"}',
     )
 
     expect(result.error).toBeNull()
@@ -19,7 +19,6 @@ describe('skillEditor', () => {
       operation: 'current-time',
       method: 'GET',
       endpoint: 'https://example.com/time',
-      responseWrapper: 'QZOutputJson',
       responseTimestampField: 't',
     })
   })
@@ -82,7 +81,7 @@ describe('skillEditor', () => {
     expect(result.error).toContain('暂不支持')
   })
 
-  it('serializes api draft with nested JSON fields', () => {
+  it('serializes api draft with nested JSON fields and new contract fields', () => {
     const draft = createDefaultSkillDraft('CONFIG', 'api')
     if (draft.kind !== 'api') {
       throw new Error('Expected api draft')
@@ -94,6 +93,8 @@ describe('skillEditor', () => {
     draft.queryText = '{"page":1,"pagesize":1}'
     draft.headersText = '{"Authorization":"Bearer token"}'
     draft.bodyText = '{"debug":true}'
+    draft.interfaceDescription = '获取笑话列表'
+    draft.parameterContractText = '{"type":"object","properties":{"page":{"type":"number"}}}'
 
     const raw = serializeSkillDraft('CONFIG', draft)
     const parsed = JSON.parse(raw)
@@ -106,6 +107,8 @@ describe('skillEditor', () => {
       query: { page: 1, pagesize: 1 },
       headers: { Authorization: 'Bearer token' },
       body: { debug: true },
+      interfaceDescription: '获取笑话列表',
+      parameterContract: { type: 'object', properties: { page: { type: 'number' } } },
     })
   })
 

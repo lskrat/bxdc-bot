@@ -107,6 +107,26 @@ function normalizeToolId(toolCall, fallback) {
     const id = toolCall?.id ?? toolCall?.tool_call_id ?? toolCall?.function?.id;
     return typeof id === 'string' && id.trim() ? id.trim() : fallback;
 }
+function parseToolArguments(rawArguments) {
+    if (typeof rawArguments !== 'string')
+        return rawArguments;
+    const trimmed = rawArguments.trim();
+    if (!trimmed)
+        return trimmed;
+    try {
+        return JSON.parse(trimmed);
+    }
+    catch {
+        return trimmed;
+    }
+}
+function extractToolArguments(toolCall) {
+    return parseToolArguments(toolCall?.args
+        ?? toolCall?.arguments
+        ?? toolCall?.function?.arguments
+        ?? toolCall?.kwargs?.args
+        ?? toolCall?.kwargs?.arguments);
+}
 function normalizeToolStatus(message) {
     const status = message?.status ?? message?.kwargs?.status;
     if (status === 'error' || status === 'failed')
@@ -128,6 +148,7 @@ function extractStartedToolCalls(message, messageIndex) {
             toolId: normalizeToolId(toolCall, `${toolName}:${messageIndex}:${index}`),
             toolName,
             status: 'running',
+            arguments: (0, tool_trace_context_1.sanitizeToolTraceArguments)(extractToolArguments(toolCall)),
         };
     })
         .filter(Boolean);
@@ -142,6 +163,7 @@ function extractCompletedToolCall(message) {
         toolId: normalizeToolId(message, toolName),
         toolName,
         status: normalizeToolStatus(message),
+        arguments: (0, tool_trace_context_1.sanitizeToolTraceArguments)(extractToolArguments(message)),
     };
 }
 let AgentController = class AgentController {
@@ -181,6 +203,7 @@ let AgentController = class AgentController {
             displayName: toolInfo.displayName,
             kind: toolInfo.kind,
             status: toolCall.status,
+            arguments: toolCall.arguments,
             executionMode: gatewayToolInfo?.executionMode,
             executionLabel: gatewayToolInfo?.executionLabel,
         };
@@ -205,13 +228,6 @@ let AgentController = class AgentController {
         const modelName = llm.modelName;
         const baseUrl = llm.baseUrl;
         const skillContext = this.skillManager.buildSkillPromptContext();
-        const confirmationContext = `
-[Tool Confirmation Instructions]
-If a tool returns a response with status "CONFIRMATION_REQUIRED", you MUST NOT proceed with the action.
-Instead, you MUST output the confirmation request to the user exactly as requested by the tool, and ask for their approval.
-If the user approves, you should call the tool again, this time including '"confirmed": true' in the tool parameters.
-If the user denies, acknowledge the cancellation and do not execute the tool.
-`;
         (0, tool_trace_context_1.runWithToolTraceContext)((event) => subject.next({ data: JSON.stringify(event) }), async () => {
             let fullAssistantResponse = '';
             const seenToolStatuses = new Map();
@@ -228,7 +244,7 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
                 const memoryContext = memories.length > 0
                     ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
                     : '';
-                const fullInstruction = `${skillContext}${confirmationContext}${memoryContext}User Instruction:\n${instruction}`;
+                const fullInstruction = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
                 const messages = [
                     ...safeHistory,
                     { role: 'user', content: fullInstruction }

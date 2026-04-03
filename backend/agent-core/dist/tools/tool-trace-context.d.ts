@@ -9,9 +9,11 @@ export interface ToolTraceEvent {
     parentToolId?: string;
     parentToolName?: string;
     summary?: string;
+    arguments?: unknown;
     executionMode?: string;
     executionLabel?: string;
 }
+export declare function sanitizeToolTraceArguments(value: unknown, depth?: number): unknown;
 export declare function runWithToolTraceContext<T>(emit: (event: ToolTraceEvent) => void, work: () => Promise<T>): Promise<T>;
 export declare function emitToolTraceEvent(event: ToolTraceEvent): void;
 export declare function setActiveParentToolId(toolName: string, toolId: string): void;

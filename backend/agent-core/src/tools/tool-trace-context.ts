@@ -12,6 +12,7 @@ export interface ToolTraceEvent {
   parentToolId?: string;
   parentToolName?: string;
   summary?: string;
+  arguments?: unknown;
   executionMode?: string;
   executionLabel?: string;
 }
@@ -22,6 +23,38 @@ interface ToolTraceContextValue {
 }
 
 const toolTraceContext = new AsyncLocalStorage<ToolTraceContextValue>();
+
+export function sanitizeToolTraceArguments(value: unknown, depth = 0): unknown {
+  if (depth > 4) return "[truncated]";
+  if (value == null) return value;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeToolTraceArguments(item, depth + 1));
+  }
+  if (typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(value)) {
+      const normalizedKey = key.toLowerCase();
+      if (
+        normalizedKey.includes("apikey")
+        || normalizedKey.includes("token")
+        || normalizedKey.includes("authorization")
+        || normalizedKey.includes("password")
+        || normalizedKey.includes("privatekey")
+        || normalizedKey.includes("secret")
+        || normalizedKey.includes("cookie")
+      ) {
+        result[key] = "[redacted]";
+        continue;
+      }
+      result[key] = sanitizeToolTraceArguments(raw, depth + 1);
+    }
+    return result;
+  }
+  return String(value);
+}
 
 export async function runWithToolTraceContext<T>(
   emit: (event: ToolTraceEvent) => void,

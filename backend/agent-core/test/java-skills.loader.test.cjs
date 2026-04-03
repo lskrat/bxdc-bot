@@ -76,9 +76,6 @@ test("configured API extended skill builds query and proxies request", async () 
             page: 1,
             pagesize: 1,
           },
-          apiKeyField: "key",
-          apiKey: "test-key",
-          autoTimestampField: "time",
         }),
       },
     ],
@@ -118,8 +115,82 @@ test("configured API extended skill builds query and proxies request", async () 
     assert.equal(requestUrl.searchParams.get("sort"), "desc");
     assert.equal(requestUrl.searchParams.get("page"), "2");
     assert.equal(requestUrl.searchParams.get("pagesize"), "3");
-    assert.equal(requestUrl.searchParams.get("key"), "test-key");
-    assert.ok(requestUrl.searchParams.get("time"));
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
+test("configured API extended skill validates parameter contract", async () => {
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+
+  axios.get = async () => ({
+    data: [
+      {
+        id: 4,
+        name: "测试契约",
+        description: "测试参数契约",
+        type: "EXTENSION",
+        executionMode: "CONFIG",
+        enabled: true,
+        configuration: JSON.stringify({
+          kind: "api",
+          operation: "test-contract",
+          method: "POST",
+          endpoint: "http://example.com/api",
+          parameterContract: {
+            type: "object",
+            properties: {
+              reqField: { type: "string", required: true },
+              numField: { type: "number" },
+              enumField: { type: "string", enum: ["A", "B"] },
+              defField: { type: "string", default: "default_val" },
+            },
+          },
+        }),
+      },
+    ],
+  });
+
+  let capturedRequest = null;
+  axios.post = async (_url, body) => {
+    capturedRequest = body;
+    return { data: { ok: true } };
+  };
+
+  try {
+    const { loadGatewayExtendedTools } = require("../dist/tools/java-skills");
+    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token");
+    assert.equal(tools.length, 1);
+
+    // 1. Missing required field
+    let result = await tools[0].func(JSON.stringify({}));
+    let parsed = JSON.parse(result);
+    assert.equal(parsed.error, "Parameter validation failed");
+    assert.ok(parsed.details.some(d => d.includes("Missing required parameter: 'reqField'")));
+    assert.equal(capturedRequest, null);
+
+    // 2. Type mismatch
+    result = await tools[0].func(JSON.stringify({ reqField: "val", numField: "not_a_number" }));
+    parsed = JSON.parse(result);
+    assert.equal(parsed.error, "Parameter validation failed");
+    assert.ok(parsed.details.some(d => d.includes("must be a number")));
+    assert.equal(capturedRequest, null);
+
+    // 3. Enum mismatch
+    result = await tools[0].func(JSON.stringify({ reqField: "val", enumField: "C" }));
+    parsed = JSON.parse(result);
+    assert.equal(parsed.error, "Parameter validation failed");
+    assert.ok(parsed.details.some(d => d.includes("must be one of")));
+    assert.equal(capturedRequest, null);
+
+    // 4. Success with default value applied
+    result = await tools[0].func(JSON.stringify({ reqField: "val", enumField: "A" }));
+    parsed = JSON.parse(result);
+    assert.equal(parsed.ok, true);
+    assert.ok(capturedRequest);
+    assert.equal(capturedRequest.url, "http://example.com/api?reqField=val&enumField=A&defField=default_val");
   } finally {
     axios.get = originalGet;
     axios.post = originalPost;
@@ -176,6 +247,8 @@ test("api skill generator creates and validates a generated API skill", async ()
       endpoint: "https://example.com/ping",
       query: { env: "test" },
       testInput: { query: { env: "prod" } },
+      interfaceDescription: "Ping 接口说明",
+      parameterContract: { type: "object", properties: {} },
     }));
 
     const parsed = JSON.parse(result);
@@ -210,7 +283,7 @@ test("api skill generator reports missing required fields", async () => {
   const parsed = JSON.parse(result);
 
   assert.equal(parsed.status, "INPUT_INCOMPLETE");
-  assert.deepEqual(parsed.missingFields, ["method"]);
+  assert.deepEqual(parsed.missingFields.sort(), ["interfaceDescription", "method", "parameterContract"].sort());
 });
 
 test("api skill generator updates existing skill when overwrite is enabled", async () => {
@@ -263,6 +336,8 @@ test("api skill generator updates existing skill when overwrite is enabled", asy
       method: "GET",
       endpoint: "https://example.com/ping",
       allowOverwrite: true,
+      interfaceDescription: "desc",
+      parameterContract: {},
     }));
     const parsed = JSON.parse(result);
 
@@ -730,6 +805,8 @@ test("skill generator keeps saved skill when validation fails", async () => {
       name: "Failing API",
       method: "GET",
       endpoint: "https://example.com/protected",
+      interfaceDescription: "A failing API",
+      parameterContract: { type: "object", properties: {} },
     }));
     const parsed = JSON.parse(result);
 

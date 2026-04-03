@@ -8,6 +8,7 @@ import { describeGatewayExtendedTool } from '../tools/java-skills';
 import {
   clearActiveParentToolId,
   runWithToolTraceContext,
+  sanitizeToolTraceArguments,
   setActiveParentToolId,
   type ToolTraceEvent,
 } from '../tools/tool-trace-context';
@@ -19,6 +20,7 @@ interface ExtractedToolCall {
   toolId: string;
   toolName: string;
   status: ToolStatus;
+  arguments?: unknown;
 }
 
 function asArray<T>(value: T | T[] | undefined | null): T[] {
@@ -114,6 +116,28 @@ function normalizeToolId(toolCall: any, fallback: string): string {
   return typeof id === 'string' && id.trim() ? id.trim() : fallback;
 }
 
+function parseToolArguments(rawArguments: unknown): unknown {
+  if (typeof rawArguments !== 'string') return rawArguments;
+  const trimmed = rawArguments.trim();
+  if (!trimmed) return trimmed;
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+}
+
+function extractToolArguments(toolCall: any): unknown {
+  return parseToolArguments(
+    toolCall?.args
+    ?? toolCall?.arguments
+    ?? toolCall?.function?.arguments
+    ?? toolCall?.kwargs?.args
+    ?? toolCall?.kwargs?.arguments,
+  );
+}
+
 function normalizeToolStatus(message: any): ToolStatus {
   const status = message?.status ?? message?.kwargs?.status;
   if (status === 'error' || status === 'failed') return 'failed';
@@ -138,6 +162,7 @@ function extractStartedToolCalls(message: any, messageIndex: number): ExtractedT
         toolId: normalizeToolId(toolCall, `${toolName}:${messageIndex}:${index}`),
         toolName,
         status: 'running' as const,
+        arguments: sanitizeToolTraceArguments(extractToolArguments(toolCall)),
       };
     })
     .filter(Boolean) as ExtractedToolCall[];
@@ -153,6 +178,7 @@ function extractCompletedToolCall(message: any): ExtractedToolCall | null {
     toolId: normalizeToolId(message, toolName),
     toolName,
     status: normalizeToolStatus(message),
+      arguments: sanitizeToolTraceArguments(extractToolArguments(message)),
   };
 }
 
@@ -204,6 +230,7 @@ export class AgentController {
       displayName: toolInfo.displayName,
       kind: toolInfo.kind,
       status: toolCall.status,
+      arguments: toolCall.arguments,
       executionMode: gatewayToolInfo?.executionMode,
       executionLabel: gatewayToolInfo?.executionLabel,
     };
@@ -245,15 +272,6 @@ export class AgentController {
     const baseUrl = llm.baseUrl;
 
     const skillContext = this.skillManager.buildSkillPromptContext();
-    
-    // Add confirmation instructions
-    const confirmationContext = `
-[Tool Confirmation Instructions]
-If a tool returns a response with status "CONFIRMATION_REQUIRED", you MUST NOT proceed with the action.
-Instead, you MUST output the confirmation request to the user exactly as requested by the tool, and ask for their approval.
-If the user approves, you should call the tool again, this time including '"confirmed": true' in the tool parameters.
-If the user denies, acknowledge the cancellation and do not execute the tool.
-`;
 
     // Run agent asynchronously
     runWithToolTraceContext(
@@ -285,7 +303,7 @@ If the user denies, acknowledge the cancellation and do not execute the tool.
           ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n` 
           : '';
         
-        const fullInstruction = `${skillContext}${confirmationContext}${memoryContext}User Instruction:\n${instruction}`;
+        const fullInstruction = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
 
         // Combine history (short-term memory) with current instruction
         const messages = [

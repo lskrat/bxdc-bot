@@ -9,14 +9,12 @@ export interface ApiConfigDraft {
   operation: string
   method: string
   endpoint: string
-  responseWrapper: string
   responseTimestampField: string
   headersText: string
   queryText: string
   bodyText: string
-  apiKeyField: string
-  apiKey: string
-  autoTimestampField: string
+  interfaceDescription: string
+  parameterContractText: string
 }
 
 export interface SshConfigDraft {
@@ -57,14 +55,12 @@ const API_ALLOWED_KEYS = [
   'operation',
   'method',
   'endpoint',
-  'responseWrapper',
   'responseTimestampField',
   'headers',
   'query',
   'body',
-  'apiKeyField',
-  'apiKey',
-  'autoTimestampField',
+  'interfaceDescription',
+  'parameterContract',
 ]
 
 const SSH_ALLOWED_KEYS = [
@@ -146,14 +142,12 @@ function parseApiDraft(configuration: JsonRecord): ApiConfigDraft {
     operation: readString(configuration, 'operation', preset === 'current-time' ? 'current-time' : ''),
     method: readString(configuration, 'method', 'GET'),
     endpoint: readString(configuration, 'endpoint'),
-    responseWrapper: readString(configuration, 'responseWrapper'),
     responseTimestampField: readString(configuration, 'responseTimestampField'),
     headersText: formatJsonText(configuration.headers),
     queryText: formatJsonText(configuration.query),
     bodyText: formatJsonText(configuration.body),
-    apiKeyField: readString(configuration, 'apiKeyField'),
-    apiKey: readString(configuration, 'apiKey'),
-    autoTimestampField: readString(configuration, 'autoTimestampField'),
+    interfaceDescription: readString(configuration, 'interfaceDescription'),
+    parameterContractText: formatJsonText(configuration.parameterContract),
   }
 }
 
@@ -165,14 +159,12 @@ function parseLegacyTimeDraft(configuration: JsonRecord): ApiConfigDraft {
     operation: readString(configuration, 'operation', 'current-time'),
     method: readString(configuration, 'method', 'GET'),
     endpoint: readString(configuration, 'endpoint'),
-    responseWrapper: readString(configuration, 'responseWrapper'),
     responseTimestampField: readString(configuration, 'responseTimestampField'),
     headersText: '',
     queryText: '',
     bodyText: '',
-    apiKeyField: '',
-    apiKey: '',
-    autoTimestampField: '',
+    interfaceDescription: '',
+    parameterContractText: '',
   }
 }
 
@@ -254,21 +246,19 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
     }
   }
 
-  return {
-    kind: 'api',
-    preset: 'none',
-    operation: '',
-    method: 'GET',
-    endpoint: '',
-    responseWrapper: '',
-    responseTimestampField: '',
-    headersText: '',
-    queryText: '',
-    bodyText: '',
-    apiKeyField: '',
-    apiKey: '',
-    autoTimestampField: '',
-  }
+    return {
+      kind: 'api',
+      preset: 'none',
+      operation: '',
+      method: 'GET',
+      endpoint: '',
+      responseTimestampField: '',
+      headersText: '',
+      queryText: '',
+      bodyText: '',
+      interfaceDescription: '',
+      parameterContractText: '',
+    }
 }
 
 export function parseSkillDraft(executionMode: ExecutionMode, configuration: string): ParseSkillDraftResult {
@@ -335,20 +325,19 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
     const headers = parseJsonText(draft.headersText, 'Headers')
     const query = parseJsonText(draft.queryText, 'Query')
     const body = parseJsonText(draft.bodyText, 'Body')
+    const parameterContract = parseJsonText(draft.parameterContractText, '参数契约')
     return JSON.stringify({
       kind: 'api',
       ...(draft.preset !== 'none' ? { preset: draft.preset } : {}),
       operation: requireNonEmpty(draft.operation, '操作标识'),
       method: requireNonEmpty(draft.method, '请求方法'),
       endpoint: requireNonEmpty(draft.endpoint, '请求地址'),
-      ...(draft.responseWrapper.trim() ? { responseWrapper: draft.responseWrapper.trim() } : {}),
       ...(draft.responseTimestampField.trim() ? { responseTimestampField: draft.responseTimestampField.trim() } : {}),
       ...(headers !== undefined ? { headers } : {}),
       ...(query !== undefined ? { query } : {}),
       ...(body !== undefined ? { body } : {}),
-      ...(draft.apiKeyField.trim() ? { apiKeyField: draft.apiKeyField.trim() } : {}),
-      ...(draft.apiKey.trim() ? { apiKey: draft.apiKey.trim() } : {}),
-      ...(draft.autoTimestampField.trim() ? { autoTimestampField: draft.autoTimestampField.trim() } : {}),
+      ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
+      ...(parameterContract !== undefined ? { parameterContract } : {}),
     })
   }
 

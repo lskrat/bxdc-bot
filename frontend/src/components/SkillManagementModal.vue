@@ -330,11 +330,14 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
           <t-form-item label="请求地址" name="apiEndpoint">
             <t-input v-model="apiDraft.endpoint" :placeholder="apiDraft.preset === 'current-time' ? '例如：https://vv.video.qq.com/checktime?otype=json' : '例如：http://v.juhe.cn/joke/content/list'" />
           </t-form-item>
-          <t-form-item label="响应包装字段" name="apiResponseWrapper">
-            <t-input v-model="apiDraft.responseWrapper" placeholder="例如：QZOutputJson" />
-          </t-form-item>
           <t-form-item label="时间戳字段" name="apiResponseTimestampField">
             <t-input v-model="apiDraft.responseTimestampField" placeholder="例如：t" />
+          </t-form-item>
+          <t-form-item label="接口说明" name="apiInterfaceDescription">
+            <t-textarea v-model="apiDraft.interfaceDescription" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="例如：该接口用于获取笑话列表，包含入参说明、出参说明、核心字段意义、限制、字典值和默认值" />
+          </t-form-item>
+          <t-form-item label="参数格式契约 (JSON)" name="apiParameterContract">
+            <t-textarea v-model="apiDraft.parameterContractText" :autosize="{ minRows: 3, maxRows: 8 }" placeholder='例如：{"type":"object","properties":{"page":{"type":"number"}}}' />
           </t-form-item>
           <t-form-item label="Headers (JSON，可选)" name="apiHeaders">
             <t-textarea v-model="apiDraft.headersText" :autosize="{ minRows: 3, maxRows: 6 }" placeholder='例如：{"Authorization":"Bearer token"}' />
@@ -344,15 +347,6 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
           </t-form-item>
           <t-form-item label="Body (JSON，可选)" name="apiBody">
             <t-textarea v-model="apiDraft.bodyText" :autosize="{ minRows: 3, maxRows: 6 }" placeholder='例如：{"foo":"bar"}' />
-          </t-form-item>
-          <t-form-item label="API Key 字段名" name="apiKeyField">
-            <t-input v-model="apiDraft.apiKeyField" placeholder="例如：key" />
-          </t-form-item>
-          <t-form-item label="API Key" name="apiKey">
-            <t-input v-model="apiDraft.apiKey" placeholder="例如：your-api-key" />
-          </t-form-item>
-          <t-form-item label="自动时间戳字段" name="autoTimestampField">
-            <t-input v-model="apiDraft.autoTimestampField" placeholder="例如：time" />
           </t-form-item>
         </template>
 

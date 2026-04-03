@@ -1,6 +1,7 @@
 import { DynamicTool } from '@langchain/core/tools';
 import { RegisteredSkill } from './types';
 export declare class SkillManager {
+    private getRoutableSkills;
     private getConfiguredRoots;
     private collectSkillDirs;
     private parseSkillDir;

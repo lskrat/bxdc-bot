@@ -96,8 +96,17 @@ function isIgnoredDirectory(dirName: string): boolean {
   return dirName === '.git' || dirName === 'node_modules' || dirName === 'dist';
 }
 
+function isDemoSkill(skill: RegisteredSkill): boolean {
+  const category = normalizeText(String(skill.metadata?.category || '')).toLowerCase();
+  return category === 'demo' || category === 'example';
+}
+
 @Injectable()
 export class SkillManager {
+  private getRoutableSkills(): RegisteredSkill[] {
+    return this.listSkills().filter((skill) => !isDemoSkill(skill));
+  }
+
   private getConfiguredRoots(): string[] {
     const envValue = process.env.AGENT_SKILLS_DIRS || '';
     const envRoots = envValue
@@ -209,7 +218,7 @@ export class SkillManager {
   }
 
   buildSkillPromptContext(): string {
-    const skills = this.listSkills();
+    const skills = this.getRoutableSkills();
     if (skills.length === 0) return '';
 
     const lines = skills.map((skill) => {
@@ -244,7 +253,7 @@ export class SkillManager {
   }
 
   getLangChainTools(): DynamicTool[] {
-    return this.listSkills().map((skill) => new DynamicTool({
+    return this.getRoutableSkills().map((skill) => new DynamicTool({
       name: skill.toolName,
       description: [
         `Load the full SKILL.md instructions for "${skill.name}".`,

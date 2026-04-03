@@ -224,12 +224,7 @@ function deriveSkillDescription(input, name) {
     return name;
 }
 function sanitizeConfigForDisplay(config) {
-    if (!config.apiKey)
-        return config;
-    return {
-        ...config,
-        apiKey: "***",
-    };
+    return config;
 }
 function buildValidationSummary(result) {
     if (result.startsWith("Error ")) {
@@ -269,9 +264,10 @@ function buildGeneratedSkill(input) {
             missingFields.push("endpoint");
         if (!method)
             missingFields.push("method");
-        if (typeof input.apiKeyField === "string" && input.apiKeyField.trim() && !input.apiKey?.trim()) {
-            missingFields.push("apiKey");
-        }
+        if (!input.interfaceDescription?.trim())
+            missingFields.push("interfaceDescription");
+        if (!input.parameterContract)
+            missingFields.push("parameterContract");
         if (endpoint) {
             try {
                 new URL(endpoint);
@@ -309,16 +305,9 @@ function buildGeneratedSkill(input) {
             endpoint: input.endpoint?.trim(),
             headers: input.headers || {},
             query: input.query || {},
+            interfaceDescription: input.interfaceDescription?.trim(),
+            parameterContract: input.parameterContract,
         };
-        if (typeof input.apiKeyField === "string" && input.apiKeyField.trim()) {
-            config.apiKeyField = input.apiKeyField.trim();
-        }
-        if (typeof input.apiKey === "string" && input.apiKey.trim()) {
-            config.apiKey = input.apiKey.trim();
-        }
-        if (typeof input.autoTimestampField === "string" && input.autoTimestampField.trim()) {
-            config.autoTimestampField = input.autoTimestampField.trim();
-        }
     }
     else if (targetType === "ssh") {
         config = {
@@ -436,6 +425,45 @@ async function executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, in
 async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
     const method = (config.method || "GET").toUpperCase();
     const payload = parseToolInput(input);
+    if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
+        const errors = [];
+        const validatedPayload = { ...payload };
+        for (const [key, propConfig] of Object.entries(config.parameterContract.properties)) {
+            let value = validatedPayload[key];
+            if (value === undefined && propConfig.default !== undefined) {
+                value = propConfig.default;
+                validatedPayload[key] = value;
+            }
+            if (propConfig.required && value === undefined) {
+                errors.push(`Missing required parameter: '${key}'`);
+                continue;
+            }
+            if (value !== undefined) {
+                if (propConfig.type === "string" && typeof value !== "string") {
+                    errors.push(`Parameter '${key}' must be a string, got ${typeof value}`);
+                }
+                else if (propConfig.type === "number" && typeof value !== "number") {
+                    errors.push(`Parameter '${key}' must be a number, got ${typeof value}`);
+                }
+                else if (propConfig.type === "boolean" && typeof value !== "boolean") {
+                    errors.push(`Parameter '${key}' must be a boolean, got ${typeof value}`);
+                }
+                if (propConfig.enum && Array.isArray(propConfig.enum)) {
+                    if (!propConfig.enum.includes(String(value))) {
+                        errors.push(`Parameter '${key}' must be one of [${propConfig.enum.join(", ")}], got '${value}'`);
+                    }
+                }
+            }
+        }
+        if (errors.length > 0) {
+            return JSON.stringify({
+                error: "Parameter validation failed",
+                details: errors,
+                expectedContract: config.parameterContract,
+            });
+        }
+        Object.assign(payload, validatedPayload);
+    }
     const query = {
         ...toQueryRecord(config.query),
         ...toQueryRecord(payload.query),
@@ -446,20 +474,6 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
         if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
             query[key] = value;
         }
-    }
-    if (config.autoTimestampField && query[config.autoTimestampField] === undefined) {
-        query[config.autoTimestampField] = Math.floor(Date.now() / 1000);
-    }
-    if (config.apiKeyField) {
-        const apiKey = typeof payload.apiKey === "string" && payload.apiKey.trim()
-            ? payload.apiKey.trim()
-            : config.apiKey;
-        if (!apiKey || apiKey.includes("__")) {
-            return JSON.stringify({
-                error: `Missing API key for configured skill. Provide "apiKey" in tool input or update config.${config.apiKeyField}.`,
-            });
-        }
-        query[config.apiKeyField] = apiKey;
     }
     const endpoint = config.endpoint ? buildUrlWithQuery(config.endpoint, query) : "";
     if (!endpoint) {
@@ -605,6 +619,7 @@ async function executeOpenClawSkill(plannerModel, parentToolName, input, config,
                 status: "running",
                 parentToolId,
                 parentToolName,
+                arguments: (0, tool_trace_context_1.sanitizeToolTraceArguments)(toolCall.args || {}),
             });
             try {
                 const result = await invokeToolDirect(tool, toolCall.args || {});
@@ -719,6 +734,14 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                             return await executeOpenClawSkill(options?.plannerModel, toolName, input, config, Array.from(toolLookup.values()));
                         }
                         if ((config.kind || "").toLowerCase() === "api" || config.operation === "api-request" || config.operation === "juhe-joke-list") {
+                            if (config.interfaceDescription && (!input || input === "{}")) {
+                                return JSON.stringify({
+                                    status: "REQUIRE_PARAMETERS",
+                                    message: "This is an API skill. Please read the interface description and parameter contract, then call this tool again with the correct parameters.",
+                                    interfaceDescription: config.interfaceDescription,
+                                    parameterContract: config.parameterContract || "No strict contract defined. Please infer from description.",
+                                });
+                            }
                             return await executeConfiguredApiSkill(gatewayUrl, apiToken, input, config);
                         }
                         if ((config.kind || "").toLowerCase() === "ssh") {
@@ -751,7 +774,7 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
 }
 class JavaSkillGeneratorTool extends tools_1.Tool {
     name = "skill_generator";
-    description = "Generates an EXTENSION skill (API, SSH, or OPENCLAW) from a user's description, saves it to SkillGateway, and immediately validates it once. Input must be a JSON string with 'targetType' (one of: 'api', 'ssh', 'openclaw'). For 'api', include 'method' and 'endpoint'. For 'ssh', include 'command' (saved as canonical kind=ssh with preset=server-resource-status, using server_lookup + ssh_executor; runtime input should provide serverName or host). For 'openclaw', include 'systemPrompt'. You can also include 'rawDescription', 'name', 'description', 'allowOverwrite', etc. If required fields are missing, do not guess; ask the user for them.";
+    description = "Generates an EXTENSION skill (API, SSH, or OPENCLAW) from a user's description, saves it to SkillGateway, and immediately validates it once. Input must be a JSON string with 'targetType' (one of: 'api', 'ssh', 'openclaw'). For 'api', include 'method', 'endpoint', 'interfaceDescription' (detailed docs), and 'parameterContract' (JSON schema). For 'ssh', include 'command' (saved as canonical kind=ssh with preset=server-resource-status, using server_lookup + ssh_executor; runtime input should provide serverName or host). For 'openclaw', include 'systemPrompt'. You can also include 'rawDescription', 'name', 'description', 'allowOverwrite', etc. If required fields are missing, do not guess; ask the user for them.";
     gatewayUrl;
     apiToken;
     constructor(gatewayUrl, apiToken) {

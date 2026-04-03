@@ -19,6 +19,13 @@ function formatToolSummary(summary?: string) {
   return summary.length > 120 ? `${summary.slice(0, 117)}...` : summary
 }
 
+function formatToolArguments(args?: unknown) {
+  if (args == null) return ''
+  const raw = typeof args === 'string' ? args : JSON.stringify(args)
+  if (!raw) return ''
+  return raw.length > 180 ? `${raw.slice(0, 177)}...` : raw
+}
+
 function formatTime(timestamp: number) {
   return new Intl.DateTimeFormat('zh-CN', {
     hour: '2-digit',
@@ -226,6 +233,9 @@ const chatItems = computed(() =>
                 <span class="tool-status-text">{{ formatToolStatus(tool.status) }}</span>
                 <span v-if="tool.status === 'completed'" class="tool-status-check">✓</span>
               </div>
+              <div v-if="tool.arguments !== undefined" class="tool-status-args">
+                参数：{{ formatToolArguments(tool.arguments) }}
+              </div>
               <div v-if="tool.children?.length" class="tool-children-list">
                 <div
                   v-for="child in tool.children"
@@ -238,6 +248,8 @@ const chatItems = computed(() =>
                   <span class="tool-status-text">{{ formatToolStatus(child.status) }}</span>
                   <span v-if="child.summary" class="tool-status-separator">·</span>
                   <span v-if="child.summary" class="tool-child-summary">{{ formatToolSummary(child.summary) }}</span>
+                  <span v-if="child.arguments !== undefined" class="tool-status-separator">·</span>
+                  <span v-if="child.arguments !== undefined" class="tool-child-summary">参数：{{ formatToolArguments(child.arguments) }}</span>
                 </div>
               </div>
             </div>
@@ -368,6 +380,12 @@ const chatItems = computed(() =>
   font-size: 12px;
   line-height: 1.4;
   color: var(--td-text-color-secondary);
+}
+
+.tool-status-args {
+  max-width: 560px;
+  color: var(--td-text-color-placeholder);
+  word-break: break-all;
 }
 
 .tool-status-main {

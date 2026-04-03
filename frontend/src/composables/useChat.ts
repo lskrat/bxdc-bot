@@ -15,6 +15,7 @@ export interface ToolInvocation {
   parentId?: string
   parentName?: string
   summary?: string
+  arguments?: unknown
   executionMode?: string
   executionLabel?: string
   children?: ToolInvocation[]
@@ -310,6 +311,7 @@ export function provideChat() {
     parentToolId?: string
     parentToolName?: string
     summary?: string
+    arguments?: unknown
     executionMode?: string
     executionLabel?: string
   } {
@@ -328,6 +330,7 @@ export function provideChat() {
     kind: 'skill' | 'tool'
     status: ToolInvocationStatus
     summary?: string
+    arguments?: unknown
   }) {
     const nextChildren = [...children]
     const existingIndex = nextChildren.findIndex((tool) => tool.id === toolEvent.toolId)
@@ -339,6 +342,7 @@ export function provideChat() {
       kind: toolEvent.kind,
       status: toolEvent.status,
       summary: toolEvent.summary,
+      arguments: toolEvent.arguments ?? previous?.arguments,
       children: previous?.children ?? [],
     }
 
@@ -360,6 +364,7 @@ export function provideChat() {
     parentToolId?: string
     parentToolName?: string
     summary?: string
+    arguments?: unknown
     executionMode?: string
     executionLabel?: string
   }) {
@@ -391,6 +396,7 @@ export function provideChat() {
             kind: toolEvent.kind,
             status: toolEvent.status,
             summary: toolEvent.summary,
+            arguments: toolEvent.arguments,
           }),
         }
 
@@ -431,6 +437,7 @@ export function provideChat() {
         kind: toolEvent.kind,
         status: toolEvent.status,
         summary: toolEvent.summary,
+        arguments: toolEvent.arguments ?? previousTool?.arguments,
         executionMode: toolEvent.executionMode,
         executionLabel: toolEvent.executionLabel,
         children: previousTool?.children ?? [],
