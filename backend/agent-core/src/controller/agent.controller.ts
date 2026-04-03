@@ -306,8 +306,15 @@ export class AgentController {
         const fullInstruction = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
 
         // Combine history (short-term memory) with current instruction
+        const validHistory = safeHistory.map(m => {
+          if (m.role === 'assistank' || m.role === 'assistant') {
+            return { ...m, role: 'ai' };
+          }
+          return m;
+        }).filter(m => m.role === 'user' || m.role === 'ai' || m.role === 'system');
+
         const messages = [
-          ...safeHistory,
+          ...validHistory,
           { role: 'user', content: fullInstruction }
         ];
 

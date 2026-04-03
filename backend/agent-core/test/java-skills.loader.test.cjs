@@ -142,11 +142,12 @@ test("configured API extended skill validates parameter contract", async () => {
           parameterContract: {
             type: "object",
             properties: {
-              reqField: { type: "string", required: true },
+              reqField: { type: "string" },
               numField: { type: "number" },
               enumField: { type: "string", enum: ["A", "B"] },
               defField: { type: "string", default: "default_val" },
             },
+            required: ["reqField"],
           },
         }),
       },
@@ -168,21 +169,21 @@ test("configured API extended skill validates parameter contract", async () => {
     let result = await tools[0].func(JSON.stringify({}));
     let parsed = JSON.parse(result);
     assert.equal(parsed.error, "Parameter validation failed");
-    assert.ok(parsed.details.some(d => d.includes("Missing required parameter: 'reqField'")));
+    assert.ok(parsed.details.some(d => d.includes("must have required property 'reqField'")));
     assert.equal(capturedRequest, null);
 
     // 2. Type mismatch
     result = await tools[0].func(JSON.stringify({ reqField: "val", numField: "not_a_number" }));
     parsed = JSON.parse(result);
     assert.equal(parsed.error, "Parameter validation failed");
-    assert.ok(parsed.details.some(d => d.includes("must be a number")));
+    assert.ok(parsed.details.some(d => d.includes("must be number")));
     assert.equal(capturedRequest, null);
 
     // 3. Enum mismatch
     result = await tools[0].func(JSON.stringify({ reqField: "val", enumField: "C" }));
     parsed = JSON.parse(result);
     assert.equal(parsed.error, "Parameter validation failed");
-    assert.ok(parsed.details.some(d => d.includes("must be one of")));
+    assert.ok(parsed.details.some(d => d.includes("must be equal to one of the allowed values")));
     assert.equal(capturedRequest, null);
 
     // 4. Success with default value applied

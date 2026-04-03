@@ -245,8 +245,14 @@ let AgentController = class AgentController {
                     ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
                     : '';
                 const fullInstruction = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
+                const validHistory = safeHistory.map(m => {
+                    if (m.role === 'assistank' || m.role === 'assistant') {
+                        return { ...m, role: 'ai' };
+                    }
+                    return m;
+                }).filter(m => m.role === 'user' || m.role === 'ai' || m.role === 'system');
                 const messages = [
-                    ...safeHistory,
+                    ...validHistory,
                     { role: 'user', content: fullInstruction }
                 ];
                 const stream = await agent.stream({ messages });

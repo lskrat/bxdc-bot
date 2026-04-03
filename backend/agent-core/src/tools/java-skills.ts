@@ -2,6 +2,12 @@ import { AIMessage } from "@langchain/core/messages";
 import { DynamicTool, Tool, DynamicStructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
 import axios from "axios";
+import Ajv from "ajv";
+import addFormats from "ajv-formats";
+
+const ajv = new Ajv({ allErrors: true, useDefaults: true });
+addFormats(ajv);
+
 import {
   emitToolTraceEvent,
   getActiveParentToolId,
@@ -87,6 +93,7 @@ interface ExtendedSkillConfig {
       enum?: string[];
       default?: any;
     }>;
+    required?: string[];
   };
 }
 
@@ -579,53 +586,21 @@ async function executeConfiguredApiSkill(
 
   // Validate payload against parameterContract if defined
   if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
-    const errors: string[] = [];
-    const validatedPayload: Record<string, any> = { ...payload };
+    const validate = ajv.compile(config.parameterContract);
+    const valid = validate(payload);
 
-    for (const [key, propConfig] of Object.entries(config.parameterContract.properties)) {
-      let value = validatedPayload[key];
+    if (!valid) {
+      const errors = validate.errors?.map(err => {
+        const path = err.instancePath ? `'${err.instancePath.substring(1)}' ` : '';
+        return `${path}${err.message}`;
+      }) || ["Unknown validation error"];
 
-      // Apply default value if missing
-      if (value === undefined && propConfig.default !== undefined) {
-        value = propConfig.default;
-        validatedPayload[key] = value;
-      }
-
-      // Check required
-      if (propConfig.required && value === undefined) {
-        errors.push(`Missing required parameter: '${key}'`);
-        continue;
-      }
-
-      if (value !== undefined) {
-        // Check type
-        if (propConfig.type === "string" && typeof value !== "string") {
-          errors.push(`Parameter '${key}' must be a string, got ${typeof value}`);
-        } else if (propConfig.type === "number" && typeof value !== "number") {
-          errors.push(`Parameter '${key}' must be a number, got ${typeof value}`);
-        } else if (propConfig.type === "boolean" && typeof value !== "boolean") {
-          errors.push(`Parameter '${key}' must be a boolean, got ${typeof value}`);
-        }
-
-        // Check enum
-        if (propConfig.enum && Array.isArray(propConfig.enum)) {
-          if (!propConfig.enum.includes(String(value))) {
-            errors.push(`Parameter '${key}' must be one of [${propConfig.enum.join(", ")}], got '${value}'`);
-          }
-        }
-      }
-    }
-
-    if (errors.length > 0) {
       return JSON.stringify({
         error: "Parameter validation failed",
         details: errors,
         expectedContract: config.parameterContract,
       });
     }
-
-    // Update payload with validated/defaulted values
-    Object.assign(payload, validatedPayload);
   }
 
   const query = {
@@ -942,9 +917,24 @@ export async function loadGatewayExtendedTools(
       const toolName = normalizeToolName(skill.name || `skill_${skill.id}`, skill.id);
       registerGatewayToolMetadata(toolName, skill);
 
+      let toolDescription = skill.description || `Execute extended skill: ${skill.name}`;
+      if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
+        const props = Object.entries(config.parameterContract.properties)
+          .map(([key, prop]: [string, any]) => {
+            const req = config.parameterContract?.required?.includes(key) ? " (required)" : "";
+            const desc = prop.description ? `: ${prop.description}` : "";
+            const type = prop.type ? ` [${prop.type}]` : "";
+            const enums = prop.enum ? ` (enum: ${prop.enum.join(", ")})` : "";
+            const def = prop.default !== undefined ? ` (default: ${prop.default})` : "";
+            return `  - ${key}${req}${type}${desc}${enums}${def}`;
+          })
+          .join("\n");
+        toolDescription += `\n\nParameters:\n${props}`;
+      }
+
       const dynamicTool = new DynamicTool({
         name: toolName,
-        description: skill.description || `Execute extended skill: ${skill.name}`,
+        description: toolDescription,
         func: async (input: string) => {
           try {
             const executionMode = normalizeExecutionMode(skill.executionMode);

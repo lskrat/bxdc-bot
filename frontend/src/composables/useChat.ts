@@ -489,7 +489,7 @@ export function provideChat() {
       const history = messages.value
         .slice(-10)
         .map(m => ({
-          role: m.role,
+          role: m.role === 'assistant' || m.role === 'assistank' as any ? 'ai' : m.role,
           content: m.content
         }))
 
