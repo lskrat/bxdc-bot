@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
-import { useChat, type LlmLogEntry } from '../composables/useChat'
+import { useChat, type LlmLogEntry, type Message, type ToolInvocation } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { ChevronUpIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
 
@@ -24,7 +24,7 @@ function formatToolArguments(args?: unknown) {
   if (args == null) return ''
   const raw = typeof args === 'string' ? args : JSON.stringify(args)
   if (!raw) return ''
-  return raw.length > 180 ? `${raw.slice(0, 177)}...` : raw
+  return raw
 }
 
 function formatTime(timestamp: number) {
@@ -74,8 +74,77 @@ const activeLogMessage = computed(() =>
   (messages?.value ?? []).find((message) => message.id === activeLogMessageId.value) ?? null,
 )
 
-const activeLogEntries = computed<LlmLogEntry[]>(() => activeLogMessage.value?.llmLogs ?? [])
-const activeToolInvocations = computed(() => activeLogMessage.value?.toolInvocations ?? [])
+type LogViewerRow =
+  | { key: string; variant: 'tool'; tool: ToolInvocation }
+  | { key: string; variant: 'tool-child'; parent: ToolInvocation; child: ToolInvocation }
+  | { key: string; variant: 'llm'; entry: LlmLogEntry }
+
+function findToolInvocationSlot(
+  tools: ToolInvocation[],
+  id: string,
+):
+  | { variant: 'tool'; tool: ToolInvocation }
+  | { variant: 'tool-child'; parent: ToolInvocation; child: ToolInvocation }
+  | null {
+  for (const t of tools) {
+    if (t.id === id) return { variant: 'tool', tool: t }
+    for (const c of t.children ?? []) {
+      if (c.id === id) return { variant: 'tool-child', parent: t, child: c }
+    }
+  }
+  return null
+}
+
+function buildFallbackLogTimeline(message: Message) {
+  const tools = message.toolInvocations ?? []
+  const logs = message.llmLogs ?? []
+  const entries: { kind: 'tool' | 'llm'; id: string }[] = []
+  for (const t of tools) {
+    entries.push({ kind: 'tool', id: t.id })
+    for (const c of t.children ?? []) {
+      entries.push({ kind: 'tool', id: c.id })
+    }
+  }
+  for (const e of [...logs].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  )) {
+    entries.push({ kind: 'llm', id: e.id })
+  }
+  return entries
+}
+
+const logViewerRows = computed<LogViewerRow[]>(() => {
+  const msg = activeLogMessage.value
+  if (!msg) return []
+  const tools = msg.toolInvocations ?? []
+  const logs = msg.llmLogs ?? []
+  const timeline =
+    msg.logTimeline && msg.logTimeline.length > 0
+      ? msg.logTimeline
+      : buildFallbackLogTimeline(msg)
+
+  const rows: LogViewerRow[] = []
+  for (const step of timeline) {
+    if (step.kind === 'llm') {
+      const entry = logs.find((e) => e.id === step.id)
+      if (entry) rows.push({ key: entry.id, variant: 'llm', entry })
+      continue
+    }
+    const found = findToolInvocationSlot(tools, step.id)
+    if (!found) continue
+    if (found.variant === 'tool') {
+      rows.push({ key: `tool-${found.tool.id}`, variant: 'tool', tool: found.tool })
+    } else {
+      rows.push({
+        key: `tool-${found.child.id}`,
+        variant: 'tool-child',
+        parent: found.parent,
+        child: found.child,
+      })
+    }
+  }
+  return rows
+})
 
 const expandedLogs = ref<Set<string>>(new Set())
 
@@ -89,11 +158,7 @@ function toggleLogExpand(id: string) {
 
 function expandAllLogs() {
   const ids = new Set<string>()
-  activeLogEntries.value.forEach(entry => ids.add(entry.id))
-  activeToolInvocations.value.forEach(tool => {
-    ids.add('tool-' + tool.id)
-    tool.children?.forEach(child => ids.add('tool-' + child.id))
-  })
+  logViewerRows.value.forEach((row) => ids.add(row.key))
   expandedLogs.value = ids
 }
 
@@ -319,100 +384,96 @@ const chatItems = computed(() =>
             <t-button size="small" variant="text" @click="collapseAllLogs">收起全部</t-button>
           </t-space>
         </div>
-        <div v-if="activeLogEntries.length === 0 && activeToolInvocations.length === 0" class="llm-log-empty">
+        <div v-if="logViewerRows.length === 0" class="llm-log-empty">
           当前消息暂无可展示的日志
         </div>
         <div v-else class="llm-log-list">
-          <!-- Tool Invocations -->
-          <div
-            v-for="tool in activeToolInvocations"
-            :key="'tool-' + tool.id"
-            class="llm-log-item llm-log-item--tool"
-          >
-            <div class="llm-log-header" @click="toggleLogExpand('tool-' + tool.id)" style="cursor: pointer;">
-              <div class="llm-log-meta">
-                <t-tag theme="warning" variant="light">Tool</t-tag>
-                <span class="llm-log-summary">{{ tool.displayName }} ({{ tool.name }})</span>
-                <span class="tool-status-text" :class="`tool-status-item--${tool.status}`">{{ formatToolStatus(tool.status) }}</span>
-              </div>
-              <div class="llm-log-header-right">
-                <t-button variant="text" shape="square" size="small">
-                  <component :is="expandedLogs.has('tool-' + tool.id) ? ChevronUpIcon : ChevronDownIcon" />
-                </t-button>
-              </div>
-            </div>
-            
-            <div v-show="expandedLogs.has('tool-' + tool.id)">
-              <div class="llm-log-section">
-                <div class="llm-log-section-title">调用参数</div>
-                <pre class="llm-log-payload">{{ stringifyLogPayload(tool.arguments) }}</pre>
-              </div>
-            </div>
-            
-            <!-- Children Tools -->
-            <div v-if="tool.children?.length" class="tool-children-logs">
-              <div
-                v-for="child in tool.children"
-                :key="'tool-' + child.id"
-                class="llm-log-item llm-log-item--tool-child"
-              >
-                <div class="llm-log-header" @click="toggleLogExpand('tool-' + child.id)" style="cursor: pointer;">
-                  <div class="llm-log-meta">
-                    <t-tag theme="warning" variant="outline">SubTool</t-tag>
-                    <span class="llm-log-summary">{{ child.displayName }} ({{ child.name }})</span>
-                    <span class="tool-status-text" :class="`tool-child-item--${child.status}`">{{ formatToolStatus(child.status) }}</span>
-                  </div>
-                  <div class="llm-log-header-right">
-                    <t-button variant="text" shape="square" size="small">
-                      <component :is="expandedLogs.has('tool-' + child.id) ? ChevronUpIcon : ChevronDownIcon" />
-                    </t-button>
-                  </div>
+          <template v-for="row in logViewerRows" :key="row.key">
+            <div
+              v-if="row.variant === 'tool'"
+              class="llm-log-item llm-log-item--tool"
+            >
+              <div class="llm-log-header" @click="toggleLogExpand(row.key)" style="cursor: pointer;">
+                <div class="llm-log-meta">
+                  <t-tag theme="warning" variant="light">Tool</t-tag>
+                  <span class="llm-log-summary">{{ row.tool.displayName }} ({{ row.tool.name }})</span>
+                  <span class="tool-status-text" :class="`tool-status-item--${row.tool.status}`">{{ formatToolStatus(row.tool.status) }}</span>
                 </div>
-                <div v-show="expandedLogs.has('tool-' + child.id)">
-                  <div class="llm-log-section">
-                    <div class="llm-log-section-title">调用参数</div>
-                    <pre class="llm-log-payload">{{ stringifyLogPayload(child.arguments) }}</pre>
-                  </div>
+                <div class="llm-log-header-right">
+                  <span v-if="activeLogMessage" class="llm-log-time">{{ formatTime(activeLogMessage.timestamp) }}</span>
+                  <t-button variant="text" shape="square" size="small">
+                    <component :is="expandedLogs.has(row.key) ? ChevronUpIcon : ChevronDownIcon" />
+                  </t-button>
+                </div>
+              </div>
+
+              <div v-show="expandedLogs.has(row.key)">
+                <div class="llm-log-section">
+                  <div class="llm-log-section-title">调用参数</div>
+                  <pre class="llm-log-payload">{{ stringifyLogPayload(row.tool.arguments) }}</pre>
                 </div>
               </div>
             </div>
-          </div>
 
-          <!-- LLM Logs -->
-          <div
-            v-for="entry in activeLogEntries"
-            :key="entry.id"
-            class="llm-log-item"
-            :class="`llm-log-item--${entry.direction}`"
-          >
-            <div class="llm-log-header" @click="toggleLogExpand(entry.id)" style="cursor: pointer;">
-              <div class="llm-log-meta">
-                <t-tag :theme="entry.direction === 'request' ? 'primary' : 'success'" variant="light">
-                  {{ formatLogDirection(entry.direction) }}
-                </t-tag>
-                <span class="llm-log-summary">{{ entry.summary }}</span>
-              </div>
-              <div class="llm-log-header-right">
-                <span class="llm-log-time">{{ formatLogTime(entry.timestamp) }}</span>
-                <t-button variant="text" shape="square" size="small">
-                  <component :is="expandedLogs.has(entry.id) ? ChevronUpIcon : ChevronDownIcon" />
-                </t-button>
-              </div>
-            </div>
-
-            <div v-show="expandedLogs.has(entry.id)">
-              <div v-if="entry.modelName" class="llm-log-model">
-                模型：{{ entry.modelName }}
-              </div>
-
-              <div class="llm-log-section">
-                <div class="llm-log-section-title">
-                  {{ entry.direction === 'request' ? '送给大模型的参数' : '大模型返回的内容' }}
+            <div
+              v-else-if="row.variant === 'tool-child'"
+              class="llm-log-item llm-log-item--tool-child"
+            >
+              <div class="llm-log-header" @click="toggleLogExpand(row.key)" style="cursor: pointer;">
+                <div class="llm-log-meta">
+                  <t-tag theme="warning" variant="outline">SubTool</t-tag>
+                  <span class="llm-log-summary">{{ row.child.displayName }} ({{ row.child.name }})</span>
+                  <span class="tool-status-text" :class="`tool-child-item--${row.child.status}`">{{ formatToolStatus(row.child.status) }}</span>
                 </div>
-                <pre class="llm-log-payload">{{ stringifyLogPayload(entry.direction === 'request' ? entry.request : entry.response) }}</pre>
+                <div class="llm-log-header-right">
+                  <span v-if="activeLogMessage" class="llm-log-time">{{ formatTime(activeLogMessage.timestamp) }}</span>
+                  <t-button variant="text" shape="square" size="small">
+                    <component :is="expandedLogs.has(row.key) ? ChevronUpIcon : ChevronDownIcon" />
+                  </t-button>
+                </div>
+              </div>
+              <div v-show="expandedLogs.has(row.key)">
+                <div class="llm-log-section">
+                  <div class="llm-log-section-title">调用参数</div>
+                  <pre class="llm-log-payload">{{ stringifyLogPayload(row.child.arguments) }}</pre>
+                </div>
               </div>
             </div>
-          </div>
+
+            <div
+              v-else
+              class="llm-log-item"
+              :class="`llm-log-item--${row.entry.direction}`"
+            >
+              <div class="llm-log-header" @click="toggleLogExpand(row.key)" style="cursor: pointer;">
+                <div class="llm-log-meta">
+                  <t-tag :theme="row.entry.direction === 'request' ? 'primary' : 'success'" variant="light">
+                    {{ formatLogDirection(row.entry.direction) }}
+                  </t-tag>
+                  <span class="llm-log-summary">{{ row.entry.summary }}</span>
+                </div>
+                <div class="llm-log-header-right">
+                  <span class="llm-log-time">{{ formatLogTime(row.entry.timestamp) }}</span>
+                  <t-button variant="text" shape="square" size="small">
+                    <component :is="expandedLogs.has(row.key) ? ChevronUpIcon : ChevronDownIcon" />
+                  </t-button>
+                </div>
+              </div>
+
+              <div v-show="expandedLogs.has(row.key)">
+                <div v-if="row.entry.modelName" class="llm-log-model">
+                  模型：{{ row.entry.modelName }}
+                </div>
+
+                <div class="llm-log-section">
+                  <div class="llm-log-section-title">
+                    {{ row.entry.direction === 'request' ? '送给大模型的参数' : '大模型返回的内容' }}
+                  </div>
+                  <pre class="llm-log-payload">{{ stringifyLogPayload(row.entry.direction === 'request' ? row.entry.request : row.entry.response) }}</pre>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
       </div>
     </t-dialog>

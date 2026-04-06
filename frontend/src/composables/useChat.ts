@@ -3,6 +3,11 @@ import { createTask, getEventSourceUrl } from '../services/api'
 import { agentUrl } from '../services/config'
 import { useUser } from './useUser'
 import { type LlmLogEntry, isLlmLogEvent, mergeLlmLogEntries } from '../utils/llmLog'
+import {
+  extractArgumentsFromToolCallPayload,
+  extractArgumentsFromToolResultMessage,
+  mergeToolArgumentsField,
+} from '../utils/toolInvocationUtils'
 
 export type ToolInvocationStatus = 'running' | 'completed' | 'failed'
 
@@ -23,6 +28,10 @@ export interface ToolInvocation {
 
 export type { LlmLogEntry } from '../utils/llmLog'
 
+export type LogTimelineEntry =
+  | { kind: 'tool'; id: string }
+  | { kind: 'llm'; id: string }
+
 export interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -30,6 +39,8 @@ export interface Message {
   timestamp: number
   toolInvocations?: ToolInvocation[]
   llmLogs?: LlmLogEntry[]
+  /** 调用日志弹窗：按 SSE 到达顺序交错 Tool 与 LLM（仅本轮 assistant） */
+  logTimeline?: LogTimelineEntry[]
 }
 
 function asArray<T>(value: T | T[] | undefined | null): T[] {
@@ -95,9 +106,17 @@ export function provideChat() {
 
   function upsertLlmLogEntry(entry: LlmLogEntry) {
     updateLastAssistantMessage((last) => {
+      const prevLogs = last.llmLogs ?? []
+      const wasNew = !prevLogs.some((e) => e.id === entry.id)
+      const llmLogs = mergeLlmLogEntries(prevLogs, entry)
+      const logTimeline = [...(last.logTimeline ?? [])]
+      if (wasNew) {
+        logTimeline.push({ kind: 'llm', id: entry.id })
+      }
       return {
         ...last,
-        llmLogs: mergeLlmLogEntries(last.llmLogs ?? [], entry),
+        llmLogs,
+        logTimeline,
       }
     })
   }
@@ -278,6 +297,7 @@ export function provideChat() {
               displayName: describeToolName(toolName),
               kind: inferToolKind(toolName),
               status: 'running' as ToolInvocationStatus,
+              arguments: extractArgumentsFromToolCallPayload(toolCall),
               children: [],
             }
           })
@@ -296,6 +316,7 @@ export function provideChat() {
         displayName: describeToolName(toolName),
         kind: inferToolKind(toolName),
         status: content.startsWith('error') ? 'failed' : 'completed',
+        arguments: extractArgumentsFromToolResultMessage(message),
         children: [],
       }]
     })
@@ -342,7 +363,7 @@ export function provideChat() {
       kind: toolEvent.kind,
       status: toolEvent.status,
       summary: toolEvent.summary,
-      arguments: toolEvent.arguments ?? previous?.arguments,
+      arguments: mergeToolArgumentsField(previous?.arguments, toolEvent.arguments),
       children: previous?.children ?? [],
     }
 
@@ -353,6 +374,17 @@ export function provideChat() {
     }
 
     return nextChildren
+  }
+
+  function appendToolTimelineEntry(toolId: string) {
+    updateLastAssistantMessage((last) => {
+      const logTimeline = [...(last.logTimeline ?? [])]
+      if (logTimeline.some((t) => t.kind === 'tool' && t.id === toolId)) {
+        return last
+      }
+      logTimeline.push({ kind: 'tool', id: toolId })
+      return { ...last, logTimeline }
+    })
   }
 
   function upsertToolInvocation(toolEvent: {
@@ -437,7 +469,7 @@ export function provideChat() {
         kind: toolEvent.kind,
         status: toolEvent.status,
         summary: toolEvent.summary,
-        arguments: toolEvent.arguments ?? previousTool?.arguments,
+        arguments: mergeToolArgumentsField(previousTool?.arguments, toolEvent.arguments),
         executionMode: toolEvent.executionMode,
         executionLabel: toolEvent.executionLabel,
         children: previousTool?.children ?? [],
@@ -504,6 +536,7 @@ export function provideChat() {
         timestamp: Date.now(),
         toolInvocations: [],
         llmLogs: [],
+        logTimeline: [],
       })
 
       const eventSource = new EventSource(url)
@@ -531,6 +564,7 @@ export function provideChat() {
 
             if (isToolStatusEvent(data)) {
               upsertToolInvocation(data)
+              appendToolTimelineEntry(data.toolId)
               return
             }
 
@@ -543,9 +577,11 @@ export function provideChat() {
                   displayName: toolInvocation.displayName,
                   kind: toolInvocation.kind,
                   status: toolInvocation.status,
+                  arguments: toolInvocation.arguments,
                   executionMode: toolInvocation.executionMode,
                   executionLabel: toolInvocation.executionLabel,
                 })
+                appendToolTimelineEntry(toolInvocation.id)
               })
             }
 
@@ -616,6 +652,7 @@ export function provideChat() {
             timestamp: Date.now(),
             toolInvocations: [],
             llmLogs: [],
+            logTimeline: [],
           })
         }
     } catch (e) {

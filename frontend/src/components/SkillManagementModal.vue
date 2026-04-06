@@ -8,6 +8,7 @@ import {
   getConfigKindOptions,
   isApiDraft,
   isSshDraft,
+  isTemplateDraft,
   isOpenClawDraft,
   getPresetLabel,
   parseSkillDraft,
@@ -27,6 +28,7 @@ const {
   updateSkill,
   deleteSkill,
   toggleSkillEnabled,
+  fetchSkill,
 } = useSkillHub();
 
 const isFormVisible = ref(false);
@@ -48,11 +50,13 @@ const configKindOptions = getConfigKindOptions();
 
 const currentConfigKind = computed<ConfigKind>(() => {
   if (isApiDraft(configDraft.value)) return 'api';
+  if (isTemplateDraft(configDraft.value)) return 'template';
   return 'ssh';
 });
 
 const apiDraft = computed(() => (isApiDraft(configDraft.value) ? configDraft.value : null));
 const sshDraft = computed(() => (isSshDraft(configDraft.value) ? configDraft.value : null));
+const templateDraft = computed(() => (isTemplateDraft(configDraft.value) ? configDraft.value : null));
 const openClawDraft = computed(() => (isOpenClawDraft(configDraft.value) ? configDraft.value : null));
 
 const suggestedTools = computed(() => {
@@ -88,19 +92,27 @@ function openCreateForm() {
   isFormVisible.value = true;
 }
 
-function openEditForm(skill: Skill) {
-  isEditMode.value = true;
-  currentId.value = skill.id;
-  formData.name = skill.name;
-  formData.description = skill.description || '';
-  formData.executionMode = skill.executionMode ?? 'CONFIG';
-  formData.enabled = skill.enabled;
-  formData.requiresConfirmation = skill.requiresConfirmation ?? false;
-  rawConfiguration.value = skill.configuration || '{}';
-  const parsed = parseSkillDraft(formData.executionMode, rawConfiguration.value);
-  parseError.value = parsed.error;
-  configDraft.value = parsed.draft ?? createDefaultSkillDraft(formData.executionMode);
-  isFormVisible.value = true;
+async function openEditForm(skillSummary: Skill) {
+  try {
+    isLoading.value = true;
+    const skill = await fetchSkill(skillSummary.id);
+    isEditMode.value = true;
+    currentId.value = skill.id;
+    formData.name = skill.name;
+    formData.description = skill.description || '';
+    formData.executionMode = skill.executionMode ?? 'CONFIG';
+    formData.enabled = skill.enabled;
+    formData.requiresConfirmation = skill.requiresConfirmation ?? false;
+    rawConfiguration.value = skill.configuration || '{}';
+    const parsed = parseSkillDraft(formData.executionMode, rawConfiguration.value);
+    parseError.value = parsed.error;
+    configDraft.value = parsed.draft ?? createDefaultSkillDraft(formData.executionMode);
+    isFormVisible.value = true;
+  } catch (e) {
+    MessagePlugin.error(`Failed to load skill details: ${e instanceof Error ? e.message : 'Unknown error'}`);
+  } finally {
+    isLoading.value = false;
+  }
 }
 
 function handleExecutionModeChange(value: string) {
@@ -230,8 +242,8 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
         :data="skills"
         row-key="id"
         :columns="[
-          { colKey: 'name', title: 'Name' },
-          { colKey: 'description', title: 'Description' },
+          { colKey: 'name', title: '名称' },
+          { colKey: 'description', title: '技能介绍' },
           { colKey: 'executionMode', title: '类型', width: 120 },
           { colKey: 'enabled', title: 'Enabled' },
           { colKey: 'operations', title: '操作', width: 160 }
@@ -277,10 +289,10 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
     @confirm="handleSubmit"
   >
     <t-form :data="formData" label-align="top">
-      <t-form-item label="Name" name="name">
+      <t-form-item label="名称" name="name">
         <t-input v-model="formData.name" placeholder="例如：获取时间" />
       </t-form-item>
-      <t-form-item label="Description" name="description">
+      <t-form-item label="技能介绍" name="description">
         <t-textarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
       </t-form-item>
       <t-form-item label="Execution Mode" name="executionMode">
@@ -368,6 +380,16 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
           </t-form-item>
           <t-form-item label="只读模式" name="sshReadOnly">
             <t-checkbox v-model="sshDraft.readOnly">该 SSH 预配置 Skill 只允许只读命令</t-checkbox>
+          </t-form-item>
+        </template>
+
+        <template v-else-if="templateDraft">
+          <t-form-item label="提示词" name="templatePrompt">
+            <t-textarea
+              v-model="templateDraft.prompt"
+              :autosize="{ minRows: 6, maxRows: 16 }"
+              placeholder="输入可复用的提示词文本"
+            />
           </t-form-item>
         </template>
       </template>

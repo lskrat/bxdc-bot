@@ -215,7 +215,7 @@ export class LoggerService {
   }
 
   private sanitizeValue(value: any, depth = 0): any {
-    if (depth > 4) return '[truncated]';
+    if (depth > 8) return '[truncated]';
     if (value == null) return value;
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return value;

@@ -4,6 +4,7 @@ import { z } from "zod";
 import axios from "axios";
 import Ajv from "ajv";
 import addFormats from "ajv-formats";
+import { pinyin } from "pinyin-pro";
 
 const ajv = new Ajv({ allErrors: true, useDefaults: true });
 addFormats(ajv);
@@ -80,9 +81,9 @@ interface ExtendedSkillConfig {
   orchestration?: {
     mode?: string;
   };
+  prompt?: string;
   headers?: Record<string, string>;
   query?: Record<string, string | number | boolean>;
-  // New fields for refactored API Skill flow
   interfaceDescription?: string;
   parameterContract?: {
     type: "object";
@@ -127,7 +128,7 @@ function isServerMonitorSkillConfig(config: ExtendedSkillConfig): boolean {
 }
 
 interface SkillGeneratorInput {
-  targetType?: "api" | "ssh" | "openclaw";
+  targetType?: "api" | "ssh" | "openclaw" | "template";
   rawDescription?: string;
   name?: string;
   description?: string;
@@ -144,6 +145,8 @@ interface SkillGeneratorInput {
   // OPENCLAW specific
   systemPrompt?: string;
   allowedTools?: string[];
+  // Template specific
+  prompt?: string;
   // Common
   testInput?: Record<string, unknown>;
   enabled?: boolean;
@@ -161,12 +164,23 @@ const gatewayExtendedToolRegistry = new Map<string, GatewayToolMetadata>();
 const gatewayExtendedToolIdRegistry = new Map<number, GatewayToolMetadata>();
 
 function normalizeToolName(name: string, id: number): string {
-  const normalized = name
+  let processedName = name;
+  if (/[\u4e00-\u9fff]/.test(name)) {
+    try {
+      processedName = pinyin(name, { toneType: "none", type: "array" }).join(" ");
+    } catch {
+      processedName = name;
+    }
+  }
+  const normalized = processedName
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-  return normalized ? `extended_${normalized}` : `extended_skill_${id}`;
+  const prefix = "extended_";
+  const maxLen = 64 - prefix.length;
+  const truncated = normalized.substring(0, maxLen).replace(/_+$/, "");
+  return truncated ? `${prefix}${truncated}` : `extended_skill_${id}`;
 }
 
 function normalizeExecutionMode(executionMode?: string): "CONFIG" | "OPENCLAW" {
@@ -219,13 +233,106 @@ export function describeGatewayExtendedTool(toolName: string): { displayName: st
   };
 }
 
+function normalizeExtendedConfig(cfg: ExtendedSkillConfig): ExtendedSkillConfig {
+  const next: ExtendedSkillConfig = { ...cfg };
+  const rawPc = (cfg as { parameterContract?: unknown }).parameterContract;
+  if (typeof rawPc === "string" && rawPc.trim()) {
+    try {
+      const parsed = JSON.parse(rawPc) as ExtendedSkillConfig["parameterContract"];
+      if (parsed && typeof parsed === "object") {
+        next.parameterContract = parsed as ExtendedSkillConfig["parameterContract"];
+      }
+    } catch {
+      // keep original
+    }
+  }
+  return next;
+}
+
 function parseSkillConfig(skill: GatewaySkill): ExtendedSkillConfig {
   if (!skill.configuration || !skill.configuration.trim()) return {};
   try {
     const parsed = JSON.parse(skill.configuration);
-    return (parsed && typeof parsed === "object") ? parsed as ExtendedSkillConfig : {};
+    if (!parsed || typeof parsed !== "object") return {};
+    return normalizeExtendedConfig(parsed as ExtendedSkillConfig);
   } catch {
     return {};
+  }
+}
+
+/**
+ * Values that carry no real argument (placeholders). Numbers/booleans are never treated as empty.
+ * Objects/arrays are empty only if they have no substantive leaves.
+ */
+function isEmptyishValue(value: unknown, depth = 0): boolean {
+  if (depth > 12) return false;
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (typeof value === "number" || typeof value === "boolean") return false;
+  if (Array.isArray(value)) {
+    return value.length === 0 || value.every((v) => isEmptyishValue(v, depth + 1));
+  }
+  if (typeof value === "object") {
+    const keys = Object.keys(value as object);
+    if (keys.length === 0) return true;
+    return keys.every((k) => isEmptyishValue((value as Record<string, unknown>)[k], depth + 1));
+  }
+  return false;
+}
+
+/**
+ * True when input is missing, or JSON is {} / only placeholder fields (e.g. {"symbol":""}, {"query":{}}).
+ */
+function isEmptyApiToolInput(input: string): boolean {
+  if (!input?.trim()) return true;
+  const payload = parseToolInput(input);
+  const keys = Object.keys(payload);
+  if (keys.length === 0) return true;
+  return keys.every((k) => isEmptyishValue(payload[k]));
+}
+
+function hasApiProgressiveDisclosureMaterial(config: ExtendedSkillConfig): boolean {
+  const desc = typeof config.interfaceDescription === "string" && config.interfaceDescription.trim().length > 0;
+  const pc = config.parameterContract;
+  const hasContract = pc != null && typeof pc === "object";
+  return desc || hasContract;
+}
+
+function appendParameterContractToToolDescription(
+  baseDescription: string,
+  config: ExtendedSkillConfig,
+): string {
+  const contract = config.parameterContract as Record<string, unknown> | undefined;
+  if (!contract || typeof contract !== "object") {
+    return baseDescription;
+  }
+
+  const props = contract.type === "object"
+    && contract.properties
+    && typeof contract.properties === "object"
+    && !Array.isArray(contract.properties)
+    ? (contract.properties as Record<string, { type?: string; description?: string; enum?: string[]; default?: unknown }>)
+    : null;
+
+  if (props && Object.keys(props).length > 0) {
+    const requiredList = Array.isArray(contract.required) ? contract.required as string[] : [];
+    const lines = Object.entries(props)
+      .map(([key, prop]) => {
+        const req = requiredList.includes(key) ? " (required)" : "";
+        const desc = prop?.description ? `: ${prop.description}` : "";
+        const type = prop?.type ? ` [${prop.type}]` : "";
+        const enums = Array.isArray(prop?.enum) ? ` (enum: ${prop.enum.join(", ")})` : "";
+        const def = prop?.default !== undefined ? ` (default: ${JSON.stringify(prop.default)})` : "";
+        return `  - ${key}${req}${type}${desc}${enums}${def}`;
+      })
+      .join("\n");
+    return `${baseDescription}\n\nParameters:\n${lines}`;
+  }
+
+  try {
+    return `${baseDescription}\n\nParameter contract (JSON Schema):\n${JSON.stringify(contract, null, 2)}`;
+  } catch {
+    return baseDescription;
   }
 }
 
@@ -306,6 +413,10 @@ function deriveSkillName(input: SkillGeneratorInput): string {
     return "Generated OPENCLAW Skill";
   }
 
+  if (input.targetType === "template") {
+    return "Generated Template Skill";
+  }
+
   return "Generated Skill";
 }
 
@@ -330,6 +441,10 @@ function deriveSkillDescription(input: SkillGeneratorInput, name: string): strin
 
   if (input.targetType === "openclaw") {
     return `${name}。自主规划执行任务。`;
+  }
+
+  if (input.targetType === "template") {
+    return `${name}。可复用的提示词模板。`;
   }
 
   return name;
@@ -407,8 +522,12 @@ function buildGeneratedSkill(input: SkillGeneratorInput): {
     if (!input.systemPrompt?.trim()) {
       missingFields.push("systemPrompt");
     }
+  } else if (targetType === "template") {
+    if (!input.prompt?.trim()) {
+      missingFields.push("prompt");
+    }
   } else {
-    missingFields.push("targetType(api|ssh|openclaw)");
+    missingFields.push("targetType(api|ssh|openclaw|template)");
   }
 
   if (missingFields.length > 0) {
@@ -426,10 +545,10 @@ function buildGeneratedSkill(input: SkillGeneratorInput): {
       operation: normalizeGeneratedOperation(name),
       method: input.method?.trim().toUpperCase(),
       endpoint: input.endpoint?.trim(),
-      headers: input.headers || {},
-      query: input.query || {},
-      interfaceDescription: input.interfaceDescription?.trim(),
-      parameterContract: input.parameterContract,
+      ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
+      ...(input.query && Object.keys(input.query).length > 0 ? { query: input.query } : {}),
+      ...(input.interfaceDescription?.trim() ? { interfaceDescription: input.interfaceDescription.trim() } : {}),
+      ...(input.parameterContract ? { parameterContract: input.parameterContract } : {}),
     };
   } else if (targetType === "ssh") {
     config = {
@@ -443,8 +562,15 @@ function buildGeneratedSkill(input: SkillGeneratorInput): {
   } else if (targetType === "openclaw") {
     executionMode = "OPENCLAW";
     config = {
+      kind: "openclaw",
       systemPrompt: input.systemPrompt?.trim(),
       allowedTools: input.allowedTools || [],
+      orchestration: { mode: "serial" },
+    };
+  } else if (targetType === "template") {
+    config = {
+      kind: "template",
+      prompt: input.prompt?.trim(),
     };
   }
 
@@ -599,6 +725,10 @@ async function executeConfiguredApiSkill(
         error: "Parameter validation failed",
         details: errors,
         expectedContract: config.parameterContract,
+        ...(config.interfaceDescription?.trim()
+          ? { interfaceDescription: config.interfaceDescription.trim() }
+          : {}),
+        hint: "Do not use empty strings as placeholders for required fields. Omit keys or use valid values per the contract, then call this tool again.",
       });
     }
   }
@@ -913,67 +1043,76 @@ export async function loadGatewayExtendedTools(
 
     const resolvedTools: DynamicTool[] = [];
     extensionSkills.forEach((skill) => {
-      const config = parseSkillConfig(skill);
+      console.log(`[DEBUG] skill ${skill.id} configuration:`, skill.configuration);
+      const config = skill.configuration ? parseSkillConfig(skill) : {} as ExtendedSkillConfig;
       const toolName = normalizeToolName(skill.name || `skill_${skill.id}`, skill.id);
       registerGatewayToolMetadata(toolName, skill);
 
       let toolDescription = skill.description || `Execute extended skill: ${skill.name}`;
-      if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
-        const props = Object.entries(config.parameterContract.properties)
-          .map(([key, prop]: [string, any]) => {
-            const req = config.parameterContract?.required?.includes(key) ? " (required)" : "";
-            const desc = prop.description ? `: ${prop.description}` : "";
-            const type = prop.type ? ` [${prop.type}]` : "";
-            const enums = prop.enum ? ` (enum: ${prop.enum.join(", ")})` : "";
-            const def = prop.default !== undefined ? ` (default: ${prop.default})` : "";
-            return `  - ${key}${req}${type}${desc}${enums}${def}`;
-          })
-          .join("\n");
-        toolDescription += `\n\nParameters:\n${props}`;
-      }
+      toolDescription = appendParameterContractToToolDescription(toolDescription, config);
 
       const dynamicTool = new DynamicTool({
         name: toolName,
         description: toolDescription,
         func: async (input: string) => {
           try {
-            const executionMode = normalizeExecutionMode(skill.executionMode);
-            if (isCurrentTimeSkillConfig(config)) {
-              return await executeCurrentTimeSkill(gatewayUrl, apiToken, config);
+            // Lazy load full skill details if configuration is missing
+            let currentSkill = skill;
+            let currentConfig = config;
+            if (!currentSkill.configuration) {
+              const detailResponse = await axios.get(`${gatewayUrl}/api/skills/${skill.id}`, {
+                headers: {
+                  "X-Agent-Token": apiToken,
+                },
+              });
+              currentSkill = detailResponse.data as GatewaySkill;
+              currentConfig = parseSkillConfig(currentSkill);
             }
-            if (isServerMonitorSkillConfig(config)) {
-              return await executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, input, config);
+
+            const executionMode = normalizeExecutionMode(currentSkill.executionMode);
+            if (isCurrentTimeSkillConfig(currentConfig)) {
+              return await executeCurrentTimeSkill(gatewayUrl, apiToken, currentConfig);
             }
-            if (executionMode === "OPENCLAW" || config.kind === "openclaw") {
+            if (isServerMonitorSkillConfig(currentConfig)) {
+              return await executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, input, currentConfig);
+            }
+            if (executionMode === "OPENCLAW" || currentConfig.kind === "openclaw") {
               return await executeOpenClawSkill(
                 options?.plannerModel,
                 toolName,
                 input,
-                config,
+                currentConfig,
                 Array.from(toolLookup.values()),
               );
             }
-            if ((config.kind || "").toLowerCase() === "api" || config.operation === "api-request" || config.operation === "juhe-joke-list") {
-              if (config.interfaceDescription && (!input || input === "{}")) {
-                // Progressive disclosure: If the LLM calls the tool without parameters (or empty {}),
-                // we return the detailed interface description and parameter contract so it can call it again with the right parameters.
+            if ((currentConfig.kind || "").toLowerCase() === "template") {
+              return JSON.stringify({
+                kind: "template",
+                prompt: currentConfig.prompt || "",
+              });
+            }
+            if ((currentConfig.kind || "").toLowerCase() === "api" || currentConfig.operation === "api-request" || currentConfig.operation === "juhe-joke-list") {
+              if (hasApiProgressiveDisclosureMaterial(currentConfig) && isEmptyApiToolInput(input)) {
+                // Progressive disclosure: empty / "{}" / whitespace-only object → return docs + contract for a second call.
                 return JSON.stringify({
                   status: "REQUIRE_PARAMETERS",
                   message: "This is an API skill. Please read the interface description and parameter contract, then call this tool again with the correct parameters.",
-                  interfaceDescription: config.interfaceDescription,
-                  parameterContract: config.parameterContract || "No strict contract defined. Please infer from description.",
+                  interfaceDescription: currentConfig.interfaceDescription?.trim()
+                    || "No separate interface description. Use the parameter contract and tool description above.",
+                  parameterContract: currentConfig.parameterContract
+                    ?? "No strict contract defined. Please infer from description.",
                 });
               }
-              return await executeConfiguredApiSkill(gatewayUrl, apiToken, input, config);
+              return await executeConfiguredApiSkill(gatewayUrl, apiToken, input, currentConfig);
             }
-            if ((config.kind || "").toLowerCase() === "ssh") {
+            if ((currentConfig.kind || "").toLowerCase() === "ssh") {
               return JSON.stringify({
-                error: `Unsupported ssh preset for skill: ${readPreset(config) || "unknown"}`,
+                error: `Unsupported ssh preset for skill: ${readPreset(currentConfig) || "unknown"}`,
               });
             }
             return JSON.stringify({
-              error: `Unsupported extended skill operation: ${config.operation || "unknown"}`,
-              skill: skill.name,
+              error: `Unsupported extended skill operation: ${currentConfig.operation || "unknown"}`,
+              skill: currentSkill.name,
             });
           } catch (error) {
             return `Error executing extended skill "${skill.name}": ${formatToolError(error)}`;
@@ -996,7 +1135,7 @@ export async function loadGatewayExtendedTools(
 
 export class JavaSkillGeneratorTool extends Tool {
   name = "skill_generator";
-  description = "Generates an EXTENSION skill (API, SSH, or OPENCLAW) from a user's description, saves it to SkillGateway, and immediately validates it once. Input must be a JSON string with 'targetType' (one of: 'api', 'ssh', 'openclaw'). For 'api', include 'method', 'endpoint', 'interfaceDescription' (detailed docs), and 'parameterContract' (JSON schema). For 'ssh', include 'command' (saved as canonical kind=ssh with preset=server-resource-status, using server_lookup + ssh_executor; runtime input should provide serverName or host). For 'openclaw', include 'systemPrompt'. You can also include 'rawDescription', 'name', 'description', 'allowOverwrite', etc. If required fields are missing, do not guess; ask the user for them.";
+  description = "Generates an EXTENSION skill (API, SSH, OPENCLAW, or Template) from a user's description, saves it to SkillGateway, and immediately validates it once. Input must be a JSON string with 'targetType' (one of: 'api', 'ssh', 'openclaw', 'template'). For 'api', include 'method', 'endpoint', 'interfaceDescription' (detailed docs), and 'parameterContract' (JSON schema). For 'ssh', include 'command' (saved as canonical kind=ssh with preset=server-resource-status, using server_lookup + ssh_executor; runtime input should provide serverName or host). For 'openclaw', include 'systemPrompt'. For 'template', include 'prompt' (a reusable prompt-only text with no HTTP/SSH execution). You can also include 'rawDescription', 'name', 'description', 'allowOverwrite', etc. If required fields are missing, do not guess; ask the user for them.";
 
   private gatewayUrl: string;
   private apiToken: string;

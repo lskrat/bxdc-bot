@@ -43,6 +43,20 @@ public class Skill {
         updatedAt = LocalDateTime.now();
     }
 
+    public Skill() {}
+
+    public Skill(Long id, String name, String description, String type, String executionMode, boolean enabled, boolean requiresConfirmation, LocalDateTime createdAt, LocalDateTime updatedAt) {
+        this.id = id;
+        this.name = name;
+        this.description = description;
+        this.type = type;
+        this.executionMode = executionMode;
+        this.enabled = enabled;
+        this.requiresConfirmation = requiresConfirmation;
+        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
+    }
+
     public Long getId() {
         return id;
     }

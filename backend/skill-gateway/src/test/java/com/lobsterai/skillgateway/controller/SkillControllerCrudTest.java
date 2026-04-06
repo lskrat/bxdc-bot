@@ -52,10 +52,9 @@ class SkillControllerCrudTest {
         mockMvc.perform(get("/api/skills"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(greaterThanOrEqualTo(4)))
-                .andExpect(jsonPath("$[*].name").value(hasItem("获取时间")))
                 .andExpect(jsonPath("$[*].name").value(hasItem("服务器资源状态")))
                 .andExpect(jsonPath("$[*].name").value(hasItem("查询距离生日还有几天")))
-                .andExpect(jsonPath("$[?(@.name=='获取时间')].executionMode").value(hasItem("CONFIG")))
+                .andExpect(jsonPath("$[?(@.name=='服务器资源状态')].executionMode").value(hasItem("CONFIG")))
                 .andExpect(jsonPath("$[?(@.name=='查询距离生日还有几天')].executionMode").value(hasItem("OPENCLAW")));
     }
 
@@ -230,5 +229,52 @@ class SkillControllerCrudTest {
                         .content(createBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.configuration").value("{\"kind\":\"ssh\",\"preset\":\"server-resource-status\",\"operation\":\"server-resource-status\",\"lookup\":\"server_lookup\",\"executor\":\"ssh_executor\",\"command\":\"uptime\",\"readOnly\":true}"));
+    }
+
+    @Test
+    void createSkill_acceptsTemplateConfig() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "template-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "A reusable prompt template",
+                  "type": "EXTENSION",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"template\\",\\"prompt\\":\\"你是一位专业的翻译助手。请将用户输入翻译为英文。\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.executionMode").value("CONFIG"))
+                .andExpect(jsonPath("$.configuration").value("{\"kind\":\"template\",\"prompt\":\"你是一位专业的翻译助手。请将用户输入翻译为英文。\"}"));
+    }
+
+    @Test
+    void createSkill_rejectsTemplateWithEmptyPrompt() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "template-empty-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "Template with empty prompt",
+                  "type": "EXTENSION",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"template\\",\\"prompt\\":\\"\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("prompt is required"));
     }
 }

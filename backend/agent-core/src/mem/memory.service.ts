@@ -5,18 +5,36 @@ import { LoggerService } from '../utils/logger.service';
 @Injectable()
 export class MemoryService implements OnModuleInit {
   private mem0Url: string;
+  private readonly mem0Enabled: boolean;
 
-  constructor(private readonly logger: LoggerService) {}
+  constructor(private readonly logger: LoggerService) {
+    this.mem0Enabled = this.readMem0EnabledFlag();
+  }
 
   onModuleInit() {
     this.mem0Url = process.env.MEM0_URL || 'http://39.104.81.41:8001';
+    if (!this.mem0Enabled) {
+      console.log('[MemoryService] mem0 is disabled (MEM0_ENABLED=false); search/store skipped');
+      return;
+    }
     console.log(`[MemoryService] Initialized with mem0 service at: ${this.mem0Url}`);
+  }
+
+  private readMem0EnabledFlag(): boolean {
+    const v = process.env.MEM0_ENABLED?.trim().toLowerCase();
+    if (v === 'false' || v === '0' || v === 'off' || v === 'no' || v === 'disabled') {
+      return false;
+    }
+    return true;
   }
 
   /**
    * Search for relevant memories based on user query using mem0 service
    */
   async searchMemories(query: string, userId?: string, limit = 10): Promise<string[]> {
+    if (!this.mem0Enabled) {
+      return [];
+    }
     if (!userId) {
       console.warn('[MemoryService] searchMemories skipped: userId is missing');
       return [];
@@ -92,6 +110,9 @@ export class MemoryService implements OnModuleInit {
     userText: string;
     assistantText: string;
   }) {
+    if (!this.mem0Enabled) {
+      return;
+    }
     if (!options.userId) {
       console.warn('[MemoryService] processTurn skipped: userId is missing');
       return;

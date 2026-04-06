@@ -25,7 +25,7 @@ interface ToolTraceContextValue {
 const toolTraceContext = new AsyncLocalStorage<ToolTraceContextValue>();
 
 export function sanitizeToolTraceArguments(value: unknown, depth = 0): unknown {
-  if (depth > 4) return "[truncated]";
+  if (depth > 8) return "[truncated]";
   if (value == null) return value;
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return value;

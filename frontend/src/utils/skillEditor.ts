@@ -1,5 +1,5 @@
 export type ExecutionMode = 'CONFIG' | 'OPENCLAW'
-export type ConfigKind = 'api' | 'ssh'
+export type ConfigKind = 'api' | 'ssh' | 'template'
 export type ApiPreset = 'none' | 'current-time'
 export type SshPreset = 'server-resource-status'
 
@@ -27,6 +27,11 @@ export interface SshConfigDraft {
   readOnly: boolean
 }
 
+export interface TemplateConfigDraft {
+  kind: 'template'
+  prompt: string
+}
+
 export interface OpenClawConfigDraft {
   kind: 'openclaw'
   systemPromptMarkdown: string
@@ -34,7 +39,7 @@ export interface OpenClawConfigDraft {
   orchestrationMode: 'serial'
 }
 
-export type SkillConfigDraft = ApiConfigDraft | SshConfigDraft | OpenClawConfigDraft
+export type SkillConfigDraft = ApiConfigDraft | SshConfigDraft | TemplateConfigDraft | OpenClawConfigDraft
 
 export interface ParseSkillDraftResult {
   draft: SkillConfigDraft | null
@@ -46,6 +51,7 @@ type JsonRecord = Record<string, unknown>
 const CONFIG_KIND_LABELS: Record<ConfigKind, string> = {
   api: 'API',
   ssh: 'SSH',
+  template: '模板',
 }
 
 const API_ALLOWED_KEYS = [
@@ -73,6 +79,8 @@ const SSH_ALLOWED_KEYS = [
   'command',
   'readOnly',
 ]
+
+const TEMPLATE_ALLOWED_KEYS = ['kind', 'prompt']
 
 const OPENCLAW_ALLOWED_KEYS = ['kind', 'systemPrompt', 'allowedTools', 'orchestration']
 
@@ -202,6 +210,14 @@ function parseLegacyMonitorDraft(configuration: JsonRecord): SshConfigDraft {
   }
 }
 
+function parseTemplateDraft(configuration: JsonRecord): TemplateConfigDraft {
+  ensureNoUnknownKeys(configuration, TEMPLATE_ALLOWED_KEYS)
+  return {
+    kind: 'template',
+    prompt: readString(configuration, 'prompt'),
+  }
+}
+
 function parseOpenClawDraft(configuration: JsonRecord): OpenClawConfigDraft {
   ensureNoUnknownKeys(configuration, OPENCLAW_ALLOWED_KEYS)
   const allowedTools = configuration.allowedTools
@@ -246,6 +262,13 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
     }
   }
 
+  if (configKind === 'template') {
+    return {
+      kind: 'template',
+      prompt: '',
+    }
+  }
+
     return {
       kind: 'api',
       preset: 'none',
@@ -284,6 +307,8 @@ export function parseSkillDraft(executionMode: ExecutionMode, configuration: str
         return { draft: parseLegacyMonitorDraft(parsed), error: null }
       case 'ssh':
         return { draft: parseSshDraft(parsed), error: null }
+      case 'template':
+        return { draft: parseTemplateDraft(parsed), error: null }
       case 'openclaw':
         throw new Error('CONFIG Skill 不能使用 openclaw 配置')
       default:
@@ -353,6 +378,13 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
     })
   }
 
+  if (draft.kind === 'template') {
+    return JSON.stringify({
+      kind: 'template',
+      prompt: requireNonEmpty(draft.prompt, '提示词'),
+    })
+  }
+
   throw new Error('CONFIG Skill 不能序列化为 openclaw 配置')
 }
 
@@ -367,6 +399,9 @@ export function getPresetLabel(kind: ConfigKind, preset: string): string {
   if (kind === 'api') {
     return preset === 'current-time' ? '当前时间' : '通用接口'
   }
+  if (kind === 'template') {
+    return '提示词模板'
+  }
   return '服务器状态巡检'
 }
 
@@ -376,6 +411,10 @@ export function isApiDraft(draft: SkillConfigDraft | null): draft is ApiConfigDr
 
 export function isSshDraft(draft: SkillConfigDraft | null): draft is SshConfigDraft {
   return draft?.kind === 'ssh'
+}
+
+export function isTemplateDraft(draft: SkillConfigDraft | null): draft is TemplateConfigDraft {
+  return draft?.kind === 'template'
 }
 
 export function isOpenClawDraft(draft: SkillConfigDraft | null): draft is OpenClawConfigDraft {

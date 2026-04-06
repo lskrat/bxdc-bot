@@ -196,18 +196,23 @@ export class AgentController {
     private readonly logger: LoggerService,
   ) {}
 
-  private emitToolEvents(subject: Subject<MessageEvent>, chunk: any, seenToolStatuses: Map<string, ToolStatus>) {
+  private emitToolEvents(
+    subject: Subject<MessageEvent>,
+    chunk: any,
+    seenToolStatuses: Map<string, ToolStatus>,
+    lastToolArguments: Map<string, unknown>,
+  ) {
     const chunkMessages = getChunkMessages(chunk);
     for (let messageIndex = 0; messageIndex < chunkMessages.length; messageIndex += 1) {
       const message = chunkMessages[messageIndex];
       const startedCalls = extractStartedToolCalls(message, messageIndex);
       for (const startedCall of startedCalls) {
-        this.emitToolEvent(subject, startedCall, seenToolStatuses);
+        this.emitToolEvent(subject, startedCall, seenToolStatuses, lastToolArguments);
       }
 
       const completedCall = extractCompletedToolCall(message);
       if (completedCall) {
-        this.emitToolEvent(subject, completedCall, seenToolStatuses);
+        this.emitToolEvent(subject, completedCall, seenToolStatuses, lastToolArguments);
       }
     }
   }
@@ -216,11 +221,21 @@ export class AgentController {
     subject: Subject<MessageEvent>,
     toolCall: ExtractedToolCall,
     seenToolStatuses: Map<string, ToolStatus>,
+    lastToolArguments: Map<string, unknown>,
   ) {
     const previousStatus = seenToolStatuses.get(toolCall.toolId);
     if (previousStatus === toolCall.status) return;
 
     seenToolStatuses.set(toolCall.toolId, toolCall.status);
+    const resolvedArguments =
+      toolCall.arguments !== undefined
+        ? toolCall.arguments
+        : lastToolArguments.get(toolCall.toolId);
+
+    if (toolCall.arguments !== undefined) {
+      lastToolArguments.set(toolCall.toolId, toolCall.arguments);
+    }
+
     const gatewayToolInfo = describeGatewayExtendedTool(toolCall.toolName);
     const toolInfo = gatewayToolInfo ?? this.skillManager.describeTool(toolCall.toolName);
     const event: ToolTraceEvent = {
@@ -230,7 +245,7 @@ export class AgentController {
       displayName: toolInfo.displayName,
       kind: toolInfo.kind,
       status: toolCall.status,
-      arguments: toolCall.arguments,
+      arguments: sanitizeToolTraceArguments(resolvedArguments),
       executionMode: gatewayToolInfo?.executionMode,
       executionLabel: gatewayToolInfo?.executionLabel,
     };
@@ -279,6 +294,7 @@ export class AgentController {
       async () => {
       let fullAssistantResponse = '';
       const seenToolStatuses = new Map<string, ToolStatus>();
+      const lastToolArguments = new Map<string, unknown>();
       try {
         const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
           subject.next({ data: JSON.stringify(event) });
@@ -322,7 +338,7 @@ export class AgentController {
 
         for await (const chunk of stream as any) {
           subject.next({ data: JSON.stringify(chunk) });
-          this.emitToolEvents(subject, chunk, seenToolStatuses);
+          this.emitToolEvents(subject, chunk, seenToolStatuses, lastToolArguments);
 
           // Try to extract assistant response from chunk for memory processing
           if (chunk && typeof chunk === 'object') {

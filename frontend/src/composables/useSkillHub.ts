@@ -34,6 +34,11 @@ export function getConfigSummary(configuration: string): ConfigSummary {
         kindLabel: 'SSH',
       }
     }
+    if (rawKind === 'template') {
+      return {
+        kindLabel: '模板',
+      }
+    }
     if (rawKind === 'time') {
       return {
         kindLabel: 'API',
@@ -140,6 +145,14 @@ export function useSkillHub() {
     }
   }
 
+  async function fetchSkill(id: number): Promise<Skill> {
+    const res = await fetch(apiUrl(`/api/skills/${id}`));
+    if (!res.ok) {
+      throw new Error(`Failed to fetch skill ${id}`);
+    }
+    return await res.json();
+  }
+
   async function createSkill(payload: Omit<Skill, 'id'>) {
     const res = await fetch(agentUrl('/features/skills'), {
       method: 'POST',
@@ -181,14 +194,15 @@ export function useSkillHub() {
   }
 
   async function toggleSkillEnabled(skill: Skill, enabled: boolean) {
+    const fullSkill = await fetchSkill(skill.id);
     await updateSkill(skill.id, {
-      name: skill.name,
-      description: skill.description,
-      type: skill.type,
-      executionMode: skill.executionMode ?? 'CONFIG',
-      configuration: skill.configuration,
+      name: fullSkill.name,
+      description: fullSkill.description,
+      type: fullSkill.type,
+      executionMode: fullSkill.executionMode ?? 'CONFIG',
+      configuration: fullSkill.configuration,
       enabled,
-      requiresConfirmation: skill.requiresConfirmation ?? false,
+      requiresConfirmation: fullSkill.requiresConfirmation ?? false,
     });
   }
 
@@ -205,6 +219,7 @@ export function useSkillHub() {
     closeSkillManagement,
     refreshSkills: fetchSkills,
     fetchSkills,
+    fetchSkill,
     createSkill,
     updateSkill,
     deleteSkill,

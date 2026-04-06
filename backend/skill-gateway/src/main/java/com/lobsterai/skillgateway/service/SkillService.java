@@ -22,7 +22,7 @@ public class SkillService {
     }
 
     public List<Skill> getAllSkills() {
-        return skillRepository.findAll();
+        return skillRepository.findAllSummary();
     }
 
     public Optional<Skill> getSkillById(Long id) {
@@ -125,6 +125,10 @@ public class SkillService {
                 normalized.remove("profile");
                 return normalized;
             }
+            case "template" -> {
+                normalized.put("kind", "template");
+                return normalized;
+            }
             default -> throw new IllegalArgumentException("Unsupported CONFIG kind: " + kind);
         }
     }
@@ -160,11 +164,8 @@ public class SkillService {
                 requiredText(root, "method");
                 requiredText(root, "endpoint");
                 optionalText(root, "preset");
-                optionalText(root, "responseWrapper");
                 optionalText(root, "responseTimestampField");
-                optionalText(root, "apiKeyField");
-                optionalText(root, "apiKey");
-                optionalText(root, "autoTimestampField");
+                optionalText(root, "interfaceDescription");
             }
             case "ssh" -> {
                 requiredText(root, "operation");
@@ -173,6 +174,9 @@ public class SkillService {
                 requiredText(root, "command");
                 optionalText(root, "preset");
                 optionalBoolean(root, "readOnly");
+            }
+            case "template" -> {
+                requiredText(root, "prompt");
             }
             case "time", "monitor" -> throw new IllegalArgumentException(
                     "Legacy CONFIG kind is no longer accepted directly. Use canonical kind api/ssh."
