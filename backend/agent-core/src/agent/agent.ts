@@ -1,5 +1,7 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
+import type { ClientOptions } from "openai";
+import { getLoggingFetchOrUndefined } from "../utils/llm-raw-http-log";
 import {
   JavaSshTool,
   JavaApiTool,
@@ -35,12 +37,21 @@ export class AgentFactory {
     skillManager?: SkillManager,
     userId?: string
   ) {
+    const openAiConfiguration: ClientOptions = {};
+    if (config?.baseUrl?.trim()) {
+      openAiConfiguration.baseURL = config.baseUrl.replace(/\/+$/, "");
+    }
+    const loggingFetch = getLoggingFetchOrUndefined();
+    if (loggingFetch) {
+      openAiConfiguration.fetch = loggingFetch;
+    }
+
     const model = new ChatOpenAI({
       modelName: config?.modelName || "gpt-4", // Or use OneAPI compatible model
       // Use `apiKey` — @langchain/openai v1 BaseChatOpenAI reads `apiKey`, not `openAIApiKey`, so user-configured keys were previously ignored.
       apiKey: openAiApiKey,
-      ...(config?.baseUrl
-        ? { configuration: { baseURL: config.baseUrl.replace(/\/+$/, "") } }
+      ...(Object.keys(openAiConfiguration).length > 0
+        ? { configuration: openAiConfiguration }
         : {}),
       temperature: 0,
       callbacks: config?.callbacks,

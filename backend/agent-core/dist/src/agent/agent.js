@@ -3,14 +3,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AgentFactory = void 0;
 const prebuilt_1 = require("@langchain/langgraph/prebuilt");
 const openai_1 = require("@langchain/openai");
+const llm_raw_http_log_1 = require("../utils/llm-raw-http-log");
 const java_skills_1 = require("../tools/java-skills");
 class AgentFactory {
     static async createAgent(gatewayUrl, apiToken, openAiApiKey, config, skillManager, userId) {
+        const openAiConfiguration = {};
+        if (config?.baseUrl?.trim()) {
+            openAiConfiguration.baseURL = config.baseUrl.replace(/\/+$/, "");
+        }
+        const loggingFetch = (0, llm_raw_http_log_1.getLoggingFetchOrUndefined)();
+        if (loggingFetch) {
+            openAiConfiguration.fetch = loggingFetch;
+        }
         const model = new openai_1.ChatOpenAI({
             modelName: config?.modelName || "gpt-4",
             apiKey: openAiApiKey,
-            ...(config?.baseUrl
-                ? { configuration: { baseURL: config.baseUrl.replace(/\/+$/, "") } }
+            ...(Object.keys(openAiConfiguration).length > 0
+                ? { configuration: openAiConfiguration }
                 : {}),
             temperature: 0,
             callbacks: config?.callbacks,
