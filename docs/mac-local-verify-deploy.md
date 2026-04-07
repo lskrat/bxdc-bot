@@ -127,7 +127,8 @@ MEM0_URL=http://127.0.0.1:8001
 - `JAVA_GATEWAY_TOKEN` 必须与 `skill-gateway` 一致
 - 如果本机没有部署 `mem0`，可以临时改成远端可用地址
 - 当前代码在未配置 `MEM0_URL` 时，会回退到默认地址 `http://39.104.81.41:8001`
-- 联调大模型 HTTP 时可将 `LLM_RAW_HTTP_LOG` 设为 `true`（或 `1` / `yes` / `on`），原始请求与响应会以 NDJSON 追加到 `backend/agent-core/logs/llmOrg.log`；**日志可能含密钥与用户内容**，默认关闭，勿在生产长期开启
+- 联调大模型 HTTP 时可将 `LLM_RAW_HTTP_LOG` 设为 `true`（或 `1` / `yes` / `on`），原始请求与响应会写入 `backend/agent-core/logs/llmOrg.log`（单个 JSON 数组、格式化；每次返回后插入 `----------------调用/返回----------------` 分割行，约保留最近 10 次往返）；**日志可能含密钥与用户内容**，默认关闭，勿在生产长期开启
+- 调试前端入参时可将 `AGENT_RUN_RAW_LOG` 设为 `true`，每次 `POST /agent/run` 的请求体会脱敏后追加到 `logs/agentRun.log`（可用 `AGENT_RUN_RAW_LOG_MAX_CHARS`、`AGENT_RUN_RAW_LOG_PATH` 调整）；**仍可能含用户对话原文**，默认关闭
 
 ### 4.3 Skill Gateway 配置
 

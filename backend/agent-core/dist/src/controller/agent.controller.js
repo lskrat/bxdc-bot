@@ -22,6 +22,7 @@ const logger_service_1 = require("../utils/logger.service");
 const java_skills_1 = require("../tools/java-skills");
 const tool_trace_context_1 = require("../tools/tool-trace-context");
 const llm_merge_1 = require("../utils/llm-merge");
+const agent_run_raw_log_1 = require("../utils/agent-run-raw-log");
 function asArray(value) {
     if (!value)
         return [];
@@ -226,6 +227,7 @@ let AgentController = class AgentController {
         const safeHistory = Array.isArray(history) ? history : [];
         const userId = context?.userId;
         const sessionId = context?.sessionId || 'default-session';
+        (0, agent_run_raw_log_1.logAgentRunRawIfEnabled)(body, { sessionId, userId });
         const subject = new rxjs_1.Subject();
         const gatewayUrl = process.env.JAVA_GATEWAY_URL || 'http://localhost:18080';
         const apiToken = process.env.JAVA_GATEWAY_TOKEN || 'your-secure-token-here';

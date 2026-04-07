@@ -3,7 +3,20 @@ import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
 const LOG_FILE_NAME = 'llmOrg.log';
-const MAX_BODY_CHARS = 512 * 1024;
+/** Each LLM HTTP round-trip logs request + response + section row; ~10 rounds ≈ 30 array entries. */
+const MAX_STORED_RECORDS = 30;
+const RAW_LOG_SECTION_LABEL = '----------------调用/返回----------------';
+const DEFAULT_MAX_BODY_CHARS = 512 * 1024;
+
+/** Serialize file writes so parallel fetches do not corrupt the JSON array. */
+let persistChain: Promise<void> = Promise.resolve();
+
+function maxBodyChars(): number {
+  const raw = process.env.LLM_RAW_HTTP_LOG_MAX_BODY_CHARS?.trim();
+  if (!raw) return DEFAULT_MAX_BODY_CHARS;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_BODY_CHARS;
+}
 
 const SENSITIVE_HEADER_NAMES = new Set([
   'authorization',
@@ -28,7 +41,8 @@ function ensureLogsDir(): void {
 }
 
 /**
- * When true, wraps the OpenAI client's fetch to append raw HTTP-ish records to logs/llmOrg.log.
+ * When true, wraps the OpenAI client's fetch to write raw HTTP-ish records to logs/llmOrg.log
+ * as a single JSON array (pretty-printed), with a section marker after each response and at most ~10 full round-trips kept.
  * Values: true, 1, yes, on (case-insensitive).
  */
 export function isLlmRawHttpLogEnabled(): boolean {
@@ -37,37 +51,106 @@ export function isLlmRawHttpLogEnabled(): boolean {
 }
 
 function truncateBody(text: string): { text: string; truncated: boolean } {
-  if (text.length <= MAX_BODY_CHARS) {
+  const limit = maxBodyChars();
+  if (text.length <= limit) {
     return { text, truncated: false };
   }
   return {
-    text: `${text.slice(0, MAX_BODY_CHARS)}\n...[truncated, ${text.length - MAX_BODY_CHARS} more chars]`,
+    text: `${text.slice(0, limit)}\n...[truncated, ${text.length - limit} more chars]`,
     truncated: true,
   };
 }
 
-function redactHeaders(headersInit: HeadersInit | undefined): Record<string, string> {
-  if (!headersInit) return {};
+/** When not truncated, parse JSON bodies into objects/arrays so the log file nests real JSON. */
+function tryParseJsonBody(text: string | undefined, truncated: boolean): unknown {
+  if (text === undefined) return undefined;
+  if (truncated) return text;
+  const t = text.trim();
+  if (t.length === 0) return '';
   try {
-    const h = new Headers(headersInit);
-    const out: Record<string, string> = {};
-    h.forEach((value, key) => {
-      const lk = key.toLowerCase();
-      out[key] = SENSITIVE_HEADER_NAMES.has(lk) ? '[REDACTED]' : value;
-    });
-    return out;
+    return JSON.parse(t) as unknown;
   } catch {
-    return { _parseError: 'could not read headers' };
+    return text;
   }
 }
 
-function appendRecord(record: Record<string, unknown>): void {
-  try {
-    ensureLogsDir();
-    fs.appendFileSync(logFilePath(), `${JSON.stringify(record)}\n`, 'utf8');
-  } catch {
-    // Never break LLM calls due to logging
+/**
+ * Headers actually used by fetch(request, init): init headers override / add to request.headers.
+ */
+function effectiveRequestHeaders(input: RequestInfo | URL, init?: RequestInit): Headers {
+  if (input instanceof Request) {
+    const merged = new Headers(input.headers);
+    if (init?.headers) {
+      new Headers(init.headers).forEach((value, key) => {
+        merged.set(key, value);
+      });
+    }
+    return merged;
   }
+  return new Headers(init?.headers);
+}
+
+function headersObject(h: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  h.forEach((value, key) => {
+    const lk = key.toLowerCase();
+    out[key] = SENSITIVE_HEADER_NAMES.has(lk) ? '[REDACTED]' : value;
+  });
+  return out;
+}
+
+function loadExistingRecords(filePath: string): Record<string, unknown>[] {
+  if (!fs.existsSync(filePath)) return [];
+  const raw = fs.readFileSync(filePath, 'utf8').trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (x): x is Record<string, unknown> =>
+          x !== null && typeof x === 'object' && !Array.isArray(x),
+      );
+    }
+  } catch {
+    /* not a single JSON array */
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try {
+      const row = JSON.parse(t) as unknown;
+      if (row !== null && typeof row === 'object' && !Array.isArray(row)) {
+        out.push(row as Record<string, unknown>);
+      }
+    } catch {
+      /* skip bad legacy line */
+    }
+  }
+  return out;
+}
+
+function sectionDividerRecord(): Record<string, unknown> {
+  return {
+    ts: new Date().toISOString(),
+    kind: 'llmRawLogSection',
+    label: RAW_LOG_SECTION_LABEL,
+  };
+}
+
+function appendRecord(record: Record<string, unknown>): void {
+  persistChain = persistChain
+    .then(() => {
+      ensureLogsDir();
+      const p = logFilePath();
+      const prev = loadExistingRecords(p);
+      prev.push(record);
+      const next = prev.length > MAX_STORED_RECORDS ? prev.slice(-MAX_STORED_RECORDS) : prev;
+      fs.writeFileSync(p, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    })
+    .catch(() => {
+      // Never break LLM calls due to logging
+    });
 }
 
 function resolveUrl(input: RequestInfo | URL): string {
@@ -95,7 +178,20 @@ async function readRequestBodyForLog(
     if (Buffer.isBuffer(b)) {
       return truncateBody(b.toString('utf8'));
     }
-    return { text: '[non-string request body omitted]', truncated: false };
+    if (b instanceof ArrayBuffer) {
+      return truncateBody(Buffer.from(b).toString('utf8'));
+    }
+    if (ArrayBuffer.isView(b)) {
+      return truncateBody(Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString('utf8'));
+    }
+    if (typeof Blob !== 'undefined' && b instanceof Blob) {
+      try {
+        return truncateBody(await b.text());
+      } catch {
+        return { text: '[blob body unreadable]', truncated: false };
+      }
+    }
+    return { text: '[non-buffer request body omitted: stream or FormData]', truncated: false };
   }
   if (input instanceof Request && input.body) {
     try {
@@ -116,17 +212,20 @@ async function logResponseClone(
   try {
     const clone = response.clone();
     const text = await clone.text();
-    const { text: body, truncated } = truncateBody(text);
+    const { text: bodyText, truncated } = truncateBody(text);
     appendRecord({
       ts: new Date().toISOString(),
       direction: 'response',
       correlationId,
       status: response.status,
       statusText: response.statusText,
+      headers: headersObject(response.headers),
       contentType: response.headers.get('content-type') ?? undefined,
-      body,
+      body: tryParseJsonBody(bodyText, truncated),
+      bodyLengthChars: bodyText.length,
       truncated,
     });
+    appendRecord(sectionDividerRecord());
   } catch {
     appendRecord({
       ts: new Date().toISOString(),
@@ -137,11 +236,12 @@ async function logResponseClone(
       body: '[failed to read response body for log]',
       truncated: false,
     });
+    appendRecord(sectionDividerRecord());
   }
 }
 
 /**
- * Returns a fetch wrapper that logs request + response bodies to logs/llmOrg.log, or undefined when disabled.
+ * Returns a fetch wrapper that logs request + response bodies to logs/llmOrg.log (JSON array, section markers, trimmed length), or undefined when disabled.
  */
 export function getLoggingFetchOrUndefined(): typeof fetch | undefined {
   if (!isLlmRawHttpLogEnabled()) {
@@ -156,16 +256,19 @@ export function getLoggingFetchOrUndefined(): typeof fetch | undefined {
     const method = resolveMethod(input, init);
 
     try {
-      const headers = redactHeaders(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      const effHeaders = effectiveRequestHeaders(input, init);
+      const headers = headersObject(effHeaders);
       const bodyInfo = await readRequestBodyForLog(input, init);
       appendRecord({
         ts: new Date().toISOString(),
         direction: 'request',
         correlationId,
+        requestLine: `${method} ${url}`,
         method,
         url,
         headers,
-        body: bodyInfo?.text,
+        body: tryParseJsonBody(bodyInfo?.text, bodyInfo?.truncated ?? false),
+        bodyLengthChars: bodyInfo?.text != null ? bodyInfo.text.length : undefined,
         truncated: bodyInfo?.truncated ?? false,
       });
     } catch {

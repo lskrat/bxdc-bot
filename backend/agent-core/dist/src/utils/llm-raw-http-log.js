@@ -39,7 +39,17 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const uuid_1 = require("uuid");
 const LOG_FILE_NAME = 'llmOrg.log';
-const MAX_BODY_CHARS = 512 * 1024;
+const MAX_STORED_RECORDS = 30;
+const RAW_LOG_SECTION_LABEL = '----------------调用/返回----------------';
+const DEFAULT_MAX_BODY_CHARS = 512 * 1024;
+let persistChain = Promise.resolve();
+function maxBodyChars() {
+    const raw = process.env.LLM_RAW_HTTP_LOG_MAX_BODY_CHARS?.trim();
+    if (!raw)
+        return DEFAULT_MAX_BODY_CHARS;
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_BODY_CHARS;
+}
 const SENSITIVE_HEADER_NAMES = new Set([
     'authorization',
     'api-key',
@@ -63,37 +73,99 @@ function isLlmRawHttpLogEnabled() {
     return v === 'true' || v === '1' || v === 'yes' || v === 'on';
 }
 function truncateBody(text) {
-    if (text.length <= MAX_BODY_CHARS) {
+    const limit = maxBodyChars();
+    if (text.length <= limit) {
         return { text, truncated: false };
     }
     return {
-        text: `${text.slice(0, MAX_BODY_CHARS)}\n...[truncated, ${text.length - MAX_BODY_CHARS} more chars]`,
+        text: `${text.slice(0, limit)}\n...[truncated, ${text.length - limit} more chars]`,
         truncated: true,
     };
 }
-function redactHeaders(headersInit) {
-    if (!headersInit)
-        return {};
+function tryParseJsonBody(text, truncated) {
+    if (text === undefined)
+        return undefined;
+    if (truncated)
+        return text;
+    const t = text.trim();
+    if (t.length === 0)
+        return '';
     try {
-        const h = new Headers(headersInit);
-        const out = {};
-        h.forEach((value, key) => {
-            const lk = key.toLowerCase();
-            out[key] = SENSITIVE_HEADER_NAMES.has(lk) ? '[REDACTED]' : value;
-        });
-        return out;
+        return JSON.parse(t);
     }
     catch {
-        return { _parseError: 'could not read headers' };
+        return text;
     }
 }
-function appendRecord(record) {
+function effectiveRequestHeaders(input, init) {
+    if (input instanceof Request) {
+        const merged = new Headers(input.headers);
+        if (init?.headers) {
+            new Headers(init.headers).forEach((value, key) => {
+                merged.set(key, value);
+            });
+        }
+        return merged;
+    }
+    return new Headers(init?.headers);
+}
+function headersObject(h) {
+    const out = {};
+    h.forEach((value, key) => {
+        const lk = key.toLowerCase();
+        out[key] = SENSITIVE_HEADER_NAMES.has(lk) ? '[REDACTED]' : value;
+    });
+    return out;
+}
+function loadExistingRecords(filePath) {
+    if (!fs.existsSync(filePath))
+        return [];
+    const raw = fs.readFileSync(filePath, 'utf8').trim();
+    if (!raw)
+        return [];
     try {
-        ensureLogsDir();
-        fs.appendFileSync(logFilePath(), `${JSON.stringify(record)}\n`, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+            return parsed.filter((x) => x !== null && typeof x === 'object' && !Array.isArray(x));
+        }
     }
     catch {
     }
+    const out = [];
+    for (const line of raw.split('\n')) {
+        const t = line.trim();
+        if (!t)
+            continue;
+        try {
+            const row = JSON.parse(t);
+            if (row !== null && typeof row === 'object' && !Array.isArray(row)) {
+                out.push(row);
+            }
+        }
+        catch {
+        }
+    }
+    return out;
+}
+function sectionDividerRecord() {
+    return {
+        ts: new Date().toISOString(),
+        kind: 'llmRawLogSection',
+        label: RAW_LOG_SECTION_LABEL,
+    };
+}
+function appendRecord(record) {
+    persistChain = persistChain
+        .then(() => {
+        ensureLogsDir();
+        const p = logFilePath();
+        const prev = loadExistingRecords(p);
+        prev.push(record);
+        const next = prev.length > MAX_STORED_RECORDS ? prev.slice(-MAX_STORED_RECORDS) : prev;
+        fs.writeFileSync(p, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    })
+        .catch(() => {
+    });
 }
 function resolveUrl(input) {
     if (typeof input === 'string')
@@ -120,7 +192,21 @@ async function readRequestBodyForLog(input, init) {
         if (Buffer.isBuffer(b)) {
             return truncateBody(b.toString('utf8'));
         }
-        return { text: '[non-string request body omitted]', truncated: false };
+        if (b instanceof ArrayBuffer) {
+            return truncateBody(Buffer.from(b).toString('utf8'));
+        }
+        if (ArrayBuffer.isView(b)) {
+            return truncateBody(Buffer.from(b.buffer, b.byteOffset, b.byteLength).toString('utf8'));
+        }
+        if (typeof Blob !== 'undefined' && b instanceof Blob) {
+            try {
+                return truncateBody(await b.text());
+            }
+            catch {
+                return { text: '[blob body unreadable]', truncated: false };
+            }
+        }
+        return { text: '[non-buffer request body omitted: stream or FormData]', truncated: false };
     }
     if (input instanceof Request && input.body) {
         try {
@@ -138,17 +224,20 @@ async function logResponseClone(correlationId, response) {
     try {
         const clone = response.clone();
         const text = await clone.text();
-        const { text: body, truncated } = truncateBody(text);
+        const { text: bodyText, truncated } = truncateBody(text);
         appendRecord({
             ts: new Date().toISOString(),
             direction: 'response',
             correlationId,
             status: response.status,
             statusText: response.statusText,
+            headers: headersObject(response.headers),
             contentType: response.headers.get('content-type') ?? undefined,
-            body,
+            body: tryParseJsonBody(bodyText, truncated),
+            bodyLengthChars: bodyText.length,
             truncated,
         });
+        appendRecord(sectionDividerRecord());
     }
     catch {
         appendRecord({
@@ -160,6 +249,7 @@ async function logResponseClone(correlationId, response) {
             body: '[failed to read response body for log]',
             truncated: false,
         });
+        appendRecord(sectionDividerRecord());
     }
 }
 function getLoggingFetchOrUndefined() {
@@ -172,16 +262,19 @@ function getLoggingFetchOrUndefined() {
         const url = resolveUrl(input);
         const method = resolveMethod(input, init);
         try {
-            const headers = redactHeaders(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+            const effHeaders = effectiveRequestHeaders(input, init);
+            const headers = headersObject(effHeaders);
             const bodyInfo = await readRequestBodyForLog(input, init);
             appendRecord({
                 ts: new Date().toISOString(),
                 direction: 'request',
                 correlationId,
+                requestLine: `${method} ${url}`,
                 method,
                 url,
                 headers,
-                body: bodyInfo?.text,
+                body: tryParseJsonBody(bodyInfo?.text, bodyInfo?.truncated ?? false),
+                bodyLengthChars: bodyInfo?.text != null ? bodyInfo.text.length : undefined,
                 truncated: bodyInfo?.truncated ?? false,
             });
         }

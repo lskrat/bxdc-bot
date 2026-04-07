@@ -13,6 +13,7 @@ import {
   type ToolTraceEvent,
 } from '../tools/tool-trace-context';
 import { pickMergedLlm } from '../utils/llm-merge';
+import { logAgentRunRawIfEnabled } from '../utils/agent-run-raw-log';
 
 type ToolStatus = 'running' | 'completed' | 'failed';
 
@@ -275,6 +276,9 @@ export class AgentController {
     const safeHistory = Array.isArray(history) ? history : [];
     const userId = context?.userId;
     const sessionId = context?.sessionId || 'default-session';
+
+    logAgentRunRawIfEnabled(body, { sessionId, userId });
+
     const subject = new Subject<MessageEvent>();
 
     // In a real app, these would come from config/env
