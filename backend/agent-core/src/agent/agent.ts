@@ -1,7 +1,7 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
 import type { ClientOptions } from "openai";
-import { getLoggingFetchOrUndefined } from "../utils/llm-raw-http-log";
+import { composeOpenAiCompatibleFetch } from "../utils/llm-request-role-normalize";
 import {
   JavaSshTool,
   JavaApiTool,
@@ -41,10 +41,7 @@ export class AgentFactory {
     if (config?.baseUrl?.trim()) {
       openAiConfiguration.baseURL = config.baseUrl.replace(/\/+$/, "");
     }
-    const loggingFetch = getLoggingFetchOrUndefined();
-    if (loggingFetch) {
-      openAiConfiguration.fetch = loggingFetch;
-    }
+    openAiConfiguration.fetch = composeOpenAiCompatibleFetch();
 
     const model = new ChatOpenAI({
       modelName: config?.modelName || "gpt-4", // Or use OneAPI compatible model

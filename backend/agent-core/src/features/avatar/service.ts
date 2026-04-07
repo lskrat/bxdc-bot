@@ -1,4 +1,5 @@
 import { ChatOpenAI } from "@langchain/openai";
+import { composeOpenAiCompatibleFetch } from "../../utils/llm-request-role-normalize";
 import { GENERATE_AVATAR_SYSTEM_PROMPT, GENERATE_GREETING_SYSTEM_PROMPT } from "./prompts";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 
@@ -11,7 +12,10 @@ export class AvatarService {
     this.llm = new ChatOpenAI({
       apiKey,
       modelName: modelName,
-      ...(baseUrl ? { configuration: { baseURL: baseUrl.replace(/\/+$/, "") } } : {}),
+      configuration: {
+        ...(baseUrl ? { baseURL: baseUrl.replace(/\/+$/, "") } : {}),
+        fetch: composeOpenAiCompatibleFetch(),
+      },
       temperature: 0.7, // Higher creativity for avatar/greeting
     });
   }

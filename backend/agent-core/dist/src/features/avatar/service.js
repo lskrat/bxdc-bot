@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AvatarService = void 0;
 const openai_1 = require("@langchain/openai");
+const llm_request_role_normalize_1 = require("../../utils/llm-request-role-normalize");
 const prompts_1 = require("./prompts");
 const messages_1 = require("@langchain/core/messages");
 class AvatarService {
@@ -12,7 +13,10 @@ class AvatarService {
         this.llm = new openai_1.ChatOpenAI({
             apiKey,
             modelName: modelName,
-            ...(baseUrl ? { configuration: { baseURL: baseUrl.replace(/\/+$/, "") } } : {}),
+            configuration: {
+                ...(baseUrl ? { baseURL: baseUrl.replace(/\/+$/, "") } : {}),
+                fetch: (0, llm_request_role_normalize_1.composeOpenAiCompatibleFetch)(),
+            },
             temperature: 0.7,
         });
     }
