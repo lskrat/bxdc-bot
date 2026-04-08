@@ -1,0 +1,21 @@
+# 基础镜像（轻量级）
+FROM eclipse-temurin:21-jdk-alpine
+WORKDIR /app
+
+# 更换为国内镜像源
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
+
+# 安装 Maven
+RUN apk add --no-cache maven
+
+# 复制 skill-gateway 项目到镜像
+COPY ./backend/skill-gateway /app
+
+# 构建项目
+RUN mkdir -p ~/.m2 && echo '<settings><mirrors><mirror><id>aliyun</id><url>https://maven.aliyun.com/repository/public</url><mirrorOf>central</mirrorOf></mirror></mirrors></settings>' > ~/.m2/settings.xml && mvn clean package -DskipTests && ls -la target/
+
+# 暴露 18080 端口
+EXPOSE 18080
+
+# 启动服务
+CMD sh -c "ls -la target/ && java -jar target/*.jar"

@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  skill-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.skill-gateway
+    ports:
+      - "18080:18080"
+    environment:
+      # Java Gateway配置
+      - JAVA_GATEWAY_TOKEN=${JAVA_GATEWAY_TOKEN:-your-secure-token-here}
+    restart: unless-stopped
+
+  agent-core:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent-core
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./backend/agent-core:/app
+      - /app/node_modules  # 避免覆盖容器中的node_modules
+    environment:
+      # 服务配置
+      - PORT=${PORT:-3000}
+      - HOST=${HOST:-0.0.0.0}
+      # 记忆服务配置
+      - MEM0_URL=${MEM0_URL:-http://39.104.81.41:8001}
+      # 大模型API配置
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL_NAME=${OPENAI_MODEL_NAME:-gpt-4}
+      # Java Gateway配置
+      - JAVA_GATEWAY_URL=${JAVA_GATEWAY_URL:-http://127.0.0.1:18080}
+      - JAVA_GATEWAY_TOKEN=${JAVA_GATEWAY_TOKEN:-your-secure-token-here}
+      # 技能配置
+      - AGENT_SKILLS_DIRS=${AGENT_SKILLS_DIRS:-}
+    depends_on:
+      - skill-gateway
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules  # 避免覆盖容器中的node_modules
+    depends_on:
+      - agent-core
+      - skill-gateway
+    restart: unless-stopped
