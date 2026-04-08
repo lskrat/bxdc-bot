@@ -21,6 +21,8 @@ export interface ToolInvocation {
   parentName?: string
   summary?: string
   arguments?: unknown
+  /** Tool function return body (from SSE tool_status), sanitized on server */
+  result?: string
   executionMode?: string
   executionLabel?: string
   children?: ToolInvocation[]
@@ -60,6 +62,12 @@ function normalizeToolName(toolCall: any, fallback?: string): string | null {
 function normalizeToolId(toolCall: any, fallback: string): string {
   const id = toolCall?.id ?? toolCall?.tool_call_id ?? toolCall?.function?.id
   return typeof id === 'string' && id.trim() ? id.trim() : fallback
+}
+
+function toolCallIdFromToolResultMessage(message: any, messageIndex: number, toolName: string): string {
+  const id = message?.tool_call_id ?? message?.kwargs?.tool_call_id ?? message?.lc_kwargs?.tool_call_id
+  if (typeof id === 'string' && id.trim()) return id.trim()
+  return `${toolName}:toolmsg:${messageIndex}`
 }
 
 function inferToolKind(toolName: string): 'skill' | 'tool' {
@@ -311,7 +319,7 @@ export function provideChat() {
 
       const content = String(message?.content ?? message?.kwargs?.content ?? '').toLowerCase()
       return [{
-        id: normalizeToolId(message, toolName),
+        id: toolCallIdFromToolResultMessage(message, messageIndex, toolName),
         name: toolName,
         displayName: describeToolName(toolName),
         kind: inferToolKind(toolName),
@@ -333,6 +341,7 @@ export function provideChat() {
     parentToolName?: string
     summary?: string
     arguments?: unknown
+    result?: string
     executionMode?: string
     executionLabel?: string
   } {
@@ -344,6 +353,10 @@ export function provideChat() {
       && ['running', 'completed', 'failed'].includes(data.status)
   }
 
+  function mergeToolResultField(previous: string | undefined, next: string | undefined): string | undefined {
+    return next !== undefined ? next : previous
+  }
+
   function upsertChildToolInvocation(children: ToolInvocation[], toolEvent: {
     toolId: string
     toolName: string
@@ -352,6 +365,7 @@ export function provideChat() {
     status: ToolInvocationStatus
     summary?: string
     arguments?: unknown
+    result?: string
   }) {
     const nextChildren = [...children]
     const existingIndex = nextChildren.findIndex((tool) => tool.id === toolEvent.toolId)
@@ -364,6 +378,7 @@ export function provideChat() {
       status: toolEvent.status,
       summary: toolEvent.summary,
       arguments: mergeToolArgumentsField(previous?.arguments, toolEvent.arguments),
+      result: mergeToolResultField(previous?.result, toolEvent.result),
       children: previous?.children ?? [],
     }
 
@@ -397,6 +412,7 @@ export function provideChat() {
     parentToolName?: string
     summary?: string
     arguments?: unknown
+    result?: string
     executionMode?: string
     executionLabel?: string
   }) {
@@ -429,6 +445,7 @@ export function provideChat() {
             status: toolEvent.status,
             summary: toolEvent.summary,
             arguments: toolEvent.arguments,
+            result: toolEvent.result,
           }),
         }
 
@@ -445,17 +462,7 @@ export function provideChat() {
       }
 
       const existingIndex = toolInvocations.findIndex((tool) => tool.id === toolEvent.toolId)
-      const aliasIndex = existingIndex >= 0
-        ? -1
-        : toolInvocations.findIndex((tool) => (
-          tool.name === toolEvent.toolName
-          && (
-            isGenericToolDisplayName(tool.name, tool.displayName)
-            || isGenericToolDisplayName(toolEvent.toolName, toolEvent.displayName)
-          )
-        ))
-      const targetIndex = existingIndex >= 0 ? existingIndex : aliasIndex
-      const previousTool = targetIndex >= 0 ? toolInvocations[targetIndex] : null
+      const previousTool = existingIndex >= 0 ? toolInvocations[existingIndex] : null
       const nextDisplayName = previousTool
         && isGenericToolDisplayName(toolEvent.toolName, toolEvent.displayName)
         && !isGenericToolDisplayName(previousTool.name, previousTool.displayName)
@@ -470,13 +477,14 @@ export function provideChat() {
         status: toolEvent.status,
         summary: toolEvent.summary,
         arguments: mergeToolArgumentsField(previousTool?.arguments, toolEvent.arguments),
+        result: mergeToolResultField(previousTool?.result, toolEvent.result),
         executionMode: toolEvent.executionMode,
         executionLabel: toolEvent.executionLabel,
         children: previousTool?.children ?? [],
       }
 
-      if (targetIndex >= 0) {
-        toolInvocations.splice(targetIndex, 1, nextTool)
+      if (existingIndex >= 0) {
+        toolInvocations.splice(existingIndex, 1, nextTool)
       } else {
         toolInvocations.push(nextTool)
       }
@@ -524,7 +532,9 @@ export function provideChat() {
           const r = m.role
           const lr = typeof r === 'string' ? r.toLowerCase() : ''
           const role =
-            lr === 'assistant' || lr === 'assistank' ? 'ai' : m.role
+            lr === 'assistant' || lr === 'assistank' || lr === 'ai'
+              ? 'system'
+              : m.role
           return { role, content: m.content }
         })
 

@@ -59,6 +59,15 @@ function headersWithoutContentLength(h) {
     out.delete('content-length');
     return out;
 }
+function messageHasToolInvocation(msg) {
+    const tc = msg.tool_calls;
+    if (Array.isArray(tc) && tc.length > 0)
+        return true;
+    const fc = msg.function_call;
+    if (fc != null && typeof fc === 'object')
+        return true;
+    return false;
+}
 function normalizeChatMessagesRolesInJsonText(text) {
     let parsed;
     try {
@@ -82,9 +91,10 @@ function normalizeChatMessagesRolesInJsonText(text) {
         const role = msg.role;
         if (typeof role === 'string') {
             const lr = role.toLowerCase();
-            if (lr === 'assistant' || lr === 'assistank') {
+            if ((lr === 'assistant' || lr === 'assistank' || lr === 'ai')
+                && !messageHasToolInvocation(msg)) {
                 changed = true;
-                return { ...msg, role: 'ai' };
+                return { ...msg, role: 'system' };
             }
         }
         return m;

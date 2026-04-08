@@ -9,11 +9,22 @@ import {
   clearActiveParentToolId,
   runWithToolTraceContext,
   sanitizeToolTraceArguments,
+  sanitizeToolResultForTrace,
   setActiveParentToolId,
   type ToolTraceEvent,
 } from '../tools/tool-trace-context';
 import { pickMergedLlm } from '../utils/llm-merge';
 import { logAgentRunRawIfEnabled } from '../utils/agent-run-raw-log';
+
+/** Injected into each run as part of the user message (main agent has no separate SystemMessage). */
+const AGENT_SKILL_GENERATOR_POLICY = `[Skill generation policy]
+Before using the skill_generator tool to create a new extension skill on SkillGateway, you MUST satisfy at least one of:
+(1) You have verified that no existing capability can complete the task—this includes built-in tools, gateway extension tools already available, and filesystem skills the user can load via skill tools; OR
+(2) The user explicitly asks you to create, add, or register a new skill/extension.
+
+Do not reach for skill_generator as a default. Prefer existing tools and loaded skills first.
+
+`;
 
 type ToolStatus = 'running' | 'completed' | 'failed';
 
@@ -22,6 +33,8 @@ interface ExtractedToolCall {
   toolName: string;
   status: ToolStatus;
   arguments?: unknown;
+  /** Present when status is completed/failed: tool output (sanitized). */
+  result?: string;
 }
 
 function asArray<T>(value: T | T[] | undefined | null): T[] {
@@ -34,6 +47,7 @@ function getChunkMessages(chunk: any): any[] {
 
   return [
     ...asArray(chunk.agent?.messages),
+    ...asArray(chunk.tools?.messages),
     ...asArray(chunk.messages),
   ];
 }
@@ -90,6 +104,7 @@ function extractContent(content: unknown): string | null {
 
 function getMessageContent(message: any): string | null {
   return extractContent(message?.kwargs?.content)
+    ?? extractContent(message?.lc_kwargs?.content)
     ?? extractContent(message?.content)
     ?? null;
 }
@@ -115,6 +130,16 @@ function normalizeToolName(toolCall: any, fallback?: string): string | null {
 function normalizeToolId(toolCall: any, fallback: string): string {
   const id = toolCall?.id ?? toolCall?.tool_call_id ?? toolCall?.function?.id;
   return typeof id === 'string' && id.trim() ? id.trim() : fallback;
+}
+
+/** Prefer OpenAI tool_call_id on ToolMessage so completed events match started tool_calls. */
+function normalizeToolIdFromToolMessage(message: any, messageIndex: number, toolName: string): string {
+  const id =
+    message?.tool_call_id
+    ?? message?.kwargs?.tool_call_id
+    ?? message?.lc_kwargs?.tool_call_id;
+  if (typeof id === 'string' && id.trim()) return id.trim();
+  return `${toolName}:toolmsg:${messageIndex}`;
 }
 
 function parseToolArguments(rawArguments: unknown): unknown {
@@ -169,17 +194,25 @@ function extractStartedToolCalls(message: any, messageIndex: number): ExtractedT
     .filter(Boolean) as ExtractedToolCall[];
 }
 
-function extractCompletedToolCall(message: any): ExtractedToolCall | null {
+function extractCompletedToolCall(message: any, messageIndex: number): ExtractedToolCall | null {
   if (!isToolMessage(message)) return null;
 
   const toolName = normalizeToolName(message, message?.kwargs?.name);
   if (!toolName) return null;
 
+  const toolId = normalizeToolIdFromToolMessage(message, messageIndex, toolName);
+  const status = normalizeToolStatus(message);
+  const content = getMessageContent(message);
+  const result =
+    content != null && String(content).length > 0
+      ? sanitizeToolResultForTrace(String(content))
+      : undefined;
+
   return {
-    toolId: normalizeToolId(message, toolName),
+    toolId,
     toolName,
-    status: normalizeToolStatus(message),
-      arguments: sanitizeToolTraceArguments(extractToolArguments(message)),
+    status,
+    result,
   };
 }
 
@@ -202,18 +235,31 @@ export class AgentController {
     chunk: any,
     seenToolStatuses: Map<string, ToolStatus>,
     lastToolArguments: Map<string, unknown>,
+    lastEmittedToolResult: Map<string, string | undefined>,
   ) {
     const chunkMessages = getChunkMessages(chunk);
     for (let messageIndex = 0; messageIndex < chunkMessages.length; messageIndex += 1) {
       const message = chunkMessages[messageIndex];
       const startedCalls = extractStartedToolCalls(message, messageIndex);
       for (const startedCall of startedCalls) {
-        this.emitToolEvent(subject, startedCall, seenToolStatuses, lastToolArguments);
+        this.emitToolEvent(
+          subject,
+          startedCall,
+          seenToolStatuses,
+          lastToolArguments,
+          lastEmittedToolResult,
+        );
       }
 
-      const completedCall = extractCompletedToolCall(message);
+      const completedCall = extractCompletedToolCall(message, messageIndex);
       if (completedCall) {
-        this.emitToolEvent(subject, completedCall, seenToolStatuses, lastToolArguments);
+        this.emitToolEvent(
+          subject,
+          completedCall,
+          seenToolStatuses,
+          lastToolArguments,
+          lastEmittedToolResult,
+        );
       }
     }
   }
@@ -223,11 +269,26 @@ export class AgentController {
     toolCall: ExtractedToolCall,
     seenToolStatuses: Map<string, ToolStatus>,
     lastToolArguments: Map<string, unknown>,
+    lastEmittedToolResult: Map<string, string | undefined>,
   ) {
     const previousStatus = seenToolStatuses.get(toolCall.toolId);
-    if (previousStatus === toolCall.status) return;
+    const prevEmittedResult = lastEmittedToolResult.get(toolCall.toolId);
+
+    if (previousStatus === toolCall.status) {
+      // Streaming may emit completed before tool output is present, then again with content.
+      const canReemitCompletedWithResult =
+        toolCall.status === 'completed'
+        && toolCall.result !== undefined
+        && toolCall.result !== prevEmittedResult;
+      if (!canReemitCompletedWithResult) {
+        return;
+      }
+    }
 
     seenToolStatuses.set(toolCall.toolId, toolCall.status);
+    if (toolCall.result !== undefined) {
+      lastEmittedToolResult.set(toolCall.toolId, toolCall.result);
+    }
     const resolvedArguments =
       toolCall.arguments !== undefined
         ? toolCall.arguments
@@ -247,6 +308,7 @@ export class AgentController {
       kind: toolInfo.kind,
       status: toolCall.status,
       arguments: sanitizeToolTraceArguments(resolvedArguments),
+      ...(toolCall.result !== undefined ? { result: toolCall.result } : {}),
       executionMode: gatewayToolInfo?.executionMode,
       executionLabel: gatewayToolInfo?.executionLabel,
     };
@@ -299,6 +361,7 @@ export class AgentController {
       let fullAssistantResponse = '';
       const seenToolStatuses = new Map<string, ToolStatus>();
       const lastToolArguments = new Map<string, unknown>();
+      const lastEmittedToolResult = new Map<string, string | undefined>();
       try {
         const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
           subject.next({ data: JSON.stringify(event) });
@@ -323,19 +386,19 @@ export class AgentController {
           ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n` 
           : '';
         
-        const fullInstruction = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
+        const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${memoryContext}User Instruction:\n${instruction}`;
 
         // Combine history (short-term memory) with current instruction
         const validHistory = safeHistory.map((m) => {
           const role = m?.role;
           if (typeof role === 'string') {
             const lr = role.toLowerCase();
-            if (lr === 'assistank' || lr === 'assistant') {
-              return { ...m, role: 'ai' };
+            if (lr === 'assistank' || lr === 'assistant' || lr === 'ai') {
+              return { ...m, role: 'system' };
             }
           }
           return m;
-        }).filter(m => m.role === 'user' || m.role === 'ai' || m.role === 'system');
+        }).filter(m => m.role === 'user' || m.role === 'system');
 
         const messages = [
           ...validHistory,
@@ -346,7 +409,7 @@ export class AgentController {
 
         for await (const chunk of stream as any) {
           subject.next({ data: JSON.stringify(chunk) });
-          this.emitToolEvents(subject, chunk, seenToolStatuses, lastToolArguments);
+          this.emitToolEvents(subject, chunk, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
 
           // Try to extract assistant response from chunk for memory processing
           if (chunk && typeof chunk === 'object') {

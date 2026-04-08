@@ -13,6 +13,8 @@ export interface ToolTraceEvent {
   parentToolName?: string;
   summary?: string;
   arguments?: unknown;
+  /** Tool function return body (e.g. JSON string from gateway); sanitized and length-capped. */
+  result?: string;
   executionMode?: string;
   executionLabel?: string;
 }
@@ -54,6 +56,26 @@ export function sanitizeToolTraceArguments(value: unknown, depth = 0): unknown {
     return result;
   }
   return String(value);
+}
+
+const MAX_TOOL_RESULT_CHARS = 48_000;
+
+/**
+ * Sanitize and cap tool output for SSE / UI (may be JSON or plain text).
+ */
+export function sanitizeToolResultForTrace(text: string): string {
+  const raw =
+    text.length > MAX_TOOL_RESULT_CHARS
+      ? `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n...[truncated]`
+      : text;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const sanitized = sanitizeToolTraceArguments(parsed);
+    if (typeof sanitized === "string") return sanitized;
+    return JSON.stringify(sanitized, null, 2);
+  } catch {
+    return raw;
+  }
 }
 
 export async function runWithToolTraceContext<T>(

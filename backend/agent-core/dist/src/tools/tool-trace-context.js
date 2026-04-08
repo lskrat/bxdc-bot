@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.sanitizeToolTraceArguments = sanitizeToolTraceArguments;
+exports.sanitizeToolResultForTrace = sanitizeToolResultForTrace;
 exports.runWithToolTraceContext = runWithToolTraceContext;
 exports.emitToolTraceEvent = emitToolTraceEvent;
 exports.setActiveParentToolId = setActiveParentToolId;
@@ -38,6 +39,22 @@ function sanitizeToolTraceArguments(value, depth = 0) {
         return result;
     }
     return String(value);
+}
+const MAX_TOOL_RESULT_CHARS = 48_000;
+function sanitizeToolResultForTrace(text) {
+    const raw = text.length > MAX_TOOL_RESULT_CHARS
+        ? `${text.slice(0, MAX_TOOL_RESULT_CHARS)}\n...[truncated]`
+        : text;
+    try {
+        const parsed = JSON.parse(raw);
+        const sanitized = sanitizeToolTraceArguments(parsed);
+        if (typeof sanitized === "string")
+            return sanitized;
+        return JSON.stringify(sanitized, null, 2);
+    }
+    catch {
+        return raw;
+    }
 }
 async function runWithToolTraceContext(emit, work) {
     return await toolTraceContext.run({ emit, activeParentToolIds: new Map() }, work);

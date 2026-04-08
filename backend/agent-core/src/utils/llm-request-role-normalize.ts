@@ -59,9 +59,22 @@ function headersWithoutContentLength(h: Headers): Headers {
   return out;
 }
 
+function messageHasToolInvocation(msg: Record<string, unknown>): boolean {
+  const tc = msg.tool_calls;
+  if (Array.isArray(tc) && tc.length > 0) return true;
+  const fc = msg.function_call;
+  if (fc != null && typeof fc === 'object') return true;
+  return false;
+}
+
 /**
- * If the value is a JSON object with a top-level `messages` array, rewrite any message
- * `role` of `assistant` / `assistank` (case-insensitive) to `ai`.
+ * If the value is a JSON object with a top-level `messages` array, rewrite message
+ * `role` of `assistant` / `assistank` / `ai` (case-insensitive) to `system`.
+ *
+ * **Does not rewrite** assistant messages that carry `tool_calls` / `function_call`.
+ * Those must stay `assistant` so the API can pair the following `tool` messages via
+ * `tool_call_id`; rewriting them to `system` breaks that linkage and commonly causes
+ * the model to re-issue the same tool call in a loop.
  */
 export function normalizeChatMessagesRolesInJsonText(text: string): { text: string; changed: boolean } {
   let parsed: unknown;
@@ -84,9 +97,12 @@ export function normalizeChatMessagesRolesInJsonText(text: string): { text: stri
     const role = msg.role;
     if (typeof role === 'string') {
       const lr = role.toLowerCase();
-      if (lr === 'assistant' || lr === 'assistank') {
+      if (
+        (lr === 'assistant' || lr === 'assistank' || lr === 'ai')
+        && !messageHasToolInvocation(msg)
+      ) {
         changed = true;
-        return { ...msg, role: 'ai' };
+        return { ...msg, role: 'system' };
       }
     }
     return m;
@@ -96,7 +112,7 @@ export function normalizeChatMessagesRolesInJsonText(text: string): { text: stri
 }
 
 /**
- * Wraps `fetch` so outgoing JSON bodies with `messages` never use `role: assistant` (uses `ai` instead).
+ * Wraps `fetch` so outgoing JSON bodies with `messages` never use `role: assistant` (uses `system` for those turns instead).
  * Intended for OpenAI-compatible chat/completions clients (e.g. LangChain ChatOpenAI).
  */
 export function wrapFetchNormalizeLlmMessageRoles(inner: typeof fetch): typeof fetch {

@@ -27,6 +27,12 @@ function formatToolArguments(args?: unknown) {
   return raw
 }
 
+/** Tool 返回正文（SSE `result`），在消息区与日志区展示 */
+function formatToolResultText(result?: string) {
+  if (result == null || String(result).length === 0) return ''
+  return String(result)
+}
+
 function formatTime(timestamp: number) {
   return new Intl.DateTimeFormat('zh-CN', {
     hour: '2-digit',
@@ -327,20 +333,37 @@ const chatItems = computed(() =>
               <div v-if="tool.arguments !== undefined" class="tool-status-args">
                 参数：{{ formatToolArguments(tool.arguments) }}
               </div>
+              <div
+                v-if="formatToolResultText(tool.result)"
+                class="tool-status-result"
+              >
+                <div class="tool-status-result-label">返回</div>
+                <pre class="tool-status-result-body">{{ formatToolResultText(tool.result) }}</pre>
+              </div>
               <div v-if="tool.children?.length" class="tool-children-list">
                 <div
                   v-for="child in tool.children"
                   :key="child.id"
-                  class="tool-child-item"
-                  :class="`tool-child-item--${child.status}`"
+                  class="tool-child-block"
                 >
-                  <span class="tool-child-name">{{ child.displayName }}</span>
-                  <span class="tool-status-separator">·</span>
-                  <span class="tool-status-text">{{ formatToolStatus(child.status) }}</span>
-                  <span v-if="child.summary" class="tool-status-separator">·</span>
-                  <span v-if="child.summary" class="tool-child-summary">{{ formatToolSummary(child.summary) }}</span>
-                  <span v-if="child.arguments !== undefined" class="tool-status-separator">·</span>
-                  <span v-if="child.arguments !== undefined" class="tool-child-summary">参数：{{ formatToolArguments(child.arguments) }}</span>
+                  <div
+                    class="tool-child-item"
+                    :class="`tool-child-item--${child.status}`"
+                  >
+                    <span class="tool-child-name">{{ child.displayName }}</span>
+                    <span class="tool-status-separator">·</span>
+                    <span class="tool-status-text">{{ formatToolStatus(child.status) }}</span>
+                    <span v-if="child.summary" class="tool-status-separator">·</span>
+                    <span v-if="child.summary" class="tool-child-summary">{{ formatToolSummary(child.summary) }}</span>
+                    <span v-if="child.arguments !== undefined" class="tool-status-separator">·</span>
+                    <span v-if="child.arguments !== undefined" class="tool-child-summary">参数：{{ formatToolArguments(child.arguments) }}</span>
+                  </div>
+                  <div
+                    v-if="formatToolResultText(child.result)"
+                    class="tool-child-result"
+                  >
+                    <pre class="tool-status-result-body">{{ formatToolResultText(child.result) }}</pre>
+                  </div>
                 </div>
               </div>
             </div>
@@ -412,6 +435,13 @@ const chatItems = computed(() =>
                   <div class="llm-log-section-title">调用参数</div>
                   <pre class="llm-log-payload">{{ stringifyLogPayload(row.tool.arguments) }}</pre>
                 </div>
+                <div
+                  v-if="row.tool.result != null && String(row.tool.result).length > 0"
+                  class="llm-log-section"
+                >
+                  <div class="llm-log-section-title">返回内容</div>
+                  <pre class="llm-log-payload">{{ row.tool.result }}</pre>
+                </div>
               </div>
             </div>
 
@@ -436,6 +466,13 @@ const chatItems = computed(() =>
                 <div class="llm-log-section">
                   <div class="llm-log-section-title">调用参数</div>
                   <pre class="llm-log-payload">{{ stringifyLogPayload(row.child.arguments) }}</pre>
+                </div>
+                <div
+                  v-if="row.child.result != null && String(row.child.result).length > 0"
+                  class="llm-log-section"
+                >
+                  <div class="llm-log-section-title">返回内容</div>
+                  <pre class="llm-log-payload">{{ row.child.result }}</pre>
                 </div>
               </div>
             </div>
@@ -542,6 +579,48 @@ const chatItems = computed(() =>
   max-width: 560px;
   color: var(--td-text-color-placeholder);
   word-break: break-all;
+}
+
+.tool-status-result {
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: stretch;
+}
+
+.tool-status-result-label {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+}
+
+.tool-status-result-body {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--td-text-color-primary);
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-child-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.tool-child-result {
+  margin-left: 0;
+  width: 100%;
+  max-width: 520px;
 }
 
 .tool-status-main {

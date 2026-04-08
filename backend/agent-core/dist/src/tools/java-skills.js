@@ -8,12 +8,126 @@ exports.describeGatewayExtendedTool = describeGatewayExtendedTool;
 exports.loadGatewayExtendedTools = loadGatewayExtendedTools;
 const messages_1 = require("@langchain/core/messages");
 const tools_1 = require("@langchain/core/tools");
+const zod_1 = require("zod");
 const axios_1 = __importDefault(require("axios"));
 const ajv_1 = __importDefault(require("ajv"));
 const ajv_formats_1 = __importDefault(require("ajv-formats"));
 const pinyin_pro_1 = require("pinyin-pro");
 const ajv = new ajv_1.default({ allErrors: true, useDefaults: true });
 (0, ajv_formats_1.default)(ajv);
+const COMPUTE_OPERATIONS = [
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "factorial",
+    "square",
+    "sqrt",
+    "timestamp_to_date",
+    "date_diff_days",
+];
+const computeToolInputSchema = zod_1.z.object({
+    operation: zod_1.z
+        .enum(COMPUTE_OPERATIONS)
+        .describe("add|subtract|multiply|divide: two numbers in operands. factorial|square|sqrt: one number. timestamp_to_date: one Unix timestamp (seconds or ms). date_diff_days: two calendar dates as YYYY-MM-DD strings."),
+    operands: zod_1.z
+        .array(zod_1.z.union([zod_1.z.number(), zod_1.z.string()]))
+        .min(1)
+        .describe("add: [3,5]. subtract|multiply|divide: [a,b]. factorial|square|sqrt: [n]. timestamp_to_date: [unixTs]. date_diff_days: [\"2026-03-08\",\"2026-03-12\"]."),
+});
+const serverLookupToolInputSchema = zod_1.z.object({
+    name: zod_1.z
+        .string()
+        .min(1)
+        .describe("Server alias name (e.g. 'prod-db', 'web-01') to look up connection details (ip, username, etc)."),
+});
+const linuxScriptToolInputSchema = zod_1.z.object({
+    serverId: zod_1.z
+        .string()
+        .min(1)
+        .describe("Preconfigured server identifier (e.g. 'prod-01', 'test-db')"),
+    command: zod_1.z
+        .string()
+        .min(1)
+        .describe("Shell command to execute on the server"),
+});
+const apiCallerToolInputSchema = zod_1.z.object({
+    url: zod_1.z.string().url().describe("Full target URL"),
+    method: zod_1.z
+        .enum(["GET", "POST", "PUT", "DELETE", "PATCH"])
+        .default("GET")
+        .describe("HTTP method"),
+    headers: zod_1.z
+        .record(zod_1.z.string(), zod_1.z.string())
+        .optional()
+        .describe("Additional headers (Authorization, Content-Type, etc.)"),
+    body: zod_1.z
+        .any()
+        .optional()
+        .describe("Request body (object, string, or null)"),
+});
+const sshExecutorToolInputSchema = zod_1.z.object({
+    host: zod_1.z.string().min(1).describe("SSH host (IP or hostname)"),
+    username: zod_1.z.string().min(1).describe("SSH username"),
+    command: zod_1.z.string().min(1).describe("Shell command to execute"),
+    privateKey: zod_1.z.string().optional().describe("Private key content (PEM format) - mutually exclusive with password"),
+    password: zod_1.z.string().optional().describe("Password for authentication - mutually exclusive with privateKey"),
+    confirmed: zod_1.z
+        .boolean()
+        .default(false)
+        .describe("Set to true to skip confirmation for potentially dangerous commands (rm -rf, reboot, etc.)"),
+});
+const skillGeneratorAllowOverwriteSchema = zod_1.z.preprocess((val) => {
+    if (val === undefined || val === null)
+        return undefined;
+    if (typeof val === "boolean")
+        return val;
+    if (typeof val === "string") {
+        const v = val.trim().toLowerCase();
+        if (v === "true" || v === "1" || v === "yes")
+            return true;
+        if (v === "false" || v === "0" || v === "no" || v === "")
+            return false;
+    }
+    return val;
+}, zod_1.z.boolean().optional().default(false));
+const skillGeneratorToolInputSchema = zod_1.z.discriminatedUnion("targetType", [
+    zod_1.z.object({
+        targetType: zod_1.z.literal("api"),
+        rawDescription: zod_1.z.string().optional(),
+        name: zod_1.z.string().optional(),
+        description: zod_1.z.string().optional(),
+        method: zod_1.z.string().optional(),
+        endpoint: zod_1.z.string().optional(),
+        interfaceDescription: zod_1.z.string().optional(),
+        parameterContract: zod_1.z.any().optional(),
+        allowOverwrite: skillGeneratorAllowOverwriteSchema,
+    }),
+    zod_1.z.object({
+        targetType: zod_1.z.literal("ssh"),
+        rawDescription: zod_1.z.string().optional(),
+        name: zod_1.z.string().optional(),
+        description: zod_1.z.string().optional(),
+        command: zod_1.z.string().optional(),
+        allowOverwrite: skillGeneratorAllowOverwriteSchema,
+    }),
+    zod_1.z.object({
+        targetType: zod_1.z.literal("openclaw"),
+        rawDescription: zod_1.z.string().optional(),
+        name: zod_1.z.string().optional(),
+        description: zod_1.z.string().optional(),
+        systemPrompt: zod_1.z.string().optional(),
+        allowOverwrite: skillGeneratorAllowOverwriteSchema,
+    }),
+    zod_1.z.object({
+        targetType: zod_1.z.literal("template"),
+        rawDescription: zod_1.z.string().optional(),
+        name: zod_1.z.string().optional(),
+        description: zod_1.z.string().optional(),
+        prompt: zod_1.z.string().optional(),
+        allowOverwrite: skillGeneratorAllowOverwriteSchema,
+    }),
+]);
 const tool_trace_context_1 = require("./tool-trace-context");
 function formatToolError(error) {
     if (axios_1.default.isAxiosError(error)) {
@@ -265,6 +379,56 @@ function parseToolInput(input) {
     catch {
         return {};
     }
+}
+function normalizeApiSkillPayload(payload) {
+    const next = { ...payload };
+    const rawInput = next.input;
+    if (typeof rawInput === "string" && rawInput.trim()) {
+        try {
+            const inner = JSON.parse(rawInput.trim());
+            if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+                delete next.input;
+                return { ...inner, ...next };
+            }
+        }
+        catch {
+        }
+    }
+    return next;
+}
+function pushScalarDefault(out, key, value) {
+    if (value === undefined)
+        return;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        out[key] = value;
+    }
+}
+function collectParameterDefaults(parameterContract) {
+    const out = {};
+    if (!parameterContract || typeof parameterContract !== "object" || Array.isArray(parameterContract)) {
+        return out;
+    }
+    const pc = parameterContract;
+    if (pc.type === "object"
+        && pc.properties
+        && typeof pc.properties === "object"
+        && !Array.isArray(pc.properties)) {
+        const props = pc.properties;
+        for (const [key, spec] of Object.entries(props)) {
+            if (!spec || typeof spec !== "object")
+                continue;
+            pushScalarDefault(out, key, spec.default);
+        }
+        return out;
+    }
+    for (const [key, spec] of Object.entries(pc)) {
+        if (key === "required" && Array.isArray(spec))
+            continue;
+        if (!spec || typeof spec !== "object" || Array.isArray(spec))
+            continue;
+        pushScalarDefault(out, key, spec.default);
+    }
+    return out;
 }
 function normalizeGeneratedOperation(value) {
     const normalized = value
@@ -544,10 +708,13 @@ async function executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, in
 }
 async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
     const method = (config.method || "GET").toUpperCase();
-    const payload = parseToolInput(input);
+    let payload = parseToolInput(input);
+    payload = normalizeApiSkillPayload(payload);
+    const defaults = collectParameterDefaults(config.parameterContract);
+    const merged = { ...defaults, ...payload };
     if (config.parameterContract && config.parameterContract.type === "object" && config.parameterContract.properties) {
         const validate = ajv.compile(config.parameterContract);
-        const valid = validate(payload);
+        const valid = validate(merged);
         if (!valid) {
             const errors = validate.errors?.map(err => {
                 const path = err.instancePath ? `'${err.instancePath.substring(1)}' ` : '';
@@ -560,15 +727,16 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
                 ...(config.interfaceDescription?.trim()
                     ? { interfaceDescription: config.interfaceDescription.trim() }
                     : {}),
-                hint: "Do not use empty strings as placeholders for required fields. Omit keys or use valid values per the contract, then call this tool again.",
+                hint: "Do not use empty strings as placeholders for required fields. Omit keys or use valid values per the contract, then call this tool again. "
+                    + "Defaults from the skill parameter contract are applied when a key is omitted.",
             });
         }
     }
     const query = {
         ...toQueryRecord(config.query),
-        ...toQueryRecord(payload.query),
+        ...toQueryRecord(merged.query),
     };
-    for (const [key, value] of Object.entries(payload)) {
+    for (const [key, value] of Object.entries(merged)) {
         if (["query", "headers", "body"].includes(key))
             continue;
         if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
@@ -583,7 +751,7 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
         url: endpoint,
         method,
         headers: config.headers || {},
-        body: payload.body ?? "",
+        body: merged.body ?? "",
     }, {
         headers: {
             "X-Agent-Token": apiToken,
@@ -593,15 +761,28 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
     return typeof response.data === "string" ? response.data : JSON.stringify(response.data);
 }
 async function invokeToolDirect(tool, input) {
-    const serializedInput = typeof input === "string" ? input : JSON.stringify(input ?? {});
     const callableTool = tool;
-    const rawResult = callableTool.func
-        ? await callableTool.func(serializedInput)
-        : await callableTool.invoke(serializedInput);
+    let rawResult;
+    if ((0, tools_1.isStructuredTool)(tool)) {
+        const parsed = typeof input === "string"
+            ? JSON.parse(input.trim() || "{}")
+            : input !== undefined && input !== null && typeof input === "object"
+                ? input
+                : {};
+        rawResult = await tool.invoke(parsed);
+    }
+    else {
+        const serializedInput = typeof input === "string" ? input : JSON.stringify(input ?? {});
+        rawResult = callableTool.func
+            ? await callableTool.func(serializedInput)
+            : await callableTool.invoke(serializedInput);
+    }
     if (typeof rawResult === "string")
         return rawResult;
-    if (rawResult && typeof rawResult === "object" && typeof rawResult.content === "string") {
-        return rawResult.content;
+    if (rawResult && typeof rawResult === "object") {
+        const c = rawResult.content;
+        if (typeof c === "string")
+            return c;
     }
     return JSON.stringify(rawResult ?? "");
 }
@@ -669,7 +850,7 @@ async function executeOpenClawSkill(plannerModel, parentToolName, input, config,
         config.systemPrompt || "You are an autonomous planning skill.",
         "You MUST call exactly ONE tool per turn, in order. Never emit multiple tool_calls in a single response.",
         "Do not skip required tool calls.",
-        "For the compute tool, pass JSON with top-level fields operation and operands only (e.g. date_diff_days with two YYYY-MM-DD strings). Do not nest under an input key.",
+        "For the compute tool, use structured arguments: operation (enum) and operands (array)—see tool schema. Do not nest under an input key.",
         "If the user's input is ambiguous or cannot be reliably parsed, ask a clarification question instead of guessing.",
     ].join("\n\n");
     const messages = [
@@ -733,6 +914,7 @@ async function executeOpenClawSkill(plannerModel, parentToolName, input, config,
                     parentToolId,
                     parentToolName,
                     summary: summarizeToolResult(result),
+                    result: (0, tool_trace_context_1.sanitizeToolResultForTrace)(result),
                 });
                 const resolvedCallId = typeof toolCall.id === "string" && toolCall.id.trim() ? toolCall.id : childToolId;
                 messages.push({
@@ -753,6 +935,7 @@ async function executeOpenClawSkill(plannerModel, parentToolName, input, config,
                     parentToolId,
                     parentToolName,
                     summary: message,
+                    result: (0, tool_trace_context_1.sanitizeToolResultForTrace)(message),
                 });
                 const resolvedCallId = typeof toolCall.id === "string" && toolCall.id.trim() ? toolCall.id : childToolId;
                 messages.push({
@@ -848,16 +1031,22 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                             return await executeOpenClawSkill(options?.plannerModel, toolName, input, currentConfig, Array.from(toolLookup.values()));
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "template") {
+                            const basePrompt = (currentConfig.prompt || "").trim();
+                            const userPayload = typeof input === "string" ? input.trim() : "";
                             return JSON.stringify({
                                 kind: "template",
-                                prompt: currentConfig.prompt || "",
+                                prompt: basePrompt,
+                                userInput: userPayload,
+                                instruction: "The user's parameters are in userInput. Combine prompt with userInput and write the complete result "
+                                    + "in your next assistant message as natural language. Do NOT call this tool again for the same request.",
                             });
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "api" || currentConfig.operation === "api-request" || currentConfig.operation === "juhe-joke-list") {
                             if (hasApiProgressiveDisclosureMaterial(currentConfig) && isEmptyApiToolInput(input)) {
                                 return JSON.stringify({
                                     status: "REQUIRE_PARAMETERS",
-                                    message: "This is an API skill. Please read the interface description and parameter contract, then call this tool again with the correct parameters.",
+                                    message: "This is an API skill. Read the interface description and parameter contract, then call this tool again with the parameters you need to set. "
+                                        + "Fields that have a default in the contract are filled in automatically if you omit them.",
                                     interfaceDescription: currentConfig.interfaceDescription?.trim()
                                         || "No separate interface description. Use the parameter contract and tool description above.",
                                     parameterContract: currentConfig.parameterContract
@@ -894,234 +1083,207 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
         return [];
     }
 }
-class JavaSkillGeneratorTool extends tools_1.Tool {
-    name = "skill_generator";
-    description = "Generates an EXTENSION skill (API, SSH, OPENCLAW, or Template) from a user's description, saves it to SkillGateway, and immediately validates it once. Input must be a JSON string with 'targetType' (one of: 'api', 'ssh', 'openclaw', 'template'). For 'api', include 'method', 'endpoint', 'interfaceDescription' (detailed docs), and 'parameterContract' (JSON schema). For 'ssh', include 'command' (saved as canonical kind=ssh with preset=server-resource-status, using server_lookup + ssh_executor; runtime input should provide serverName or host). For 'openclaw', include 'systemPrompt'. For 'template', include 'prompt' (a reusable prompt-only text with no HTTP/SSH execution). You can also include 'rawDescription', 'name', 'description', 'allowOverwrite', etc. If required fields are missing, do not guess; ask the user for them.";
-    gatewayUrl;
-    apiToken;
+class JavaSkillGeneratorTool extends tools_1.DynamicStructuredTool {
     constructor(gatewayUrl, apiToken) {
-        super();
-        this.gatewayUrl = gatewayUrl;
-        this.apiToken = apiToken;
-    }
-    async _call(input) {
-        const params = parseToolInput(input);
-        const generated = buildGeneratedSkill(params);
-        if (generated.missingFields.length > 0 || !generated.skillPayload || !generated.config) {
-            return JSON.stringify({
-                status: "INPUT_INCOMPLETE",
-                missingFields: generated.missingFields,
-                message: "Missing required skill fields. Provide the missing fields and try again.",
-            });
-        }
-        const saveResult = await saveGeneratedSkill(this.gatewayUrl, this.apiToken, generated.skillPayload, params.allowOverwrite ?? false);
-        if ("error" in saveResult) {
-            return JSON.stringify({
-                status: saveResult.status === "conflict" ? "SKILL_ALREADY_EXISTS" : "SAVE_FAILED",
-                message: saveResult.error,
-                proposedSkill: {
-                    ...generated.skillPayload,
-                    configuration: JSON.stringify(sanitizeConfigForDisplay(generated.config)),
-                },
-            });
-        }
-        let validationRaw = "";
-        if (params.targetType === "api" || !params.targetType) {
-            validationRaw = await executeConfiguredApiSkill(this.gatewayUrl, this.apiToken, JSON.stringify(generated.validationInput || {}), generated.config);
-        }
-        else {
-            validationRaw = JSON.stringify({ success: true, message: "Validation skipped for non-API skill type." });
-        }
-        const validation = buildValidationSummary(validationRaw);
-        return JSON.stringify({
-            status: validation.success ? "VALIDATION_SUCCEEDED" : "VALIDATION_FAILED",
-            saveAction: saveResult.mode,
-            skill: {
-                id: saveResult.skill.id,
-                name: saveResult.skill.name,
-                description: saveResult.skill.description,
-                type: saveResult.skill.type,
-                enabled: saveResult.skill.enabled,
-                requiresConfirmation: saveResult.skill.requiresConfirmation,
-                configuration: sanitizeConfigForDisplay(generated.config),
+        super({
+            name: "skill_generator",
+            description: "Creates a NEW extension skill on SkillGateway—use ONLY after you have confirmed no existing tool (built-in, gateway extensions, or loadable filesystem skills) can fulfill the request, OR the user explicitly asked to add/create a new skill. " +
+                "Provide targetType and the corresponding fields for that type (api, ssh, openclaw, or template). Do NOT wrap everything in a single JSON string under 'input'.",
+            schema: skillGeneratorToolInputSchema,
+            func: async (args) => {
+                const params = args;
+                const generated = buildGeneratedSkill(params);
+                if (generated.missingFields.length > 0 || !generated.skillPayload || !generated.config) {
+                    return JSON.stringify({
+                        status: "INPUT_INCOMPLETE",
+                        missingFields: generated.missingFields,
+                        message: "Missing required skill fields. Provide the missing fields and try again.",
+                    });
+                }
+                const saveResult = await saveGeneratedSkill(gatewayUrl, apiToken, generated.skillPayload, params.allowOverwrite ?? false);
+                if ("error" in saveResult) {
+                    return JSON.stringify({
+                        status: saveResult.status === "conflict" ? "SKILL_ALREADY_EXISTS" : "SAVE_FAILED",
+                        message: saveResult.error,
+                        proposedSkill: {
+                            ...generated.skillPayload,
+                            configuration: JSON.stringify(sanitizeConfigForDisplay(generated.config)),
+                        },
+                    });
+                }
+                let validationRaw = "";
+                if (params.targetType === "api" || !params.targetType) {
+                    validationRaw = await executeConfiguredApiSkill(gatewayUrl, apiToken, JSON.stringify(generated.validationInput || {}), generated.config);
+                }
+                else {
+                    validationRaw = JSON.stringify({ success: true, message: "Validation skipped for non-API skill type." });
+                }
+                const validation = buildValidationSummary(validationRaw);
+                return JSON.stringify({
+                    status: validation.success ? "VALIDATION_SUCCEEDED" : "VALIDATION_FAILED",
+                    saveAction: saveResult.mode,
+                    skill: {
+                        id: saveResult.skill.id,
+                        name: saveResult.skill.name,
+                        description: saveResult.skill.description,
+                        type: saveResult.skill.type,
+                        enabled: saveResult.skill.enabled,
+                        requiresConfirmation: saveResult.skill.requiresConfirmation,
+                        configuration: sanitizeConfigForDisplay(generated.config),
+                    },
+                    validationInput: generated.validationInput || {},
+                    validation,
+                });
             },
-            validationInput: generated.validationInput || {},
-            validation,
         });
     }
 }
 exports.JavaSkillGeneratorTool = JavaSkillGeneratorTool;
-class JavaSshTool extends tools_1.Tool {
-    name = "ssh_executor";
-    description = "Executes a shell command on a remote server via SSH. Input should be a JSON string with 'host', 'username', 'command', and either 'privateKey' or 'password', and optionally 'confirmed' (boolean). For safe/read-only commands, you can set 'confirmed': true to skip user confirmation. For destructive commands (e.g. rm, reboot), you MUST ask the user first.";
-    gatewayUrl;
-    apiToken;
-    userId;
+class JavaSshTool extends tools_1.DynamicStructuredTool {
     constructor(gatewayUrl, apiToken, userId) {
-        super();
-        this.gatewayUrl = gatewayUrl;
-        this.apiToken = apiToken;
-        this.userId = userId;
-    }
-    async _call(input) {
-        try {
-            const params = JSON.parse(input);
-            const dangerousPattern = /rm\s+-rf|mkfs|dd\s+if=|shutdown|reboot/;
-            if (!params.confirmed && dangerousPattern.test(params.command)) {
-                return JSON.stringify({
-                    status: "CONFIRMATION_REQUIRED",
-                    summary: `Execute potentially dangerous SSH command on ${params.host}`,
-                    details: `Command: ${params.command}`,
-                    instruction: "This command looks dangerous. Please ask the user to confirm this action. If they agree, call this tool again with 'confirmed': true."
-                });
-            }
-            const headers = {
-                "X-Agent-Token": this.apiToken,
-                "Content-Type": "application/json",
-            };
-            if (this.userId) {
-                headers["X-User-Id"] = this.userId;
-            }
-            const response = await axios_1.default.post(`${this.gatewayUrl}/api/skills/ssh`, params, { headers });
-            return response.data;
-        }
-        catch (error) {
-            return `Error executing SSH command: ${formatToolError(error)}`;
-        }
+        super({
+            name: "ssh_executor",
+            description: "Executes a shell command on a remote server via SSH. " +
+                "Provide host, username, command, and either privateKey or password as separate fields. " +
+                "For destructive commands (rm -rf, reboot, etc.), set confirmed: true after user approval.",
+            schema: sshExecutorToolInputSchema,
+            func: async (args) => {
+                try {
+                    const headers = {
+                        "X-Agent-Token": apiToken,
+                        "Content-Type": "application/json",
+                    };
+                    if (userId) {
+                        headers["X-User-Id"] = userId;
+                    }
+                    const dangerousPattern = /rm\s+-rf|mkfs|dd\s+if=|shutdown|reboot/;
+                    if (!args.confirmed && dangerousPattern.test(args.command)) {
+                        return JSON.stringify({
+                            status: "CONFIRMATION_REQUIRED",
+                            summary: `Execute potentially dangerous SSH command on ${args.host}`,
+                            details: `Command: ${args.command}`,
+                            instruction: "This command looks dangerous. Please ask the user to confirm this action. If they agree, call this tool again with 'confirmed': true."
+                        });
+                    }
+                    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/ssh`, args, { headers });
+                    return response.data;
+                }
+                catch (error) {
+                    return `Error executing SSH command: ${formatToolError(error)}`;
+                }
+            },
+        });
     }
 }
 exports.JavaSshTool = JavaSshTool;
-class JavaComputeTool extends tools_1.Tool {
-    name = "compute";
-    description = "Performs math and date operations. Supports: timestamp to YYYY-MM-DD, date_diff_days for two YYYY-MM-DD dates, add/subtract/multiply/divide, factorial, square, square root. Input: JSON with 'operation' (add|subtract|multiply|divide|factorial|square|sqrt|timestamp_to_date|date_diff_days) and 'operands' (array of numbers or date strings, depending on the operation).";
-    gatewayUrl;
-    apiToken;
+class JavaComputeTool extends tools_1.DynamicStructuredTool {
     constructor(gatewayUrl, apiToken) {
-        super();
-        this.gatewayUrl = gatewayUrl;
-        this.apiToken = apiToken;
-    }
-    async _call(input) {
-        try {
-            let params = JSON.parse(input);
-            if (params && typeof params === "object" && !params.operation && params.input != null) {
-                const raw = params.input;
+        super({
+            name: "compute",
+            description: "Math and date operations via Skill Gateway. Supply operation and operands as separate fields (see parameter schema). "
+                + "Gateway body is { operation, operands }—do not wrap them in an extra input string.",
+            schema: computeToolInputSchema,
+            func: async (args) => {
                 try {
-                    const inner = typeof raw === "string"
-                        ? JSON.parse(raw)
-                        : raw;
-                    if (inner && typeof inner === "object" && typeof inner.operation === "string") {
-                        params = inner;
-                    }
+                    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/compute`, { operation: args.operation, operands: args.operands }, {
+                        headers: {
+                            "X-Agent-Token": apiToken,
+                            "Content-Type": "application/json",
+                        },
+                    });
+                    return JSON.stringify(response.data);
                 }
-                catch {
+                catch (error) {
+                    return `Error executing compute: ${formatToolError(error)}`;
                 }
-            }
-            const response = await axios_1.default.post(`${this.gatewayUrl}/api/skills/compute`, params, {
-                headers: {
-                    "X-Agent-Token": this.apiToken,
-                    "Content-Type": "application/json",
-                },
-            });
-            return JSON.stringify(response.data);
-        }
-        catch (error) {
-            return `Error executing compute: ${formatToolError(error)}`;
-        }
+            },
+        });
     }
 }
 exports.JavaComputeTool = JavaComputeTool;
-class JavaLinuxScriptTool extends tools_1.Tool {
-    name = "linux_script_executor";
-    description = "Executes a shell command on a preconfigured Linux server. Input should be a JSON string with 'serverId' and 'command'. Returns the command output.";
-    gatewayUrl;
-    apiToken;
+class JavaLinuxScriptTool extends tools_1.DynamicStructuredTool {
     constructor(gatewayUrl, apiToken) {
-        super();
-        this.gatewayUrl = gatewayUrl;
-        this.apiToken = apiToken;
-    }
-    async _call(input) {
-        try {
-            const params = JSON.parse(input);
-            const response = await axios_1.default.post(`${this.gatewayUrl}/api/skills/linux-script`, params, {
-                headers: {
-                    "X-Agent-Token": this.apiToken,
-                    "Content-Type": "application/json",
-                },
-            });
-            if (typeof response.data === "string") {
-                return response.data;
-            }
-            if (response.data && typeof response.data.result === "string") {
-                return response.data.result;
-            }
-            return JSON.stringify(response.data);
-        }
-        catch (error) {
-            return `Error executing linux script: ${formatToolError(error)}`;
-        }
+        super({
+            name: "linux_script_executor",
+            description: "Executes a shell command on a preconfigured Linux server. " +
+                "Provide serverId and command as separate fields (do NOT wrap in a JSON string under 'input').",
+            schema: linuxScriptToolInputSchema,
+            func: async (args) => {
+                try {
+                    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/linux-script`, args, {
+                        headers: {
+                            "X-Agent-Token": apiToken,
+                            "Content-Type": "application/json",
+                        },
+                    });
+                    if (typeof response.data === "string") {
+                        return response.data;
+                    }
+                    if (response.data && typeof response.data.result === "string") {
+                        return response.data.result;
+                    }
+                    return JSON.stringify(response.data);
+                }
+                catch (error) {
+                    return `Error executing linux script: ${formatToolError(error)}`;
+                }
+            },
+        });
     }
 }
 exports.JavaLinuxScriptTool = JavaLinuxScriptTool;
-class JavaServerLookupTool extends tools_1.Tool {
-    name = "server_lookup";
-    description = "Looks up server connection details (ip, username) by the server's alias name. Input should be a JSON string with 'name'.";
-    gatewayUrl;
-    apiToken;
-    userId;
+class JavaServerLookupTool extends tools_1.DynamicStructuredTool {
     constructor(gatewayUrl, apiToken, userId) {
-        super();
-        this.gatewayUrl = gatewayUrl;
-        this.apiToken = apiToken;
-        this.userId = userId;
-    }
-    async _call(input) {
-        try {
-            const params = JSON.parse(input);
-            const headers = {
-                "X-Agent-Token": this.apiToken,
-                "Content-Type": "application/json",
-            };
-            if (this.userId) {
-                headers["X-User-Id"] = this.userId;
-            }
-            const response = await axios_1.default.get(`${this.gatewayUrl}/api/skills/server-lookup`, {
-                headers,
-                params: { name: params.name }
-            });
-            return JSON.stringify(response.data);
-        }
-        catch (error) {
-            return `Error looking up server: ${formatToolError(error)}`;
-        }
+        super({
+            name: "server_lookup",
+            description: "Looks up server connection details (ip, username, etc) by the server's alias name. " +
+                "Provide the 'name' field directly (do NOT wrap in a JSON string under 'input').",
+            schema: serverLookupToolInputSchema,
+            func: async (args) => {
+                try {
+                    const headers = {
+                        "X-Agent-Token": apiToken,
+                        "Content-Type": "application/json",
+                    };
+                    if (userId) {
+                        headers["X-User-Id"] = userId;
+                    }
+                    const response = await axios_1.default.get(`${gatewayUrl}/api/skills/server-lookup`, {
+                        headers,
+                        params: { name: args.name },
+                    });
+                    return JSON.stringify(response.data);
+                }
+                catch (error) {
+                    return `Error looking up server: ${formatToolError(error)}`;
+                }
+            },
+        });
     }
 }
 exports.JavaServerLookupTool = JavaServerLookupTool;
-class JavaApiTool extends tools_1.Tool {
-    name = "api_caller";
-    description = "Calls an external API via the Java gateway. Input should be a JSON string with 'url', 'method', 'headers', and 'body'.";
-    gatewayUrl;
-    apiToken;
+class JavaApiTool extends tools_1.DynamicStructuredTool {
     constructor(gatewayUrl, apiToken) {
-        super();
-        this.gatewayUrl = gatewayUrl;
-        this.apiToken = apiToken;
-    }
-    async _call(input) {
-        try {
-            const params = JSON.parse(input);
-            const response = await axios_1.default.post(`${this.gatewayUrl}/api/skills/api`, params, {
-                headers: {
-                    "X-Agent-Token": this.apiToken,
-                    "Content-Type": "application/json",
-                },
-            });
-            return JSON.stringify(response.data);
-        }
-        catch (error) {
-            return `Error calling API: ${formatToolError(error)}`;
-        }
+        super({
+            name: "api_caller",
+            description: "Calls an external API via the Java gateway. " +
+                "Provide url, method, headers, and body as separate fields (do NOT wrap everything in a single JSON string under 'input').",
+            schema: apiCallerToolInputSchema,
+            func: async (args) => {
+                try {
+                    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, args, {
+                        headers: {
+                            "X-Agent-Token": apiToken,
+                            "Content-Type": "application/json",
+                        },
+                    });
+                    return JSON.stringify(response.data);
+                }
+                catch (error) {
+                    return `Error calling API: ${formatToolError(error)}`;
+                }
+            },
+        });
     }
 }
 exports.JavaApiTool = JavaApiTool;
