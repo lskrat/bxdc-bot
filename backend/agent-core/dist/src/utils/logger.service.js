@@ -141,11 +141,27 @@ let LoggerService = class LoggerService {
     sanitizeInvocationParams(extraParams) {
         return this.sanitizeValue(extraParams);
     }
+    normalizeLangChainRoleToOpenAi(role) {
+        if (typeof role !== 'string')
+            return 'unknown';
+        const r = role.toLowerCase().trim();
+        if (r === 'human' || r === 'humanmessage')
+            return 'user';
+        if (r === 'ai' || r === 'aimessage' || r === 'aimessagechunk')
+            return 'assistant';
+        if (r === 'system' || r === 'systemmessage')
+            return 'system';
+        if (r === 'tool' || r === 'toolmessage')
+            return 'tool';
+        if (r === 'user' || r === 'assistant' || r === 'system' || r === 'tool')
+            return r;
+        return role;
+    }
     sanitizeMessages(messages) {
         const batches = Array.isArray(messages) ? messages : [messages];
         const firstBatch = Array.isArray(batches[0]) ? batches[0] : batches;
         return firstBatch.map((message) => ({
-            role: message?.kwargs?.role ?? message?.role ?? message?.type ?? 'unknown',
+            role: this.normalizeLangChainRoleToOpenAi(message?.kwargs?.role ?? message?.role ?? message?.type ?? 'unknown'),
             content: this.sanitizeValue(message?.kwargs?.content ?? message?.content ?? ''),
             name: message?.kwargs?.name ?? message?.name,
             toolCalls: this.sanitizeValue(message?.kwargs?.tool_calls
@@ -161,6 +177,7 @@ let LoggerService = class LoggerService {
             const message = generation?.message;
             const content = message?.kwargs?.content ?? message?.content ?? generation?.text ?? '';
             return {
+                role: this.normalizeLangChainRoleToOpenAi(message?.kwargs?.role ?? message?.role ?? message?.type ?? 'assistant'),
                 text: typeof generation?.text === 'string' ? generation.text : undefined,
                 content: this.sanitizeValue(content),
                 toolCalls: this.sanitizeValue(message?.kwargs?.tool_calls

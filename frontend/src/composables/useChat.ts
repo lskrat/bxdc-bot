@@ -526,17 +526,10 @@ export function provideChat() {
 
     try {
       // Get recent history (e.g., last 10 messages) to provide short-term context
-      const history = messages.value
-        .slice(-10)
-        .map((m) => {
-          const r = m.role
-          const lr = typeof r === 'string' ? r.toLowerCase() : ''
-          const role =
-            lr === 'assistant' || lr === 'assistank' || lr === 'ai'
-              ? 'system'
-              : m.role
-          return { role, content: m.content }
-        })
+      const history = messages.value.slice(-10).map((m) => ({
+        role: m.role,
+        content: m.content,
+      }))
 
       const { id } = await createTask(content, userId, history)
       activeSessionId.value = id

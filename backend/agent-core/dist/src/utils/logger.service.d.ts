@@ -78,6 +78,7 @@ export declare class LoggerService {
     };
     private appendLlmEntry;
     private sanitizeInvocationParams;
+    private normalizeLangChainRoleToOpenAi;
     private sanitizeMessages;
     private sanitizeLlmOutput;
     private extractModelName;

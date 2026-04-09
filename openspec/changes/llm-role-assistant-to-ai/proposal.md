@@ -1,3 +1,5 @@
+> **Status:** Superseded by change `openai-standard-chat-roles`（标准 OpenAI `role`，不再做网关侧 `assistant`/`ai`/`system` 改写）。保留本目录仅供历史查阅。
+
 ## Why
 
 当前对接的大模型网关（OpenAI 兼容接口）不接受对话消息中的 `role: "assistant"`，会导致请求失败或拒答。需要在全链路把发往模型服务的报文中的该角色统一为 `role: "ai"`，并保证外发 HTTP 请求体中不再出现 `"assistant"` 作为消息角色。

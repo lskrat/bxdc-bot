@@ -399,16 +399,17 @@ export class AgentController {
         const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${AGENT_TASK_TRACKING_POLICY}${memoryContext}User Instruction:\n${instruction}`;
 
         // Combine history (short-term memory) with current instruction
-        const validHistory = safeHistory.map((m) => {
-          const role = m?.role;
-          if (typeof role === 'string') {
+        // OpenAI-style roles only; drop unknown roles. Assistant turns stay `assistant`.
+        const allowedHistoryRoles = new Set(['user', 'assistant', 'system']);
+        const validHistory = safeHistory
+          .map((m) => {
+            const role = m?.role;
+            if (typeof role !== 'string') return null;
             const lr = role.toLowerCase();
-            if (lr === 'assistank' || lr === 'assistant' || lr === 'ai') {
-              return { ...m, role: 'system' };
-            }
-          }
-          return m;
-        }).filter(m => m.role === 'user' || m.role === 'system');
+            if (!allowedHistoryRoles.has(lr)) return null;
+            return { ...m, role: lr };
+          })
+          .filter((m): m is NonNullable<typeof m> => m != null);
 
         const messages = [
           ...validHistory,

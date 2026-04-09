@@ -10,7 +10,7 @@ test("LoggerService emits structured request and response llm log events", async
   };
 
   try {
-    const { LoggerService } = require("../dist/utils/logger.service");
+    const { LoggerService } = require("../dist/src/utils/logger.service");
     const logger = new LoggerService();
     const events = [];
     const handler = logger.createLlmCallbackHandler("session-1", (event) => events.push(event));
@@ -20,6 +20,7 @@ test("LoggerService emits structured request and response llm log events", async
       [[
         { kwargs: { role: "system", content: "You are helpful." } },
         { kwargs: { role: "user", content: "hi" } },
+        { type: "ai", kwargs: { content: "prior assistant turn" } },
       ]],
       "run-1",
       undefined,
@@ -48,6 +49,8 @@ test("LoggerService emits structured request and response llm log events", async
     assert.equal(events[0].entry.direction, "request");
     assert.equal(events[0].entry.sessionId, "session-1");
     assert.equal(events[0].entry.request.params.apiKey, "[redacted]");
+    assert.equal(events[0].entry.request.messages.length, 3);
+    assert.equal(events[0].entry.request.messages[2].role, "assistant");
     assert.equal(events[1].entry.direction, "response");
     assert.equal(events[1].entry.invocationId, "run-1");
     assert.equal(events[1].entry.response.generations[0].content, "hello");
