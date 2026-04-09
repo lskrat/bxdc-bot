@@ -81,6 +81,28 @@ describe('skillEditor', () => {
     expect(result.error).toContain('暂不支持')
   })
 
+  it('parses api draft with string-encoded parameterContract (LLM double-serialization)', () => {
+    const config = JSON.stringify({
+      kind: 'api',
+      operation: 'test-api',
+      method: 'GET',
+      endpoint: 'https://example.com/api',
+      parameterContract: '{"type":"object","properties":{"page":{"type":"number"}}}',
+    })
+
+    const result = parseSkillDraft('CONFIG', config)
+    expect(result.error).toBeNull()
+    expect(result.draft).toMatchObject({ kind: 'api' })
+
+    if (result.draft?.kind === 'api') {
+      const text = result.draft.parameterContractText
+      expect(text).not.toContain('\\')
+      expect(text).toContain('"type": "object"')
+      const parsed = JSON.parse(text)
+      expect(parsed).toEqual({ type: 'object', properties: { page: { type: 'number' } } })
+    }
+  })
+
   it('serializes api draft with nested JSON fields and new contract fields', () => {
     const draft = createDefaultSkillDraft('CONFIG', 'api')
     if (draft.kind !== 'api') {

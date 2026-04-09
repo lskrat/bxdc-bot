@@ -128,6 +128,17 @@ function readPreset(record: JsonRecord): string {
 
 function formatJsonText(value: unknown): string {
   if (value == null) return ''
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      if (parsed && typeof parsed === 'object') {
+        return JSON.stringify(parsed, null, 2)
+      }
+    } catch {
+      // not valid JSON — return as-is
+    }
+    return value
+  }
   return JSON.stringify(value, null, 2)
 }
 

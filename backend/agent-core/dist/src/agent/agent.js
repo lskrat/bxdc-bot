@@ -5,6 +5,8 @@ const prebuilt_1 = require("@langchain/langgraph/prebuilt");
 const openai_1 = require("@langchain/openai");
 const llm_request_role_normalize_1 = require("../utils/llm-request-role-normalize");
 const java_skills_1 = require("../tools/java-skills");
+const manage_tasks_1 = require("../tools/manage-tasks");
+const tasks_state_1 = require("./tasks-state");
 class AgentFactory {
     static async createAgent(gatewayUrl, apiToken, openAiApiKey, config, skillManager, userId) {
         const openAiConfiguration = {};
@@ -37,10 +39,13 @@ class AgentFactory {
             ...baseTools,
             ...gatewayExtendedTools,
             ...(skillManager?.getLangChainTools() || []),
+            new manage_tasks_1.ManageTasksTool(),
         ];
         return (0, prebuilt_1.createReactAgent)({
             llm: model,
-            tools: tools,
+            tools,
+            stateSchema: tasks_state_1.AgentAnnotation,
+            preModelHook: tasks_state_1.preModelHook,
         });
     }
 }

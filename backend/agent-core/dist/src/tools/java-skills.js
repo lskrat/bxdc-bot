@@ -574,6 +574,16 @@ function buildGeneratedSkill(input) {
     let config = {};
     let executionMode = "CONFIG";
     if (targetType === "api") {
+        const rawPc = input.parameterContract;
+        const parameterContract = typeof rawPc === "string"
+            ? (() => { try {
+                const p = JSON.parse(rawPc);
+                return (p && typeof p === "object") ? p : rawPc;
+            }
+            catch {
+                return rawPc;
+            } })()
+            : rawPc;
         config = {
             kind: "api",
             operation: normalizeGeneratedOperation(name),
@@ -582,7 +592,7 @@ function buildGeneratedSkill(input) {
             ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
             ...(input.query && Object.keys(input.query).length > 0 ? { query: input.query } : {}),
             ...(input.interfaceDescription?.trim() ? { interfaceDescription: input.interfaceDescription.trim() } : {}),
-            ...(input.parameterContract ? { parameterContract: input.parameterContract } : {}),
+            ...(parameterContract ? { parameterContract } : {}),
         };
     }
     else if (targetType === "ssh") {

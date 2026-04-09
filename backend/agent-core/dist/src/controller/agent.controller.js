@@ -31,6 +31,15 @@ Before using the skill_generator tool to create a new extension skill on SkillGa
 Do not reach for skill_generator as a default. Prefer existing tools and loaded skills first.
 
 `;
+const AGENT_TASK_TRACKING_POLICY = `[Task tracking policy]
+When the user's request involves multiple distinct sub-tasks (e.g. "check disk AND restart nginx AND verify logs"):
+1. Call manage_tasks to register each sub-task with status "pending" or "in_progress" BEFORE starting work.
+2. After completing a sub-task, call manage_tasks to mark it "completed".
+3. If a sub-task fails or is no longer needed, mark it "cancelled".
+4. Do NOT repeat work for tasks already marked completed unless the user explicitly asks.
+Use short, stable IDs (e.g. "check-disk", "restart-nginx") so the system can track progress across turns.
+
+`;
 function asArray(value) {
     if (!value)
         return [];
@@ -289,7 +298,7 @@ let AgentController = class AgentController {
                 const memoryContext = memories.length > 0
                     ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
                     : '';
-                const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${memoryContext}User Instruction:\n${instruction}`;
+                const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${AGENT_TASK_TRACKING_POLICY}${memoryContext}User Instruction:\n${instruction}`;
                 const validHistory = safeHistory.map((m) => {
                     const role = m?.role;
                     if (typeof role === 'string') {

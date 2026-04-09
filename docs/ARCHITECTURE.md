@@ -142,6 +142,27 @@ fishtank/
 - `MemoryService`、`coworkMemoryManager`、`coworkMemoryJudge`、`coworkMemoryExtractor` - 记忆系统
 - `SkillManager` - YAML 技能定义管理
 
+**图状态（Graph State）**：
+
+Agent 使用 `createReactAgent` 的 `stateSchema` 扩展了默认 `MessagesAnnotation`，增加了 `tasks_status` 字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `messages` | `BaseMessage[]` | 标准对话消息（由 LangGraph 内置 reducer 管理） |
+| `tasks_status` | `Record<string, TaskState>` | 会话内任务完成状态映射（merge reducer） |
+
+其中 `TaskState = { label: string, status: 'pending' \| 'in_progress' \| 'completed' \| 'cancelled', updatedAt: string }`。
+
+**任务状态流转**：
+1. `preModelHook`：每次 LLM 调用前，从消息历史中的 `manage_tasks` 工具调用重建 `tasks_status`，并将摘要注入到 LLM 输入消息中
+2. `manage_tasks` 工具：LLM 通过该工具注册新任务或更新任务状态
+3. 条件路由：当前依赖 prompt 引导 LLM 跳过已完成任务，无自定义条件边
+
+**关键文件**：
+- `src/agent/tasks-state.ts` - 状态类型定义、Annotation、preModelHook
+- `src/tools/manage-tasks.ts` - 任务管理工具
+- `test/tasks-state.test.cjs` - 任务状态集成测试
+
 **数据库**：SQLite（`memories.db`，用于记忆存储）
 
 **环境变量**：`JAVA_GATEWAY_URL`（默认 `http://localhost:18080`）

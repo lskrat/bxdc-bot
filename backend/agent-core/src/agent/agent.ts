@@ -11,6 +11,8 @@ import {
   JavaServerLookupTool,
   loadGatewayExtendedTools,
 } from "../tools/java-skills";
+import { ManageTasksTool } from "../tools/manage-tasks";
+import { AgentAnnotation, preModelHook } from "./tasks-state";
 import type { SkillManager } from "../skills/skill.manager";
 
 /**
@@ -70,12 +72,14 @@ export class AgentFactory {
       ...baseTools,
       ...gatewayExtendedTools,
       ...(skillManager?.getLangChainTools() || []),
+      new ManageTasksTool(),
     ];
 
     return createReactAgent({
       llm: model,
-      tools: tools,
-      // Checkpointer can be added here for persistence
+      tools,
+      stateSchema: AgentAnnotation,
+      preModelHook,
     });
   }
 }
