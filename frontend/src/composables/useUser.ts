@@ -48,17 +48,26 @@ export function useUser() {
     }
   }
 
-  async function register(id: string, nickname: string, redirect = true) {
+  async function register(
+    id: string,
+    nickname: string,
+    systemAdminPassword: string,
+    redirect = true
+  ) {
     try {
       const res = await fetch(apiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, nickname })
+        body: JSON.stringify({ id, nickname, systemAdminPassword })
       });
 
       if (!res.ok) {
           const error = await res.json().catch(() => ({ error: 'Registration failed' }));
-          throw new Error(error.error || 'Registration failed');
+          const msg =
+            res.status === 403
+              ? (error.error || '暂无注册权限，请联系管理员获取授权凭据。')
+              : (error.error || 'Registration failed');
+          throw new Error(msg);
       }
 
       const user = await res.json();

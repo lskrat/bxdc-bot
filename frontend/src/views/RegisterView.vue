@@ -9,6 +9,7 @@ import { apiUrl } from '../services/config';
 
 const userId = ref('');
 const nickname = ref('');
+const systemAdminPassword = ref('');
 const error = ref('');
 const loading = ref(false);
 const { register, updateAvatar, fetchLlmSettings } = useUser();
@@ -28,7 +29,7 @@ async function handleRegister() {
   error.value = '';
   loading.value = true;
   try {
-    const user = await register(userId.value, nickname.value, false);
+    const user = await register(userId.value, nickname.value, systemAdminPassword.value, false);
 
     if (!user) {
       throw new Error('注册失败');
@@ -99,6 +100,14 @@ function goToChat() {
           v-model="nickname"
           label="昵称"
           placeholder="我们该如何称呼您？"
+          :disabled="loading"
+        />
+
+        <Input
+          v-model="systemAdminPassword"
+          type="password"
+          label="系统管理员密码"
+          placeholder="由管理员提供的注册授权"
           :disabled="loading"
         />
 

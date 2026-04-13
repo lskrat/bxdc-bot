@@ -1,6 +1,7 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.User;
+import com.lobsterai.skillgateway.exception.RegistrationNotAllowedException;
 import com.lobsterai.skillgateway.service.UserService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -22,10 +23,16 @@ public class AuthController {
     public ResponseEntity<?> register(@RequestBody Map<String, String> payload) {
         String id = payload.get("id");
         String nickname = payload.get("nickname");
-        
+        String systemAdminPassword = payload.get("systemAdminPassword");
+
         try {
-            User user = userService.register(id, nickname);
+            User user = userService.register(id, nickname, systemAdminPassword);
             return ResponseEntity.ok(user);
+        } catch (RegistrationNotAllowedException e) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "error",
+                    "暂无注册权限，请联系管理员获取授权凭据。"
+            ));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (Exception e) {

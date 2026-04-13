@@ -2,11 +2,14 @@ package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.dto.LlmSettingsResponse;
 import com.lobsterai.skillgateway.dto.LlmSettingsUpdateRequest;
+import com.lobsterai.skillgateway.exception.RegistrationNotAllowedException;
 import com.lobsterai.skillgateway.entity.User;
 import com.lobsterai.skillgateway.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -20,6 +23,10 @@ public class UserService {
 
     @Value("${agent.core.url:http://localhost:3000}")
     private String agentCoreUrl;
+
+    /** System admin password required for public registration; default matches product spec. */
+    @Value("${app.registration.admin-password:Bxdc1357}")
+    private String registrationAdminPassword;
 
     public UserService(UserRepository userRepository, ApiProxyService apiProxyService) {
         this.userRepository = userRepository;
@@ -112,7 +119,28 @@ public class UserService {
                 Map.of("Content-Type", "application/json"), payload);
     }
 
-    public User register(String id, String nickname) {
+    private void validateRegistrationGate(String systemAdminPassword) {
+        if (!constantTimeEqualsAdminPassword(systemAdminPassword)) {
+            throw new RegistrationNotAllowedException();
+        }
+    }
+
+    private boolean constantTimeEqualsAdminPassword(String provided) {
+        String expected = registrationAdminPassword != null ? registrationAdminPassword.trim() : "";
+        String p = trimOrNull(provided);
+        if (p == null) {
+            return false;
+        }
+        byte[] a = p.getBytes(StandardCharsets.UTF_8);
+        byte[] b = expected.getBytes(StandardCharsets.UTF_8);
+        if (a.length != b.length) {
+            return false;
+        }
+        return MessageDigest.isEqual(a, b);
+    }
+
+    public User register(String id, String nickname, String systemAdminPassword) {
+        validateRegistrationGate(systemAdminPassword);
         if (id == null || !id.matches("\\d{6}")) {
             throw new IllegalArgumentException("User ID must be exactly 6 digits.");
         }
