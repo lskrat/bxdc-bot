@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Sse, MessageEvent } from '@nestjs/common';
+import { Controller, Post, Body, Sse, MessageEvent, HttpCode, NotFoundException } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 import { AgentFactory } from '../agent/agent';
 import { MemoryService } from '../mem/memory.service';
@@ -15,6 +15,69 @@ import {
 } from '../tools/tool-trace-context';
 import { pickMergedLlm } from '../utils/llm-merge';
 import { logAgentRunRawIfEnabled } from '../utils/agent-run-raw-log';
+import { sanitizeHistoryForAgent } from '../utils/history-sanitize';
+import { Command, INTERRUPT } from '@langchain/langgraph';
+
+/** Payload from {@link interrupt} in extended skills / SSH tools (see java-skills). */
+type SkillInterruptPayload = {
+  kind: 'extended_skill_confirmation' | 'ssh_confirmation';
+  toolName: string;
+  toolCallId: string;
+  skillName: string;
+  summary: string;
+  details?: string;
+  skillId?: number;
+  /** When trace args are not yet in lastToolArguments, tool layer fills this for the confirmation card. */
+  parametersPreview?: unknown;
+};
+
+function unwrapLangGraphStreamPayload(raw: unknown): any {
+  if (Array.isArray(raw) && raw.length >= 2 && typeof raw[0] === 'string') {
+    return raw[1];
+  }
+  return raw;
+}
+
+function extractInterruptEntries(payload: unknown): Array<{ value?: unknown }> {
+  if (!payload || typeof payload !== 'object') return [];
+  const p = payload as Record<string, unknown>;
+  const arr = p[INTERRUPT] ?? p.__interrupt__;
+  return Array.isArray(arr) ? arr : [];
+}
+
+/** Drop interrupt-only updates so SSE does not expose internal channel data to the client. */
+function stripInterruptForClient(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') return payload;
+  const p = payload as Record<string, unknown>;
+  if (!(INTERRUPT in p) && !('__interrupt__' in p)) return payload;
+  const next = { ...p };
+  delete next[INTERRUPT];
+  delete next.__interrupt__;
+  return Object.keys(next).length > 0 ? next : null;
+}
+
+/* ── Skill confirmation: suspend / resume ── */
+
+const CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
+
+interface PendingConfirmation {
+  resolve: (confirmed: boolean) => void;
+  toolCallId: string;
+  toolName: string;
+  skillName: string;
+  arguments?: unknown;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * In-memory map keyed by `${sessionId}:${toolCallId}`.
+ * Single-process assumption (see design.md Decision 2).
+ */
+const pendingConfirmations = new Map<string, PendingConfirmation>();
+
+function confirmationKey(sessionId: string, toolCallId: string): string {
+  return `${sessionId}:${toolCallId}`;
+}
 
 /** Injected into each run as part of the user message (main agent has no separate SystemMessage). */
 const AGENT_SKILL_GENERATOR_POLICY = `[Skill generation policy]
@@ -33,6 +96,18 @@ When the user's request involves multiple distinct sub-tasks (e.g. "check disk A
 3. If a sub-task fails or is no longer needed, mark it "cancelled".
 4. Do NOT repeat work for tasks already marked completed unless the user explicitly asks.
 Use short, stable IDs (e.g. "check-disk", "restart-nginx") so the system can track progress across turns.
+
+`;
+
+const AGENT_CONFIRMATION_UI_POLICY = `[Confirmation policy]
+Extension skills marked as requiring confirmation and high-risk SSH commands are approved only through the in-app confirmation buttons in the chat UI. Do NOT tell the user to type "yes", "confirm", or to send JSON with "confirmed": true as the only way to proceed — the client sends approval via a separate channel after they click Confirm.
+
+`;
+
+const AGENT_EXTENDED_SKILL_ROUTING_POLICY = `[Extended skill routing]
+When SkillGateway extension tools are available in this run (names usually start with "extended_"), you MUST call the matching extension tool for requests that fall within that skill's described capability.
+Do NOT use built-in tools such as api_caller, ssh_executor, linux_script_executor, compute, or server_lookup to bypass such an extension skill unless: (1) the user explicitly asks for the low-level/built-in path; (2) no extension skill reasonably matches the request; or (3) the extension tool failed and a built-in fallback is clearly necessary (state briefly when you fall back).
+Do not rely on URLs, hosts, or command fragments remembered from earlier messages to skip the extension tool—invoke the extension tool with explicit parameters when it applies.
 
 `;
 
@@ -226,6 +301,35 @@ function extractCompletedToolCall(message: any, messageIndex: number): Extracted
   };
 }
 
+function toolMessageContentIsCancelledSkill(content: string | null): boolean {
+  if (!content) return false;
+  const t = content.trim();
+  if (!t.includes('CANCELLED')) return false;
+  try {
+    const j = JSON.parse(t) as { status?: string };
+    return j?.status === 'CANCELLED';
+  } catch {
+    return false;
+  }
+}
+
+/** True when a tool message for `toolCallId` has JSON `{ status: "CANCELLED" }` (user declined in UI). */
+function chunkContainsCancelledToolForId(chunks: unknown[], toolCallId: string): boolean {
+  for (const chunk of chunks) {
+    if (!chunk || typeof chunk !== 'object') continue;
+    const messages = getChunkMessages(chunk);
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (!isToolMessage(msg)) continue;
+      const toolName = normalizeToolName(msg, msg?.kwargs?.name) ?? 'unknown';
+      const tid = normalizeToolIdFromToolMessage(msg, i, toolName);
+      if (tid !== toolCallId) continue;
+      if (toolMessageContentIsCancelledSkill(getMessageContent(msg))) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Agent 控制器。
  * <p>
@@ -332,6 +436,22 @@ export class AgentController {
     subject.next({ data: JSON.stringify(event) });
   }
 
+  /* ── POST /agent/confirm ── */
+
+  @Post('confirm')
+  @HttpCode(200)
+  confirmAction(@Body() body: { sessionId: string; toolCallId: string; confirmed: boolean }) {
+    const key = confirmationKey(body.sessionId, body.toolCallId);
+    const pending = pendingConfirmations.get(key);
+    if (!pending) {
+      throw new NotFoundException('No pending confirmation found for this sessionId/toolCallId');
+    }
+    clearTimeout(pending.timer);
+    pendingConfirmations.delete(key);
+    pending.resolve(body.confirmed);
+    return { ok: true };
+  }
+
   /**
    * 运行 Agent 任务。
    * <p>
@@ -346,6 +466,7 @@ export class AgentController {
   runTask(@Body() body: { instruction: string; context: any; history?: any[] }): Observable<MessageEvent> {
     const { instruction, context, history } = body;
     const safeHistory = Array.isArray(history) ? history : [];
+    const sanitizedHistory = sanitizeHistoryForAgent(safeHistory as Array<{ role?: string; content?: unknown }>);
     const userId = context?.userId;
     const sessionId = context?.sessionId || 'default-session';
 
@@ -376,7 +497,7 @@ export class AgentController {
         const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
           subject.next({ data: JSON.stringify(event) });
         });
-        const agent = await AgentFactory.createAgent(
+        const { agent } = await AgentFactory.createAgent(
           gatewayUrl,
           apiToken,
           openAiApiKey,
@@ -396,12 +517,12 @@ export class AgentController {
           ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n` 
           : '';
         
-        const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${AGENT_TASK_TRACKING_POLICY}${memoryContext}User Instruction:\n${instruction}`;
+        const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${AGENT_EXTENDED_SKILL_ROUTING_POLICY}${AGENT_TASK_TRACKING_POLICY}${AGENT_CONFIRMATION_UI_POLICY}${memoryContext}User Instruction:\n${instruction}`;
 
         // Combine history (short-term memory) with current instruction
         // OpenAI-style roles only; drop unknown roles. Assistant turns stay `assistant`.
         const allowedHistoryRoles = new Set(['user', 'assistant', 'system']);
-        const validHistory = safeHistory
+        const validHistory = sanitizedHistory
           .map((m) => {
             const role = m?.role;
             if (typeof role !== 'string') return null;
@@ -416,24 +537,136 @@ export class AgentController {
           { role: 'user', content: fullInstruction }
         ];
 
-        const stream = await agent.stream({ messages });
+        const graphConfig = { configurable: { thread_id: sessionId } };
+        let stream: AsyncIterable<any> = await agent.stream({ messages }, graphConfig);
+        let iterator = (stream as AsyncIterable<any>)[Symbol.asyncIterator]();
 
-        for await (const chunk of stream as any) {
-          subject.next({ data: JSON.stringify(chunk) });
-          this.emitToolEvents(subject, chunk, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+        outer: while (true) {
+          const { value: raw, done } = await iterator.next();
+          if (done) break;
 
-          // Try to extract assistant response from chunk for memory processing
-          if (chunk && typeof chunk === 'object') {
-            const lastAssistantMessage = getChunkMessages(chunk)
-              .filter((message) => isAssistantMessage(message))
-              .at(-1);
+          const payload = unwrapLangGraphStreamPayload(raw);
+          const interruptEntries = extractInterruptEntries(payload);
+          for (const entry of interruptEntries) {
+            const v = entry.value as SkillInterruptPayload | undefined;
+            if (
+              v
+              && (v.kind === 'extended_skill_confirmation' || v.kind === 'ssh_confirmation')
+            ) {
+              const gatewayInfo =
+                v.kind === 'extended_skill_confirmation'
+                  ? describeGatewayExtendedTool(v.toolName)
+                  : null;
+              const skillName =
+                v.kind === 'extended_skill_confirmation'
+                  ? (gatewayInfo?.displayName ?? v.toolName.replace(/^extended_/, ''))
+                  : v.skillName;
 
-            const nextContent = getMessageContent(lastAssistantMessage);
-            if (nextContent) {
-              fullAssistantResponse = nextContent;
-              // Also emit simplified event for frontend compatibility
-              // This ensures that even if the chunk structure is complex, the frontend receives a clear content update
-              subject.next({ data: JSON.stringify({ role: 'assistant', content: nextContent }) });
+              const resolvedArgs =
+                lastToolArguments.get(v.toolCallId) ?? v.parametersPreview;
+
+              subject.next({
+                data: JSON.stringify({
+                  type: 'confirmation_request',
+                  sessionId,
+                  toolCallId: v.toolCallId,
+                  toolName: v.toolName,
+                  skillName,
+                  summary: v.summary ?? `Execute skill: ${skillName}`,
+                  details: v.details ?? '',
+                  arguments: resolvedArgs,
+                }),
+              });
+
+              const confirmed = await new Promise<boolean>((resolve) => {
+                const key = confirmationKey(sessionId, v.toolCallId);
+                const timer = setTimeout(() => {
+                  pendingConfirmations.delete(key);
+                  console.log(`[Confirmation] Timeout for ${key}, auto-cancelling`);
+                  resolve(false);
+                }, CONFIRMATION_TIMEOUT_MS);
+                pendingConfirmations.set(key, {
+                  resolve,
+                  toolCallId: v.toolCallId,
+                  toolName: v.toolName,
+                  skillName,
+                  arguments: resolvedArgs,
+                  timer,
+                });
+              });
+
+              if (!confirmed) {
+                const ac = new AbortController();
+                const cancelResumeStream = await agent.stream(
+                  new Command({ resume: { confirmed: false } }),
+                  { configurable: { thread_id: sessionId }, signal: ac.signal },
+                );
+                let cancelIter = cancelResumeStream[Symbol.asyncIterator]();
+                const MAX_CANCEL_CHUNKS = 24;
+                for (let step = 0; step < MAX_CANCEL_CHUNKS; step += 1) {
+                  let raw: any;
+                  try {
+                    const n = await cancelIter.next();
+                    if (n.done) break;
+                    raw = n.value;
+                  } catch (e) {
+                    const name = e && typeof e === 'object' && 'name' in e ? (e as Error).name : '';
+                    if (name === 'AbortError' || ac.signal.aborted) break;
+                    throw e;
+                  }
+                  const payload = unwrapLangGraphStreamPayload(raw);
+                  const forward = stripInterruptForClient(payload);
+                  if (forward != null) {
+                    subject.next({ data: JSON.stringify(forward) });
+                    this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+                    if (typeof forward === 'object') {
+                      const lastAssistantMessage = getChunkMessages(forward)
+                        .filter((message) => isAssistantMessage(message))
+                        .at(-1);
+                      const nextContent = getMessageContent(lastAssistantMessage);
+                      if (nextContent) {
+                        fullAssistantResponse = nextContent;
+                        subject.next({ data: JSON.stringify({ role: 'assistant', content: nextContent }) });
+                      }
+                    }
+                  }
+                  if (chunkContainsCancelledToolForId([payload, forward].filter(Boolean), v.toolCallId)) {
+                    ac.abort();
+                    break;
+                  }
+                }
+                if (!ac.signal.aborted) {
+                  ac.abort();
+                }
+                fullAssistantResponse = `已取消执行「${skillName}」。`;
+                subject.next({ data: JSON.stringify({ role: 'assistant', content: fullAssistantResponse }) });
+                break outer;
+              }
+
+              const resumeStream = await agent.stream(
+                new Command({ resume: { confirmed: true } }),
+                graphConfig,
+              );
+              iterator = resumeStream[Symbol.asyncIterator]();
+              continue outer;
+            }
+          }
+
+          const forward = stripInterruptForClient(payload);
+          if (forward != null) {
+            subject.next({ data: JSON.stringify(forward) });
+            this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+
+            if (typeof forward === 'object') {
+              const lastAssistantMessage = getChunkMessages(forward)
+                .filter((message) => isAssistantMessage(message))
+                .at(-1);
+
+              const nextContent = getMessageContent(lastAssistantMessage);
+              if (nextContent) {
+                fullAssistantResponse = nextContent;
+                subject.next({ data: JSON.stringify({ role: 'assistant', content: nextContent }) });
+              }
             }
           }
         }

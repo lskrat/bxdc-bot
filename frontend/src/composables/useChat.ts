@@ -1,5 +1,5 @@
 import { ref, provide, inject, type InjectionKey } from 'vue'
-import { createTask, getEventSourceUrl } from '../services/api'
+import { createTask, getEventSourceUrl, confirmAction } from '../services/api'
 import { agentUrl } from '../services/config'
 import { useUser } from './useUser'
 import { type LlmLogEntry, isLlmLogEvent, mergeLlmLogEntries } from '../utils/llmLog'
@@ -34,6 +34,24 @@ export type LogTimelineEntry =
   | { kind: 'tool'; id: string }
   | { kind: 'llm'; id: string }
 
+export type ConfirmationStatus = 'pending' | 'confirmed' | 'cancelled' | 'expired'
+
+/** After user confirms: running → completed/failed when matching tool_status arrives. */
+export type ConfirmationExecutionOutcome = 'running' | 'completed' | 'failed'
+
+export interface ConfirmationRequest {
+  sessionId: string
+  toolCallId: string
+  toolName: string
+  skillName: string
+  summary: string
+  details: string
+  arguments?: unknown
+  status: ConfirmationStatus
+  /** Set when status is `confirmed`; updated when the tool finishes (SSE). */
+  executionOutcome?: ConfirmationExecutionOutcome
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant'
@@ -43,6 +61,8 @@ export interface Message {
   llmLogs?: LlmLogEntry[]
   /** 调用日志弹窗：按 SSE 到达顺序交错 Tool 与 LLM（仅本轮 assistant） */
   logTimeline?: LogTimelineEntry[]
+  /** Pending skill confirmation cards attached to this message */
+  confirmations?: ConfirmationRequest[]
 }
 
 function asArray<T>(value: T | T[] | undefined | null): T[] {
@@ -85,6 +105,7 @@ export interface ChatState {
   sendMessage: (content: string, userId?: string) => Promise<void>
   addMessage: (message: Message) => void
   fetchGreeting: () => Promise<void>
+  confirmSkillAction: (toolCallId: string, confirmed: boolean) => Promise<void>
 }
 
 const ChatKey: InjectionKey<ChatState> = Symbol('chat')
@@ -239,7 +260,7 @@ export function provideChat() {
   function extractMessageContent(data: any): string | null {
     if (typeof data === 'string') return data
     if (!data || typeof data !== 'object') return null
-    if (data.type === 'tool_status') return null
+    if (data.type === 'tool_status' || data.type === 'confirmation_request') return null
 
     // 1. 尝试从 messages 数组中获取
     const assistantMessages = getChunkMessages(data)
@@ -402,6 +423,22 @@ export function provideChat() {
     })
   }
 
+  function applyConfirmationExecutionOutcome(
+    confirmations: ConfirmationRequest[],
+    toolId: string,
+    toolStatus: ToolInvocationStatus,
+  ): ConfirmationRequest[] {
+    if (toolStatus !== 'completed' && toolStatus !== 'failed') return confirmations
+    return confirmations.map((c) =>
+      c.toolCallId === toolId && c.status === 'confirmed'
+        ? {
+            ...c,
+            executionOutcome: toolStatus === 'completed' ? 'completed' : 'failed',
+          }
+        : c,
+    )
+  }
+
   function upsertToolInvocation(toolEvent: {
     toolId: string
     toolName: string
@@ -455,9 +492,16 @@ export function provideChat() {
           toolInvocations.push(nextParent)
         }
 
+        const confirmations = applyConfirmationExecutionOutcome(
+          last.confirmations ?? [],
+          toolEvent.toolId,
+          toolEvent.status,
+        )
+
         return {
           ...last,
           toolInvocations,
+          confirmations,
         }
       }
 
@@ -489,9 +533,16 @@ export function provideChat() {
         toolInvocations.push(nextTool)
       }
 
+      const confirmations = applyConfirmationExecutionOutcome(
+        last.confirmations ?? [],
+        toolEvent.toolId,
+        toolEvent.status,
+      )
+
       return {
         ...last,
         toolInvocations,
+        confirmations,
       }
     })
   }
@@ -508,7 +559,61 @@ export function provideChat() {
             : child
         )),
       })),
+      confirmations: (last.confirmations ?? []).map((c) =>
+        c.status === 'pending' ? { ...c, status: 'expired' as ConfirmationStatus } : c,
+      ),
     }))
+  }
+
+  function isConfirmationRequestEvent(data: any): data is {
+    type: 'confirmation_request'
+    sessionId: string
+    toolCallId: string
+    toolName: string
+    skillName: string
+    summary: string
+    details: string
+    arguments?: unknown
+  } {
+    return data?.type === 'confirmation_request'
+      && typeof data.sessionId === 'string'
+      && typeof data.toolCallId === 'string'
+  }
+
+  function addConfirmationToLastAssistant(req: ConfirmationRequest) {
+    updateLastAssistantMessage((last) => ({
+      ...last,
+      confirmations: [...(last.confirmations ?? []), req],
+    }))
+  }
+
+  function updateConfirmationStatus(toolCallId: string, status: ConfirmationStatus) {
+    updateLastAssistantMessage((last) => ({
+      ...last,
+      confirmations: (last.confirmations ?? []).map((c) => {
+        if (c.toolCallId !== toolCallId) return c
+        if (status === 'confirmed') {
+          return { ...c, status, executionOutcome: 'running' }
+        }
+        return { ...c, status, executionOutcome: undefined }
+      }),
+    }))
+  }
+
+  async function confirmSkillAction(toolCallId: string, confirmed: boolean) {
+    const sid = activeSessionId.value
+    if (!sid) return
+
+    const newStatus: ConfirmationStatus = confirmed ? 'confirmed' : 'cancelled'
+    updateConfirmationStatus(toolCallId, newStatus)
+
+    try {
+      await confirmAction(sid, toolCallId, confirmed)
+    } catch (e) {
+      console.error('Failed to send confirmation:', e)
+      updateConfirmationStatus(toolCallId, 'pending')
+      error.value = e instanceof Error ? e.message : 'Confirmation request failed'
+    }
   }
 
   async function sendMessage(content: string, userId?: string) {
@@ -571,6 +676,20 @@ export function provideChat() {
             if (isToolStatusEvent(data)) {
               upsertToolInvocation(data)
               appendToolTimelineEntry(data.toolId)
+              return
+            }
+
+            if (isConfirmationRequestEvent(data)) {
+              addConfirmationToLastAssistant({
+                sessionId: data.sessionId,
+                toolCallId: data.toolCallId,
+                toolName: data.toolName,
+                skillName: data.skillName,
+                summary: data.summary,
+                details: data.details,
+                arguments: data.arguments,
+                status: 'pending',
+              })
               return
             }
 
@@ -672,7 +791,8 @@ export function provideChat() {
     error,
     sendMessage,
     addMessage,
-    fetchGreeting
+    fetchGreeting,
+    confirmSkillAction,
   }
   provide(ChatKey, state)
   return state

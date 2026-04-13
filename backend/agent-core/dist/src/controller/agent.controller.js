@@ -23,6 +23,37 @@ const java_skills_1 = require("../tools/java-skills");
 const tool_trace_context_1 = require("../tools/tool-trace-context");
 const llm_merge_1 = require("../utils/llm-merge");
 const agent_run_raw_log_1 = require("../utils/agent-run-raw-log");
+const history_sanitize_1 = require("../utils/history-sanitize");
+const langgraph_1 = require("@langchain/langgraph");
+function unwrapLangGraphStreamPayload(raw) {
+    if (Array.isArray(raw) && raw.length >= 2 && typeof raw[0] === 'string') {
+        return raw[1];
+    }
+    return raw;
+}
+function extractInterruptEntries(payload) {
+    if (!payload || typeof payload !== 'object')
+        return [];
+    const p = payload;
+    const arr = p[langgraph_1.INTERRUPT] ?? p.__interrupt__;
+    return Array.isArray(arr) ? arr : [];
+}
+function stripInterruptForClient(payload) {
+    if (!payload || typeof payload !== 'object')
+        return payload;
+    const p = payload;
+    if (!(langgraph_1.INTERRUPT in p) && !('__interrupt__' in p))
+        return payload;
+    const next = { ...p };
+    delete next[langgraph_1.INTERRUPT];
+    delete next.__interrupt__;
+    return Object.keys(next).length > 0 ? next : null;
+}
+const CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
+const pendingConfirmations = new Map();
+function confirmationKey(sessionId, toolCallId) {
+    return `${sessionId}:${toolCallId}`;
+}
 const AGENT_SKILL_GENERATOR_POLICY = `[Skill generation policy]
 Before using the skill_generator tool to create a new extension skill on SkillGateway, you MUST satisfy at least one of:
 (1) You have verified that no existing capability can complete the task—this includes built-in tools, gateway extension tools already available, and filesystem skills the user can load via skill tools; OR
@@ -38,6 +69,16 @@ When the user's request involves multiple distinct sub-tasks (e.g. "check disk A
 3. If a sub-task fails or is no longer needed, mark it "cancelled".
 4. Do NOT repeat work for tasks already marked completed unless the user explicitly asks.
 Use short, stable IDs (e.g. "check-disk", "restart-nginx") so the system can track progress across turns.
+
+`;
+const AGENT_CONFIRMATION_UI_POLICY = `[Confirmation policy]
+Extension skills marked as requiring confirmation and high-risk SSH commands are approved only through the in-app confirmation buttons in the chat UI. Do NOT tell the user to type "yes", "confirm", or to send JSON with "confirmed": true as the only way to proceed — the client sends approval via a separate channel after they click Confirm.
+
+`;
+const AGENT_EXTENDED_SKILL_ROUTING_POLICY = `[Extended skill routing]
+When SkillGateway extension tools are available in this run (names usually start with "extended_"), you MUST call the matching extension tool for requests that fall within that skill's described capability.
+Do NOT use built-in tools such as api_caller, ssh_executor, linux_script_executor, compute, or server_lookup to bypass such an extension skill unless: (1) the user explicitly asks for the low-level/built-in path; (2) no extension skill reasonably matches the request; or (3) the extension tool failed and a built-in fallback is clearly necessary (state briefly when you fall back).
+Do not rely on URLs, hosts, or command fragments remembered from earlier messages to skip the extension tool—invoke the extension tool with explicit parameters when it applies.
 
 `;
 function asArray(value) {
@@ -200,6 +241,39 @@ function extractCompletedToolCall(message, messageIndex) {
         result,
     };
 }
+function toolMessageContentIsCancelledSkill(content) {
+    if (!content)
+        return false;
+    const t = content.trim();
+    if (!t.includes('CANCELLED'))
+        return false;
+    try {
+        const j = JSON.parse(t);
+        return j?.status === 'CANCELLED';
+    }
+    catch {
+        return false;
+    }
+}
+function chunkContainsCancelledToolForId(chunks, toolCallId) {
+    for (const chunk of chunks) {
+        if (!chunk || typeof chunk !== 'object')
+            continue;
+        const messages = getChunkMessages(chunk);
+        for (let i = 0; i < messages.length; i++) {
+            const msg = messages[i];
+            if (!isToolMessage(msg))
+                continue;
+            const toolName = normalizeToolName(msg, msg?.kwargs?.name) ?? 'unknown';
+            const tid = normalizeToolIdFromToolMessage(msg, i, toolName);
+            if (tid !== toolCallId)
+                continue;
+            if (toolMessageContentIsCancelledSkill(getMessageContent(msg)))
+                return true;
+        }
+    }
+    return false;
+}
 let AgentController = class AgentController {
     memoryService;
     skillManager;
@@ -266,9 +340,21 @@ let AgentController = class AgentController {
         }
         subject.next({ data: JSON.stringify(event) });
     }
+    confirmAction(body) {
+        const key = confirmationKey(body.sessionId, body.toolCallId);
+        const pending = pendingConfirmations.get(key);
+        if (!pending) {
+            throw new common_1.NotFoundException('No pending confirmation found for this sessionId/toolCallId');
+        }
+        clearTimeout(pending.timer);
+        pendingConfirmations.delete(key);
+        pending.resolve(body.confirmed);
+        return { ok: true };
+    }
     runTask(body) {
         const { instruction, context, history } = body;
         const safeHistory = Array.isArray(history) ? history : [];
+        const sanitizedHistory = (0, history_sanitize_1.sanitizeHistoryForAgent)(safeHistory);
         const userId = context?.userId;
         const sessionId = context?.sessionId || 'default-session';
         (0, agent_run_raw_log_1.logAgentRunRawIfEnabled)(body, { sessionId, userId });
@@ -289,7 +375,7 @@ let AgentController = class AgentController {
                 const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
                     subject.next({ data: JSON.stringify(event) });
                 });
-                const agent = await agent_1.AgentFactory.createAgent(gatewayUrl, apiToken, openAiApiKey, { modelName, baseUrl, callbacks: [llmCallbackHandler] }, this.skillManager, userId);
+                const { agent } = await agent_1.AgentFactory.createAgent(gatewayUrl, apiToken, openAiApiKey, { modelName, baseUrl, callbacks: [llmCallbackHandler] }, this.skillManager, userId);
                 const memories = await this.memoryService.searchMemories(instruction, userId, 10);
                 console.log(`[Memory] Retrieved ${memories.length} memories for user ${userId}`);
                 if (memories.length > 0) {
@@ -298,9 +384,9 @@ let AgentController = class AgentController {
                 const memoryContext = memories.length > 0
                     ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
                     : '';
-                const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${AGENT_TASK_TRACKING_POLICY}${memoryContext}User Instruction:\n${instruction}`;
+                const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${AGENT_EXTENDED_SKILL_ROUTING_POLICY}${AGENT_TASK_TRACKING_POLICY}${AGENT_CONFIRMATION_UI_POLICY}${memoryContext}User Instruction:\n${instruction}`;
                 const allowedHistoryRoles = new Set(['user', 'assistant', 'system']);
-                const validHistory = safeHistory
+                const validHistory = sanitizedHistory
                     .map((m) => {
                     const role = m?.role;
                     if (typeof role !== 'string')
@@ -315,18 +401,119 @@ let AgentController = class AgentController {
                     ...validHistory,
                     { role: 'user', content: fullInstruction }
                 ];
-                const stream = await agent.stream({ messages });
-                for await (const chunk of stream) {
-                    subject.next({ data: JSON.stringify(chunk) });
-                    this.emitToolEvents(subject, chunk, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
-                    if (chunk && typeof chunk === 'object') {
-                        const lastAssistantMessage = getChunkMessages(chunk)
-                            .filter((message) => isAssistantMessage(message))
-                            .at(-1);
-                        const nextContent = getMessageContent(lastAssistantMessage);
-                        if (nextContent) {
-                            fullAssistantResponse = nextContent;
-                            subject.next({ data: JSON.stringify({ role: 'assistant', content: nextContent }) });
+                const graphConfig = { configurable: { thread_id: sessionId } };
+                let stream = await agent.stream({ messages }, graphConfig);
+                let iterator = stream[Symbol.asyncIterator]();
+                outer: while (true) {
+                    const { value: raw, done } = await iterator.next();
+                    if (done)
+                        break;
+                    const payload = unwrapLangGraphStreamPayload(raw);
+                    const interruptEntries = extractInterruptEntries(payload);
+                    for (const entry of interruptEntries) {
+                        const v = entry.value;
+                        if (v
+                            && (v.kind === 'extended_skill_confirmation' || v.kind === 'ssh_confirmation')) {
+                            const gatewayInfo = v.kind === 'extended_skill_confirmation'
+                                ? (0, java_skills_1.describeGatewayExtendedTool)(v.toolName)
+                                : null;
+                            const skillName = v.kind === 'extended_skill_confirmation'
+                                ? (gatewayInfo?.displayName ?? v.toolName.replace(/^extended_/, ''))
+                                : v.skillName;
+                            const resolvedArgs = lastToolArguments.get(v.toolCallId) ?? v.parametersPreview;
+                            subject.next({
+                                data: JSON.stringify({
+                                    type: 'confirmation_request',
+                                    sessionId,
+                                    toolCallId: v.toolCallId,
+                                    toolName: v.toolName,
+                                    skillName,
+                                    summary: v.summary ?? `Execute skill: ${skillName}`,
+                                    details: v.details ?? '',
+                                    arguments: resolvedArgs,
+                                }),
+                            });
+                            const confirmed = await new Promise((resolve) => {
+                                const key = confirmationKey(sessionId, v.toolCallId);
+                                const timer = setTimeout(() => {
+                                    pendingConfirmations.delete(key);
+                                    console.log(`[Confirmation] Timeout for ${key}, auto-cancelling`);
+                                    resolve(false);
+                                }, CONFIRMATION_TIMEOUT_MS);
+                                pendingConfirmations.set(key, {
+                                    resolve,
+                                    toolCallId: v.toolCallId,
+                                    toolName: v.toolName,
+                                    skillName,
+                                    arguments: resolvedArgs,
+                                    timer,
+                                });
+                            });
+                            if (!confirmed) {
+                                const ac = new AbortController();
+                                const cancelResumeStream = await agent.stream(new langgraph_1.Command({ resume: { confirmed: false } }), { configurable: { thread_id: sessionId }, signal: ac.signal });
+                                let cancelIter = cancelResumeStream[Symbol.asyncIterator]();
+                                const MAX_CANCEL_CHUNKS = 24;
+                                for (let step = 0; step < MAX_CANCEL_CHUNKS; step += 1) {
+                                    let raw;
+                                    try {
+                                        const n = await cancelIter.next();
+                                        if (n.done)
+                                            break;
+                                        raw = n.value;
+                                    }
+                                    catch (e) {
+                                        const name = e && typeof e === 'object' && 'name' in e ? e.name : '';
+                                        if (name === 'AbortError' || ac.signal.aborted)
+                                            break;
+                                        throw e;
+                                    }
+                                    const payload = unwrapLangGraphStreamPayload(raw);
+                                    const forward = stripInterruptForClient(payload);
+                                    if (forward != null) {
+                                        subject.next({ data: JSON.stringify(forward) });
+                                        this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+                                        if (typeof forward === 'object') {
+                                            const lastAssistantMessage = getChunkMessages(forward)
+                                                .filter((message) => isAssistantMessage(message))
+                                                .at(-1);
+                                            const nextContent = getMessageContent(lastAssistantMessage);
+                                            if (nextContent) {
+                                                fullAssistantResponse = nextContent;
+                                                subject.next({ data: JSON.stringify({ role: 'assistant', content: nextContent }) });
+                                            }
+                                        }
+                                    }
+                                    if (chunkContainsCancelledToolForId([payload, forward].filter(Boolean), v.toolCallId)) {
+                                        ac.abort();
+                                        break;
+                                    }
+                                }
+                                if (!ac.signal.aborted) {
+                                    ac.abort();
+                                }
+                                fullAssistantResponse = `已取消执行「${skillName}」。`;
+                                subject.next({ data: JSON.stringify({ role: 'assistant', content: fullAssistantResponse }) });
+                                break outer;
+                            }
+                            const resumeStream = await agent.stream(new langgraph_1.Command({ resume: { confirmed: true } }), graphConfig);
+                            iterator = resumeStream[Symbol.asyncIterator]();
+                            continue outer;
+                        }
+                    }
+                    const forward = stripInterruptForClient(payload);
+                    if (forward != null) {
+                        subject.next({ data: JSON.stringify(forward) });
+                        this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult);
+                        if (typeof forward === 'object') {
+                            const lastAssistantMessage = getChunkMessages(forward)
+                                .filter((message) => isAssistantMessage(message))
+                                .at(-1);
+                            const nextContent = getMessageContent(lastAssistantMessage);
+                            if (nextContent) {
+                                fullAssistantResponse = nextContent;
+                                subject.next({ data: JSON.stringify({ role: 'assistant', content: nextContent }) });
+                            }
                         }
                     }
                 }
@@ -354,6 +541,14 @@ let AgentController = class AgentController {
     }
 };
 exports.AgentController = AgentController;
+__decorate([
+    (0, common_1.Post)('confirm'),
+    (0, common_1.HttpCode)(200),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object]),
+    __metadata("design:returntype", void 0)
+], AgentController.prototype, "confirmAction", null);
 __decorate([
     (0, common_1.Post)('run'),
     (0, common_1.Sse)(),

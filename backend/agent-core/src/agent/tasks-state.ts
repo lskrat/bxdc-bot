@@ -2,6 +2,10 @@ import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 import type { BaseMessage } from "@langchain/core/messages";
 import { SystemMessage } from "@langchain/core/messages";
 
+// NOTE: CONFIRMATION_REQUIRED detection helpers (toolMessageIsConfirmationRequired,
+// hasPendingConfirmationRequiredFromTool) have been removed. Confirmation flow is now
+// handled at the controller layer via SSE events + REST endpoint (see agent.controller.ts).
+
 /* ── Task status types ── */
 
 export type TaskStatusValue =

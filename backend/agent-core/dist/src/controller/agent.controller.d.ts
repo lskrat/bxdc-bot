@@ -10,6 +10,13 @@ export declare class AgentController {
     constructor(memoryService: MemoryService, skillManager: SkillManager, logger: LoggerService);
     private emitToolEvents;
     private emitToolEvent;
+    confirmAction(body: {
+        sessionId: string;
+        toolCallId: string;
+        confirmed: boolean;
+    }): {
+        ok: boolean;
+    };
     runTask(body: {
         instruction: string;
         context: any;

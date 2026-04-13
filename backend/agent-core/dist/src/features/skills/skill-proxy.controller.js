@@ -21,27 +21,31 @@ const axios_1 = __importDefault(require("axios"));
 let SkillProxyController = class SkillProxyController {
     gatewayUrl = process.env.JAVA_GATEWAY_URL || 'http://localhost:18080';
     apiToken = process.env.JAVA_GATEWAY_TOKEN || 'your-secure-token-here';
-    async createSkill(payload) {
+    async createSkill(payload, userId) {
         return this.forwardRequest(() => axios_1.default.post(`${this.gatewayUrl}/api/skills`, payload, {
-            headers: this.gatewayHeaders,
+            headers: this.gatewayHeaders(userId),
         }));
     }
-    async updateSkill(id, payload) {
+    async updateSkill(id, payload, userId) {
         return this.forwardRequest(() => axios_1.default.put(`${this.gatewayUrl}/api/skills/${id}`, payload, {
-            headers: this.gatewayHeaders,
+            headers: this.gatewayHeaders(userId),
         }));
     }
-    async deleteSkill(id) {
+    async deleteSkill(id, userId) {
         await this.forwardRequest(() => axios_1.default.delete(`${this.gatewayUrl}/api/skills/${id}`, {
-            headers: this.gatewayHeaders,
+            headers: this.gatewayHeaders(userId),
         }));
         return { ok: true };
     }
-    get gatewayHeaders() {
-        return {
+    gatewayHeaders(userId) {
+        const headers = {
             'Content-Type': 'application/json',
             'X-Agent-Token': this.apiToken,
         };
+        if (userId && String(userId).trim()) {
+            headers['X-User-Id'] = String(userId).trim();
+        }
+        return headers;
     }
     async forwardRequest(request) {
         try {
@@ -60,23 +64,26 @@ exports.SkillProxyController = SkillProxyController;
 __decorate([
     (0, common_1.Post)(),
     __param(0, (0, common_1.Body)()),
+    __param(1, (0, common_1.Headers)('x-user-id')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
+    __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", Promise)
 ], SkillProxyController.prototype, "createSkill", null);
 __decorate([
     (0, common_1.Put)(':id'),
     __param(0, (0, common_1.Param)('id')),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Headers)('x-user-id')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, Object]),
+    __metadata("design:paramtypes", [String, Object, String]),
     __metadata("design:returntype", Promise)
 ], SkillProxyController.prototype, "updateSkill", null);
 __decorate([
     (0, common_1.Delete)(':id'),
     __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Headers)('x-user-id')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [String, String]),
     __metadata("design:returntype", Promise)
 ], SkillProxyController.prototype, "deleteSkill", null);
 exports.SkillProxyController = SkillProxyController = __decorate([

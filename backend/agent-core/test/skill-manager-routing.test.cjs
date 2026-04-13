@@ -37,7 +37,7 @@ Use this to inspect server runtime state.
   process.env.AGENT_SKILLS_DIRS = tempRoot;
 
   try {
-    const { SkillManager } = require("../dist/skills/skill.manager");
+    const { SkillManager } = require("../dist/src/skills/skill.manager");
     const manager = new SkillManager();
 
     const skills = manager.listSkills();

@@ -2,7 +2,15 @@
 import { computed, reactive, ref } from 'vue';
 import { AddIcon, DeleteIcon, EditIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
-import { BUILT_IN_SKILLS, type Skill, useSkillHub, getExecutionModeLabel, getConfigSummary } from '../composables/useSkillHub';
+import {
+  BUILT_IN_SKILLS,
+  type Skill,
+  useSkillHub,
+  getExecutionModeLabel,
+  getConfigSummary,
+  canManageGatewaySkill,
+} from '../composables/useSkillHub';
+import { useUser } from '../composables/useUser';
 import {
   createDefaultSkillDraft,
   getConfigKindOptions,
@@ -31,6 +39,12 @@ const {
   fetchSkill,
 } = useSkillHub();
 
+const { currentUser } = useUser();
+
+function canManageRow(row: Skill): boolean {
+  return canManageGatewaySkill(row, currentUser.value?.id);
+}
+
 const isFormVisible = ref(false);
 const isEditMode = ref(false);
 const currentId = ref<number | null>(null);
@@ -41,6 +55,7 @@ const configDraft = ref<SkillConfigDraft>(createDefaultSkillDraft('CONFIG'));
 const formData = reactive({
   name: '',
   description: '',
+  visibility: 'PRIVATE' as 'PUBLIC' | 'PRIVATE',
   executionMode: 'CONFIG' as ExecutionMode,
   enabled: true,
   requiresConfirmation: false,
@@ -77,6 +92,7 @@ const suggestedTools = computed(() => {
 function resetForm() {
   formData.name = '';
   formData.description = '';
+  formData.visibility = 'PRIVATE';
   formData.executionMode = 'CONFIG';
   formData.enabled = true;
   formData.requiresConfirmation = false;
@@ -100,6 +116,7 @@ async function openEditForm(skillSummary: Skill) {
     currentId.value = skill.id;
     formData.name = skill.name;
     formData.description = skill.description || '';
+    formData.visibility = skill.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE';
     formData.executionMode = skill.executionMode ?? 'CONFIG';
     formData.enabled = skill.enabled;
     formData.requiresConfirmation = skill.requiresConfirmation ?? false;
@@ -172,6 +189,7 @@ async function handleSubmit() {
       name: formData.name.trim(),
       description: formData.description.trim(),
       type: 'EXTENSION',
+      visibility: formData.visibility,
       executionMode: formData.executionMode,
       configuration: serializeSkillDraft(formData.executionMode, configDraft.value),
       enabled: formData.enabled,
@@ -244,12 +262,18 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
         :columns="[
           { colKey: 'name', title: '名称' },
           { colKey: 'description', title: '技能介绍' },
+          { colKey: 'visibility', title: '可见性', width: 88 },
           { colKey: 'executionMode', title: '类型', width: 120 },
           { colKey: 'enabled', title: 'Enabled' },
           { colKey: 'operations', title: '操作', width: 160 }
         ]"
         size="small"
       >
+        <template #visibility="{ row }">
+          <t-tag size="small" variant="light" :theme="row.visibility === 'PUBLIC' ? 'success' : 'default'">
+            {{ row.visibility === 'PUBLIC' ? '公共' : '私人' }}
+          </t-tag>
+        </template>
         <template #executionMode="{ row }">
           <t-space>
             <t-tag :theme="row.executionMode === 'OPENCLAW' ? 'warning' : 'primary'" variant="light" size="small">
@@ -262,12 +286,13 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
         </template>
         <template #enabled="{ row }">
           <t-switch
+            :disabled="!canManageRow(row)"
             :model-value="row.enabled"
             @update:model-value="(value: boolean) => handleEnabledChange(row, value)"
           />
         </template>
         <template #operations="{ row }">
-          <t-space>
+          <t-space v-if="canManageRow(row)">
             <t-button variant="text" shape="square" @click="openEditForm(row)">
               <EditIcon />
             </t-button>
@@ -277,6 +302,7 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
               </t-button>
             </t-popconfirm>
           </t-space>
+          <span v-else class="skill-mgmt-readonly">—</span>
         </template>
       </t-table>
     </div>
@@ -294,6 +320,12 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
       </t-form-item>
       <t-form-item label="技能介绍" name="description">
         <t-textarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
+      </t-form-item>
+      <t-form-item label="可见性" name="visibility">
+        <t-radio-group v-model="formData.visibility">
+          <t-radio-button value="PRIVATE">私人（仅自己可管理）</t-radio-button>
+          <t-radio-button value="PUBLIC">公共（全员可见）</t-radio-button>
+        </t-radio-group>
       </t-form-item>
       <t-form-item label="Execution Mode" name="executionMode">
         <t-radio-group :model-value="formData.executionMode" @update:model-value="handleExecutionModeChange">

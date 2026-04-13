@@ -59,30 +59,42 @@ public class SkillController {
     // --- Skill Management (CRUD) ---
 
     @GetMapping
-    public List<Skill> getAllSkills() {
-        return skillService.getAllSkills();
+    public List<Skill> getAllSkills(
+            @RequestHeader(value = "X-User-Id", required = false) String userId
+    ) {
+        return skillService.listSkillsForUser(userId);
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Skill> getSkillById(@PathVariable Long id) {
-        return skillService.getSkillById(id)
+    public ResponseEntity<Skill> getSkillById(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Id", required = false) String userId
+    ) {
+        return skillService.getSkillByIdForUser(id, userId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
 
     @PostMapping
-    public ResponseEntity<?> createSkill(@RequestBody Skill skill) {
+    public ResponseEntity<?> createSkill(
+            @RequestBody Skill skill,
+            @RequestHeader(value = "X-User-Id", required = false) String userId
+    ) {
         try {
-            return ResponseEntity.ok(skillService.createSkill(skill));
+            return ResponseEntity.ok(skillService.createSkill(skill, userId));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> updateSkill(@PathVariable Long id, @RequestBody Skill skillDetails) {
+    public ResponseEntity<?> updateSkill(
+            @PathVariable Long id,
+            @RequestBody Skill skillDetails,
+            @RequestHeader(value = "X-User-Id", required = false) String userId
+    ) {
         try {
-            return ResponseEntity.ok(skillService.updateSkill(id, skillDetails));
+            return ResponseEntity.ok(skillService.updateSkill(id, skillDetails, userId));
         } catch (IllegalArgumentException e) {
             if (e.getMessage() != null && e.getMessage().startsWith("Skill not found")) {
                 return ResponseEntity.notFound().build();
@@ -92,9 +104,12 @@ public class SkillController {
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> deleteSkill(@PathVariable Long id) {
+    public ResponseEntity<?> deleteSkill(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-User-Id", required = false) String userId
+    ) {
         try {
-            skillService.deleteSkill(id);
+            skillService.deleteSkill(id, userId);
             return ResponseEntity.ok().build();
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();

@@ -29,6 +29,14 @@ public class Skill {
     @Column(nullable = false)
     private boolean requiresConfirmation = false;
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    private SkillVisibility visibility = SkillVisibility.PUBLIC;
+
+    /** 创建者用户 ID；平台种子/Built-in 对应行使用字面量 {@code public} */
+    @Column(length = 128)
+    private String createdBy;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -45,7 +53,7 @@ public class Skill {
 
     public Skill() {}
 
-    public Skill(Long id, String name, String description, String type, String executionMode, boolean enabled, boolean requiresConfirmation, LocalDateTime createdAt, LocalDateTime updatedAt) {
+    public Skill(Long id, String name, String description, String type, String executionMode, boolean enabled, boolean requiresConfirmation, SkillVisibility visibility, String createdBy, LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.name = name;
         this.description = description;
@@ -53,6 +61,8 @@ public class Skill {
         this.executionMode = executionMode;
         this.enabled = enabled;
         this.requiresConfirmation = requiresConfirmation;
+        this.visibility = visibility != null ? visibility : SkillVisibility.PUBLIC;
+        this.createdBy = createdBy;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -119,6 +129,22 @@ public class Skill {
 
     public void setRequiresConfirmation(boolean requiresConfirmation) {
         this.requiresConfirmation = requiresConfirmation;
+    }
+
+    public SkillVisibility getVisibility() {
+        return visibility != null ? visibility : SkillVisibility.PUBLIC;
+    }
+
+    public void setVisibility(SkillVisibility visibility) {
+        this.visibility = visibility;
+    }
+
+    public String getCreatedBy() {
+        return createdBy;
+    }
+
+    public void setCreatedBy(String createdBy) {
+        this.createdBy = createdBy;
     }
 
     public LocalDateTime getCreatedAt() {

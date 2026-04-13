@@ -1,7 +1,9 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.Skill;
+import com.lobsterai.skillgateway.entity.SkillVisibility;
 import com.lobsterai.skillgateway.repository.SkillRepository;
+import com.lobsterai.skillgateway.service.SkillService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,8 +12,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
-import static org.hamcrest.Matchers.greaterThanOrEqualTo;
-import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -32,6 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SkillControllerCrudTest {
 
     private static final String TOKEN = "your-secure-token-here";
+    private static final String USER_ID = "test-user-crud";
     private static final String TEST_SKILL_PREFIX = "crud-test-skill-";
 
     @Autowired
@@ -48,14 +49,10 @@ class SkillControllerCrudTest {
     }
 
     @Test
-    void getAllSkills_returnsSeededSkills() throws Exception {
+    void getAllSkills_withoutUser_isEmptyWhenNoPublicExtensions() throws Exception {
         mockMvc.perform(get("/api/skills"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(greaterThanOrEqualTo(4)))
-                .andExpect(jsonPath("$[*].name").value(hasItem("服务器资源状态")))
-                .andExpect(jsonPath("$[*].name").value(hasItem("查询距离生日还有几天")))
-                .andExpect(jsonPath("$[?(@.name=='服务器资源状态')].executionMode").value(hasItem("CONFIG")))
-                .andExpect(jsonPath("$[?(@.name=='查询距离生日还有几天')].executionMode").value(hasItem("OPENCLAW")));
+                .andExpect(jsonPath("$.length()").value(0));
     }
 
     @Test
@@ -75,6 +72,7 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isOk())
@@ -100,6 +98,7 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(put("/api/skills/{id}", createdSkill.getId())
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(updateBody))
                 .andExpect(status().isOk())
@@ -109,7 +108,8 @@ class SkillControllerCrudTest {
                 .andExpect(jsonPath("$.requiresConfirmation").value(true));
 
         mockMvc.perform(delete("/api/skills/{id}", createdSkill.getId())
-                        .header("X-Agent-Token", TOKEN))
+                        .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID))
                 .andExpect(status().isOk());
 
         mockMvc.perform(get("/api/skills/{id}", createdSkill.getId()))
@@ -132,6 +132,7 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isOk())
@@ -155,6 +156,7 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isBadRequest())
@@ -178,6 +180,7 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isOk())
@@ -202,6 +205,7 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isOk())
@@ -225,6 +229,7 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isOk())
@@ -248,11 +253,158 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.executionMode").value("CONFIG"))
                 .andExpect(jsonPath("$.configuration").value("{\"kind\":\"template\",\"prompt\":\"你是一位专业的翻译助手。请将用户输入翻译为英文。\"}"));
+    }
+
+    @Test
+    void publicSkill_otherUserCannotUpdateOrDelete() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "pub-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "public skill",
+                  "type": "EXTENSION",
+                  "visibility": "PUBLIC",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"api\\",\\"preset\\":\\"current-time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", "owner-alice")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isOk());
+
+        Skill created = skillRepository.findByName(skillName)
+                .orElseThrow(() -> new IllegalStateException("Created skill not found"));
+
+        String updateBody = """
+                {
+                  "name": "%s",
+                  "description": "hijack",
+                  "type": "EXTENSION",
+                  "visibility": "PUBLIC",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"api\\",\\"preset\\":\\"current-time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(put("/api/skills/{id}", created.getId())
+                        .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", "other-bob")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(updateBody))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(delete("/api/skills/{id}", created.getId())
+                        .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", "other-bob"))
+                .andExpect(status().isNotFound());
+
+        skillRepository.delete(created);
+    }
+
+    @Test
+    void platformPublicSkill_admin890728CanUpdateAndDelete() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "platform-" + System.nanoTime();
+        Skill platform = new Skill();
+        platform.setName(skillName);
+        platform.setDescription("platform row");
+        platform.setType("EXTENSION");
+        platform.setExecutionMode("CONFIG");
+        platform.setConfiguration(
+                "{\"kind\":\"api\",\"operation\":\"current-time\",\"method\":\"GET\",\"endpoint\":\"https://example.com/time\",\"preset\":\"current-time\"}");
+        platform.setEnabled(true);
+        platform.setRequiresConfirmation(false);
+        platform.setVisibility(SkillVisibility.PUBLIC);
+        platform.setCreatedBy(SkillService.PLATFORM_PUBLIC_AUTHOR);
+        Skill saved = skillRepository.save(platform);
+
+        String updateBody = """
+                {
+                  "name": "%s",
+                  "description": "updated by admin",
+                  "type": "EXTENSION",
+                  "visibility": "PUBLIC",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"api\\",\\"preset\\":\\"current-time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(put("/api/skills/{id}", saved.getId())
+                        .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", SkillService.SKILL_PLATFORM_ADMIN_USER_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(updateBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.description").value("updated by admin"));
+
+        mockMvc.perform(delete("/api/skills/{id}", saved.getId())
+                        .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", SkillService.SKILL_PLATFORM_ADMIN_USER_ID))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void publicSkill_admin890728CannotEditOtherUsersSkill() throws Exception {
+        String skillName = TEST_SKILL_PREFIX + "alice-pub-" + System.nanoTime();
+        String createBody = """
+                {
+                  "name": "%s",
+                  "description": "alice public",
+                  "type": "EXTENSION",
+                  "visibility": "PUBLIC",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"api\\",\\"preset\\":\\"current-time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(post("/api/skills")
+                        .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", "owner-alice")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(createBody))
+                .andExpect(status().isOk());
+
+        Skill created = skillRepository.findByName(skillName)
+                .orElseThrow(() -> new IllegalStateException("Created skill not found"));
+
+        String updateBody = """
+                {
+                  "name": "%s",
+                  "description": "admin hijack attempt",
+                  "type": "EXTENSION",
+                  "visibility": "PUBLIC",
+                  "executionMode": "CONFIG",
+                  "configuration": "{\\"kind\\":\\"api\\",\\"preset\\":\\"current-time\\",\\"operation\\":\\"current-time\\",\\"method\\":\\"GET\\",\\"endpoint\\":\\"https://example.com/time\\"}",
+                  "enabled": true,
+                  "requiresConfirmation": false
+                }
+                """.formatted(skillName);
+
+        mockMvc.perform(put("/api/skills/{id}", created.getId())
+                        .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", SkillService.SKILL_PLATFORM_ADMIN_USER_ID)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(updateBody))
+                .andExpect(status().isNotFound());
+
+        skillRepository.delete(created);
     }
 
     @Test
@@ -272,6 +424,7 @@ class SkillControllerCrudTest {
 
         mockMvc.perform(post("/api/skills")
                         .header("X-Agent-Token", TOKEN)
+                        .header("X-User-Id", USER_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(createBody))
                 .andExpect(status().isBadRequest())

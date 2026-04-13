@@ -38,7 +38,7 @@ test("loadGatewayExtendedTools loads enabled EXTENSION tools", async () => {
   });
 
   try {
-    const { loadGatewayExtendedTools } = require("../dist/tools/java-skills");
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
     const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token");
 
     assert.equal(tools.length, 1);
@@ -98,7 +98,7 @@ test("configured API extended skill builds query and proxies request", async () 
   };
 
   try {
-    const { loadGatewayExtendedTools } = require("../dist/tools/java-skills");
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
     const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token");
 
     assert.equal(tools.length, 1);
@@ -161,7 +161,7 @@ test("configured API extended skill validates parameter contract", async () => {
   };
 
   try {
-    const { loadGatewayExtendedTools } = require("../dist/tools/java-skills");
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
     const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token");
     assert.equal(tools.length, 1);
 
@@ -238,7 +238,7 @@ test("api skill generator creates and validates a generated API skill", async ()
   };
 
   try {
-    const { JavaSkillGeneratorTool } = require("../dist/tools/java-skills");
+    const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
     const result = await tool._call(JSON.stringify({
       rawDescription: "调用 ping 接口检测服务可用性",
@@ -274,7 +274,7 @@ test("api skill generator creates and validates a generated API skill", async ()
 });
 
 test("api skill generator reports missing required fields", async () => {
-  const { JavaSkillGeneratorTool } = require("../dist/tools/java-skills");
+  const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
   const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
 
   const result = await tool._call(JSON.stringify({
@@ -330,7 +330,7 @@ test("api skill generator updates existing skill when overwrite is enabled", asy
   };
 
   try {
-    const { JavaSkillGeneratorTool } = require("../dist/tools/java-skills");
+    const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
     const result = await tool._call(JSON.stringify({
       name: "Ping API",
@@ -430,7 +430,7 @@ test("openclaw skill executes allowed tools serially", async () => {
   };
 
   try {
-    const { loadGatewayExtendedTools } = require("../dist/tools/java-skills");
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
     const { DynamicTool } = require("@langchain/core/tools");
     const computeTool = new DynamicTool({
       name: "compute",
@@ -489,7 +489,7 @@ test("openclaw skill returns clarification when birthday is ambiguous", async ()
   };
 
   try {
-    const { loadGatewayExtendedTools } = require("../dist/tools/java-skills");
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
     const { DynamicTool } = require("@langchain/core/tools");
     const placeholderTimeTool = new DynamicTool({
       name: "extended_skill_1",
@@ -545,7 +545,7 @@ test("openclaw skill can answer with prompt only and no allowed tools", async ()
   };
 
   try {
-    const { loadGatewayExtendedTools } = require("../dist/tools/java-skills");
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
     const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token", undefined, {
       plannerModel: fakePlannerModel,
       availableTools: [],
@@ -637,7 +637,7 @@ test("openclaw skill can return next birthday result after current year passed",
   };
 
   try {
-    const { loadGatewayExtendedTools } = require("../dist/tools/java-skills");
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
     const { DynamicTool } = require("@langchain/core/tools");
     const computeTool = new DynamicTool({
       name: "compute",
@@ -689,7 +689,7 @@ test("skill generator creates an SSH skill", async () => {
   };
 
   try {
-    const { JavaSkillGeneratorTool } = require("../dist/tools/java-skills");
+    const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
     const result = await tool._call(JSON.stringify({
       targetType: "ssh",
@@ -741,7 +741,7 @@ test("skill generator creates an OPENCLAW skill", async () => {
   };
 
   try {
-    const { JavaSkillGeneratorTool } = require("../dist/tools/java-skills");
+    const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
     const result = await tool._call(JSON.stringify({
       targetType: "openclaw",
@@ -800,7 +800,7 @@ test("skill generator keeps saved skill when validation fails", async () => {
   };
 
   try {
-    const { JavaSkillGeneratorTool } = require("../dist/tools/java-skills");
+    const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
     const result = await tool._call(JSON.stringify({
       name: "Failing API",

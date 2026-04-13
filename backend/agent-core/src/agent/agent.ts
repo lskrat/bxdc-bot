@@ -1,4 +1,5 @@
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { MemorySaver } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import type { ClientOptions } from "openai";
 import { composeOpenAiCompatibleFetch } from "../utils/llm-request-role-normalize";
@@ -10,10 +11,14 @@ import {
   JavaLinuxScriptTool,
   JavaServerLookupTool,
   loadGatewayExtendedTools,
+  type BindableAgentTool,
 } from "../tools/java-skills";
 import { ManageTasksTool } from "../tools/manage-tasks";
 import { AgentAnnotation, preModelHook } from "./tasks-state";
 import type { SkillManager } from "../skills/skill.manager";
+
+/** Shared in-process checkpoint store for LangGraph interrupt/resume (see skill-confirmation-react-redesign). */
+const sharedAgentCheckpointer = new MemorySaver();
 
 /**
  * Agent 工厂类。
@@ -38,7 +43,11 @@ export class AgentFactory {
     config?: { modelName?: string, baseUrl?: string, callbacks?: any[] },
     skillManager?: SkillManager,
     userId?: string
-  ) {
+  ): Promise<{
+    agent: ReturnType<typeof createReactAgent>;
+    plannerModel: ChatOpenAI;
+    baseTools: BindableAgentTool[];
+  }> {
     const openAiConfiguration: ClientOptions = {};
     if (config?.baseUrl?.trim()) {
       openAiConfiguration.baseURL = config.baseUrl.replace(/\/+$/, "");
@@ -59,7 +68,7 @@ export class AgentFactory {
     const baseTools = [
       new JavaSshTool(gatewayUrl, apiToken, userId),
       new JavaApiTool(gatewayUrl, apiToken),
-      new JavaSkillGeneratorTool(gatewayUrl, apiToken),
+      new JavaSkillGeneratorTool(gatewayUrl, apiToken, userId),
       new JavaComputeTool(gatewayUrl, apiToken),
       new JavaLinuxScriptTool(gatewayUrl, apiToken),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),
@@ -75,11 +84,13 @@ export class AgentFactory {
       new ManageTasksTool(),
     ];
 
-    return createReactAgent({
+    const agent = createReactAgent({
       llm: model,
       tools,
       stateSchema: AgentAnnotation,
       preModelHook,
+      checkpointer: sharedAgentCheckpointer,
     });
+    return { agent, plannerModel: model, baseTools };
   }
 }

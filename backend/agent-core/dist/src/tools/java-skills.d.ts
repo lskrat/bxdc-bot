@@ -165,13 +165,21 @@ export declare function describeGatewayExtendedTool(toolName: string): {
     executionMode?: string;
     executionLabel?: string;
 } | null;
-type BindableAgentTool = Tool | DynamicTool | StructuredTool;
+export type BindableAgentTool = Tool | DynamicTool | StructuredTool;
 export declare function loadGatewayExtendedTools(gatewayUrl: string, apiToken: string, userId?: string, options?: {
     plannerModel?: any;
     availableTools?: BindableAgentTool[];
 }): Promise<DynamicTool[]>;
+export declare function buildConfirmedToolInputString(args: unknown): string;
+export declare function invokeExtendedSkillWithConfirmed(gatewayUrl: string, apiToken: string, userId: string | undefined, toolName: string, toolArguments: unknown, options: {
+    plannerModel: any;
+    availableTools: BindableAgentTool[];
+}): Promise<string>;
 export declare class JavaSkillGeneratorTool extends DynamicStructuredTool<typeof skillGeneratorToolInputSchema> {
-    constructor(gatewayUrl: string, apiToken: string);
+    private readonly gatewayUrl;
+    private readonly apiToken;
+    private readonly userId?;
+    constructor(gatewayUrl: string, apiToken: string, userId?: string);
 }
 export declare class JavaSshTool extends DynamicStructuredTool<typeof sshExecutorToolInputSchema> {
     constructor(gatewayUrl: string, apiToken: string, userId?: string);

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
-import { useChat, type LlmLogEntry, type Message, type ToolInvocation } from '../composables/useChat'
+import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { ChevronUpIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
 
-const { messages, isThinking, sendMessage } = useChat()
+const { messages, isThinking, sendMessage, confirmSkillAction } = useChat()
 const { currentUser } = useUser()
 const activeLogMessageId = ref<string | null>(null)
 
@@ -193,30 +193,59 @@ function getAvatarUrl(emoji: string) {
   return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
 }
 
-function parseConfirmationRequest(content: string) {
-  try {
-    if (content.includes('CONFIRMATION_REQUIRED')) {
-      // Try to parse the JSON block if it exists
-      const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/{[\s\S]*"status":\s*"CONFIRMATION_REQUIRED"[\s\S]*}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[1] || jsonMatch[0]);
-        if (parsed.status === 'CONFIRMATION_REQUIRED') {
-          return parsed;
-        }
-      }
-    }
-  } catch (e) {
-    // Ignore parsing errors
-  }
-  return null;
+function handleConfirmation(toolCallId: string, confirmed: boolean) {
+  confirmSkillAction(toolCallId, confirmed)
 }
 
-function handleConfirm(action: 'yes' | 'no') {
-  if (action === 'yes') {
-    sendMessage('I confirm. Please proceed with "confirmed": true.', currentUser.value?.id);
-  } else {
-    sendMessage('I cancel this action. Do not proceed.', currentUser.value?.id);
+function formatConfirmationArguments(args?: unknown): string {
+  if (args === undefined || args === null) return ''
+  if (typeof args === 'string') return args.trim() ? args : ''
+  try {
+    return JSON.stringify(args, null, 2)
+  } catch {
+    return String(args)
   }
+}
+
+function hasConfirmationArguments(args?: unknown): boolean {
+  if (args === undefined || args === null) return false
+  if (typeof args === 'string') return args.trim().length > 0
+  if (Array.isArray(args)) return args.length > 0
+  if (typeof args === 'object') return Object.keys(args as object).length > 0
+  return true
+}
+
+function confirmationHeaderTitle(conf: ConfirmationRequest): string {
+  if (conf.status === 'pending') return '需要确认执行'
+  if (conf.status === 'cancelled') return '已取消'
+  if (conf.status === 'expired') return '已过期'
+  if (conf.status === 'confirmed') {
+    if (conf.executionOutcome === 'completed') return '执行已完成'
+    if (conf.executionOutcome === 'failed') return '执行失败'
+    return '已确认'
+  }
+  return ''
+}
+
+function confirmationBadgeText(conf: ConfirmationRequest): string {
+  if (conf.status !== 'confirmed') return ''
+  if (conf.executionOutcome === 'completed') return '执行已完成'
+  if (conf.executionOutcome === 'failed') return '执行失败'
+  return '已确认，执行中...'
+}
+
+function confirmationCardClass(conf: ConfirmationRequest): string {
+  const base = `confirmation-card--${conf.status}`
+  if (conf.status !== 'confirmed') return base
+  if (conf.executionOutcome === 'completed') return `${base} confirmation-card--done`
+  if (conf.executionOutcome === 'failed') return `${base} confirmation-card--error`
+  return base
+}
+
+function confirmationBadgeClass(conf: ConfirmationRequest): string {
+  if (conf.executionOutcome === 'completed') return 'confirmation-badge--done'
+  if (conf.executionOutcome === 'failed') return 'confirmation-badge--failed'
+  return 'confirmation-badge--confirmed'
 }
 
 const chatItems = computed(() =>
@@ -225,7 +254,7 @@ const chatItems = computed(() =>
     role: message.role,
     content: [{ type: 'text', text: message.content }],
     rawContent: message.content,
-    confirmationRequest: message.role === 'assistant' ? parseConfirmationRequest(message.content) : null,
+    confirmations: message.confirmations ?? [],
     toolInvocations: message.toolInvocations ?? [],
     llmLogs: message.llmLogs ?? [],
     showThinking: message.role === 'assistant' && isThinking.value && index === list.length - 1,
@@ -292,17 +321,36 @@ const chatItems = computed(() =>
             "
           />
 
-          <div v-if="item.confirmationRequest" class="confirmation-card">
+          <div
+            v-for="conf in item.confirmations"
+            :key="conf.toolCallId"
+            class="confirmation-card"
+            :class="confirmationCardClass(conf)"
+          >
             <div class="confirmation-header">
-              <span class="confirmation-title">Action Confirmation Required</span>
+              <span class="confirmation-title">{{ confirmationHeaderTitle(conf) }}</span>
             </div>
             <div class="confirmation-body">
-              <p><strong>Action:</strong> {{ item.confirmationRequest.summary }}</p>
-              <p><strong>Details:</strong> {{ item.confirmationRequest.details }}</p>
+              <p><strong>技能：</strong>{{ conf.skillName }}</p>
+              <p><strong>操作：</strong>{{ conf.summary }}</p>
+              <p v-if="conf.details"><strong>详情：</strong>{{ conf.details }}</p>
+              <div v-if="hasConfirmationArguments(conf.arguments)" class="confirmation-params">
+                <div class="confirmation-params-label">本次调用参数</div>
+                <pre class="confirmation-params-pre">{{ formatConfirmationArguments(conf.arguments) }}</pre>
+              </div>
             </div>
-            <div class="confirmation-actions">
-              <t-button theme="default" variant="outline" @click="handleConfirm('no')">Cancel</t-button>
-              <t-button theme="primary" @click="handleConfirm('yes')">Confirm & Execute</t-button>
+            <div v-if="conf.status === 'pending'" class="confirmation-actions">
+              <t-button theme="default" variant="outline" @click="handleConfirmation(conf.toolCallId, false)">取消</t-button>
+              <t-button theme="primary" @click="handleConfirmation(conf.toolCallId, true)">确认执行</t-button>
+            </div>
+            <div v-else class="confirmation-status-badge">
+              <span
+                v-if="conf.status === 'confirmed'"
+                class="confirmation-badge"
+                :class="confirmationBadgeClass(conf)"
+              >{{ confirmationBadgeText(conf) }}</span>
+              <span v-else-if="conf.status === 'cancelled'" class="confirmation-badge confirmation-badge--cancelled">已取消</span>
+              <span v-else class="confirmation-badge confirmation-badge--expired">已过期</span>
             </div>
           </div>
 
@@ -968,7 +1016,16 @@ const chatItems = computed(() =>
   border-radius: var(--td-radius-medium);
   background-color: var(--td-bg-color-container);
   overflow: hidden;
-  max-width: 400px;
+  max-width: 420px;
+}
+
+.confirmation-card--confirmed {
+  border-color: var(--td-success-color-3);
+}
+
+.confirmation-card--cancelled,
+.confirmation-card--expired {
+  opacity: 0.7;
 }
 
 .confirmation-header {
@@ -977,10 +1034,36 @@ const chatItems = computed(() =>
   border-bottom: 1px solid var(--td-border-level-1-color);
 }
 
+.confirmation-card--confirmed .confirmation-header {
+  background-color: var(--td-success-color-1);
+}
+
+.confirmation-card--cancelled .confirmation-header,
+.confirmation-card--expired .confirmation-header {
+  background-color: var(--td-bg-color-secondarycontainer);
+}
+
 .confirmation-title {
   font-weight: 600;
   color: var(--td-warning-color-6);
   font-size: 14px;
+}
+
+.confirmation-card--confirmed .confirmation-title {
+  color: var(--td-success-color-6);
+}
+
+.confirmation-card--done .confirmation-title {
+  color: var(--td-success-color-6);
+}
+
+.confirmation-card--error .confirmation-title {
+  color: var(--td-error-color-6);
+}
+
+.confirmation-card--cancelled .confirmation-title,
+.confirmation-card--expired .confirmation-title {
+  color: var(--td-text-color-secondary);
 }
 
 .confirmation-body {
@@ -990,11 +1073,35 @@ const chatItems = computed(() =>
 }
 
 .confirmation-body p {
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
 }
 
 .confirmation-body p:last-child {
   margin-bottom: 0;
+}
+
+.confirmation-params {
+  margin-top: 8px;
+}
+
+.confirmation-params-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--td-text-color-primary);
+}
+
+.confirmation-params-pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--td-bg-color-secondarycontainer);
+  border-radius: 6px;
+  border: 1px solid var(--td-border-level-1-color);
+  max-height: 220px;
+  overflow: auto;
 }
 
 .confirmation-actions {
@@ -1003,5 +1110,36 @@ const chatItems = computed(() =>
   justify-content: flex-end;
   gap: 8px;
   border-top: 1px solid var(--td-border-level-1-color);
+}
+
+.confirmation-status-badge {
+  padding: 8px 12px;
+  border-top: 1px solid var(--td-border-level-1-color);
+  text-align: center;
+}
+
+.confirmation-badge {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.confirmation-badge--confirmed {
+  color: var(--td-success-color);
+}
+
+.confirmation-badge--done {
+  color: var(--td-success-color);
+}
+
+.confirmation-badge--failed {
+  color: var(--td-error-color);
+}
+
+.confirmation-badge--cancelled {
+  color: var(--td-text-color-placeholder);
+}
+
+.confirmation-badge--expired {
+  color: var(--td-text-color-placeholder);
 }
 </style>

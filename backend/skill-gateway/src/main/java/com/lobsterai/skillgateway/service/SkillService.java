@@ -1,6 +1,7 @@
 package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.entity.Skill;
+import com.lobsterai.skillgateway.entity.SkillVisibility;
 import com.lobsterai.skillgateway.repository.SkillRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,6 +14,12 @@ import java.util.Optional;
 @Service
 public class SkillService {
 
+    /** 平台公共种子 / Built-in 对应行的创建者标识（与 spec 一致） */
+    public static final String PLATFORM_PUBLIC_AUTHOR = "public";
+
+    /** 可写 {@code createdBy=public} 平台行的固定管理员用户 ID（与 X-User-Id 字符串比较，非配置项） */
+    public static final String SKILL_PLATFORM_ADMIN_USER_ID = "890728";
+
     private final SkillRepository skillRepository;
     private final ObjectMapper objectMapper;
 
@@ -21,30 +28,43 @@ public class SkillService {
         this.objectMapper = objectMapper;
     }
 
-    public List<Skill> getAllSkills() {
-        return skillRepository.findAllSummary();
+    public List<Skill> listSkillsForUser(String userId) {
+        if (userId == null || userId.isBlank()) {
+            return skillRepository.findAllPublicSummary(SkillVisibility.PUBLIC);
+        }
+        return skillRepository.findVisibleSummaryForUser(SkillVisibility.PUBLIC, SkillVisibility.PRIVATE, userId);
     }
 
-    public Optional<Skill> getSkillById(Long id) {
-        return skillRepository.findById(id);
+    public Optional<Skill> getSkillByIdForUser(Long id, String userId) {
+        return skillRepository.findById(id).filter(skill -> canViewSkill(skill, userId));
     }
 
     public Optional<Skill> getSkillByName(String name) {
         return skillRepository.findByName(name);
     }
 
-    public Skill createSkill(Skill skill) {
+    public Skill createSkill(Skill skill, String userId) {
+        if (userId == null || userId.isBlank()) {
+            throw new IllegalArgumentException("X-User-Id is required");
+        }
         if (skillRepository.findByName(skill.getName()).isPresent()) {
             throw new IllegalArgumentException("Skill with name " + skill.getName() + " already exists");
+        }
+        skill.setCreatedBy(userId);
+        if (skill.getVisibility() == null) {
+            skill.setVisibility(SkillVisibility.PRIVATE);
         }
         skill.setExecutionMode(normalizeExecutionMode(skill.getExecutionMode()));
         skill.setConfiguration(normalizeAndValidateConfiguration(skill.getExecutionMode(), skill.getConfiguration()));
         return skillRepository.save(skill);
     }
 
-    public Skill updateSkill(Long id, Skill skillDetails) {
+    public Skill updateSkill(Long id, Skill skillDetails, String userId) {
         Skill skill = skillRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Skill not found for this id :: " + id));
+        if (!canWriteSkill(skill, userId)) {
+            throw new IllegalArgumentException("Skill not found for this id :: " + id);
+        }
 
         skill.setName(skillDetails.getName());
         skill.setDescription(skillDetails.getDescription());
@@ -53,14 +73,44 @@ public class SkillService {
         skill.setConfiguration(normalizeAndValidateConfiguration(skill.getExecutionMode(), skillDetails.getConfiguration()));
         skill.setEnabled(skillDetails.isEnabled());
         skill.setRequiresConfirmation(skillDetails.isRequiresConfirmation());
+        if (skillDetails.getVisibility() != null) {
+            skill.setVisibility(skillDetails.getVisibility());
+        }
 
         return skillRepository.save(skill);
     }
 
-    public void deleteSkill(Long id) {
+    public void deleteSkill(Long id, String userId) {
         Skill skill = skillRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Skill not found for this id :: " + id));
+        if (!canWriteSkill(skill, userId)) {
+            throw new IllegalArgumentException("Skill not found for this id :: " + id);
+        }
         skillRepository.delete(skill);
+    }
+
+    private static boolean canViewSkill(Skill skill, String userId) {
+        if (skill.getVisibility() == SkillVisibility.PUBLIC) {
+            return true;
+        }
+        if (userId == null || userId.isBlank()) {
+            return false;
+        }
+        return userId.equals(skill.getCreatedBy());
+    }
+
+    private static boolean canWriteSkill(Skill skill, String userId) {
+        if (userId == null || userId.isBlank()) {
+            return false;
+        }
+        if (skill.getVisibility() == SkillVisibility.PRIVATE) {
+            return userId.equals(skill.getCreatedBy());
+        }
+        // PUBLIC: only creator, except platform rows (createdBy=public) editable by fixed admin id only
+        if (PLATFORM_PUBLIC_AUTHOR.equals(skill.getCreatedBy())) {
+            return SKILL_PLATFORM_ADMIN_USER_ID.equals(userId);
+        }
+        return userId.equals(skill.getCreatedBy());
     }
 
     private static String normalizeExecutionMode(String executionMode) {

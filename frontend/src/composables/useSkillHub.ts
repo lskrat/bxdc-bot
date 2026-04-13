@@ -1,5 +1,8 @@
 import { ref } from 'vue';
 import { agentUrl, apiUrl } from '../services/config';
+import { useUser } from './useUser';
+
+export type SkillVisibility = 'PUBLIC' | 'PRIVATE';
 
 export interface Skill {
   id: number;
@@ -10,6 +13,23 @@ export interface Skill {
   configuration: string;
   enabled: boolean;
   requiresConfirmation?: boolean;
+  visibility?: SkillVisibility;
+  createdBy?: string;
+}
+
+/** 与 SkillGateway `SKILL_PLATFORM_ADMIN_USER_ID` 一致；可管理 `createdBy=public` 的平台行 */
+export const SKILL_PLATFORM_ADMIN_USER_ID = '890728';
+
+export function canManageGatewaySkill(skill: Skill, userId: string | number | undefined | null): boolean {
+  if (userId === undefined || userId === null || String(userId).trim() === '') {
+    return false;
+  }
+  const uid = String(userId).trim();
+  const createdBy = (skill.createdBy ?? '').trim();
+  if (uid === createdBy) {
+    return true;
+  }
+  return uid === SKILL_PLATFORM_ADMIN_USER_ID && createdBy === 'public';
 }
 
 interface ConfigSummary {
@@ -100,6 +120,16 @@ export const BUILT_IN_SKILLS = [
 ];
 
 export function useSkillHub() {
+  const { currentUser } = useUser();
+
+  function userIdHeader(): Record<string, string> {
+    const id = currentUser.value?.id;
+    if (id === undefined || id === null || String(id).trim() === '') {
+      return {};
+    }
+    return { 'X-User-Id': String(id) };
+  }
+
   function toggleSkillHub() {
     isSkillHubVisible.value = !isSkillHubVisible.value;
     if (isSkillHubVisible.value) {
@@ -132,7 +162,9 @@ export function useSkillHub() {
     isLoading.value = true;
     error.value = null;
     try {
-      const res = await fetch(apiUrl('/api/skills'));
+      const res = await fetch(apiUrl('/api/skills'), {
+        headers: userIdHeader(),
+      });
       if (!res.ok) {
         throw new Error('Failed to fetch skills');
       }
@@ -146,9 +178,11 @@ export function useSkillHub() {
   }
 
   async function fetchSkill(id: number): Promise<Skill> {
-    const res = await fetch(apiUrl(`/api/skills/${id}`));
+    const res = await fetch(apiUrl(`/api/skills/${id}`), {
+      headers: userIdHeader(),
+    });
     if (!res.ok) {
-      throw new Error(`Failed to fetch skill ${id}`);
+      throw new Error(res.status === 404 ? 'Skill 不存在或无权查看' : `Failed to fetch skill ${id}`);
     }
     return await res.json();
   }
@@ -158,6 +192,7 @@ export function useSkillHub() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...userIdHeader(),
       },
       body: JSON.stringify(payload),
     });
@@ -173,12 +208,21 @@ export function useSkillHub() {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
+        ...userIdHeader(),
       },
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to update skill');
+      let message = res.status === 404 ? 'Skill 不存在或无权修改' : '更新失败';
+      try {
+        const err = (await res.json()) as { error?: string };
+        if (typeof err?.error === 'string' && err.error.trim()) {
+          message = err.error;
+        }
+      } catch {
+        // empty or non-JSON body (e.g. 404)
+      }
+      throw new Error(message);
     }
     await fetchSkills();
   }
@@ -186,9 +230,19 @@ export function useSkillHub() {
   async function deleteSkill(id: number) {
     const res = await fetch(agentUrl(`/features/skills/${id}`), {
       method: 'DELETE',
+      headers: userIdHeader(),
     });
     if (!res.ok) {
-      throw new Error('Failed to delete skill');
+      let message = res.status === 404 ? 'Skill 不存在或无权删除' : '删除失败';
+      try {
+        const err = (await res.json()) as { error?: string };
+        if (typeof err?.error === 'string' && err.error.trim()) {
+          message = err.error;
+        }
+      } catch {
+        // empty body
+      }
+      throw new Error(message);
     }
     await fetchSkills();
   }
@@ -203,6 +257,7 @@ export function useSkillHub() {
       configuration: fullSkill.configuration,
       enabled,
       requiresConfirmation: fullSkill.requiresConfirmation ?? false,
+      visibility: fullSkill.visibility ?? 'PRIVATE',
     });
   }
 

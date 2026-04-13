@@ -16,7 +16,7 @@ export default defineConfig({
     }
   },
   // When VITE_API_URL / VITE_AGENT_URL are unset, apiUrl()/agentUrl() use
-  // same-origin paths /api/* and /features/* — forward them to backends.
+  // same-origin paths /api/*, /features/*, /agent/* — forward them to backends.
   server: {
     proxy: {
       '/api': {
@@ -24,6 +24,11 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/features': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
+      /** Agent Core (NestJS): POST /agent/run, POST /agent/confirm, … */
+      '/agent': {
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
       },

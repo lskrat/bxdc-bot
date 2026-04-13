@@ -5,6 +5,7 @@ node_modules/
 dist-ssr/
 target/
 frontend/dist.zip
+frontend/dist 2.zip
 
 # IDE & OS
 .DS_Store

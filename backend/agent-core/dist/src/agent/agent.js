@@ -2,11 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AgentFactory = void 0;
 const prebuilt_1 = require("@langchain/langgraph/prebuilt");
+const langgraph_1 = require("@langchain/langgraph");
 const openai_1 = require("@langchain/openai");
 const llm_request_role_normalize_1 = require("../utils/llm-request-role-normalize");
 const java_skills_1 = require("../tools/java-skills");
 const manage_tasks_1 = require("../tools/manage-tasks");
 const tasks_state_1 = require("./tasks-state");
+const sharedAgentCheckpointer = new langgraph_1.MemorySaver();
 class AgentFactory {
     static async createAgent(gatewayUrl, apiToken, openAiApiKey, config, skillManager, userId) {
         const openAiConfiguration = {};
@@ -26,7 +28,7 @@ class AgentFactory {
         const baseTools = [
             new java_skills_1.JavaSshTool(gatewayUrl, apiToken, userId),
             new java_skills_1.JavaApiTool(gatewayUrl, apiToken),
-            new java_skills_1.JavaSkillGeneratorTool(gatewayUrl, apiToken),
+            new java_skills_1.JavaSkillGeneratorTool(gatewayUrl, apiToken, userId),
             new java_skills_1.JavaComputeTool(gatewayUrl, apiToken),
             new java_skills_1.JavaLinuxScriptTool(gatewayUrl, apiToken),
             new java_skills_1.JavaServerLookupTool(gatewayUrl, apiToken, userId),
@@ -41,12 +43,14 @@ class AgentFactory {
             ...(skillManager?.getLangChainTools() || []),
             new manage_tasks_1.ManageTasksTool(),
         ];
-        return (0, prebuilt_1.createReactAgent)({
+        const agent = (0, prebuilt_1.createReactAgent)({
             llm: model,
             tools,
             stateSchema: tasks_state_1.AgentAnnotation,
             preModelHook: tasks_state_1.preModelHook,
+            checkpointer: sharedAgentCheckpointer,
         });
+        return { agent, plannerModel: model, baseTools };
     }
 }
 exports.AgentFactory = AgentFactory;

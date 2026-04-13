@@ -1,4 +1,4 @@
-import { apiUrl } from './config'
+import { apiUrl, agentUrl } from './config'
 
 export async function createTask(content: string, userId?: string, history?: any[]): Promise<{ id: string }> {
   const response = await fetch(apiUrl('/api/tasks'), {
@@ -18,4 +18,24 @@ export async function createTask(content: string, userId?: string, history?: any
 
 export function getEventSourceUrl(taskId: string): string {
   return apiUrl(`/api/tasks/${taskId}/events`)
+}
+
+export async function confirmAction(
+  sessionId: string,
+  toolCallId: string,
+  confirmed: boolean,
+): Promise<void> {
+  const response = await fetch(agentUrl('/agent/confirm'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId, toolCallId, confirmed }),
+  })
+
+  if (!response.ok) {
+    const detail =
+      response.status === 404
+        ? 'No pending confirmation (session may have expired).'
+        : `Confirm request failed (${response.status})`
+    throw new Error(detail)
+  }
 }
