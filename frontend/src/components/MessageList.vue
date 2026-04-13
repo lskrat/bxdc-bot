@@ -5,7 +5,7 @@ import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type Conf
 import { useUser } from '../composables/useUser'
 import { ChevronUpIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
 
-const { messages, isThinking, sendMessage, confirmSkillAction } = useChat()
+const { messages, isThinking, confirmSkillAction } = useChat()
 const { currentUser } = useUser()
 const activeLogMessageId = ref<string | null>(null)
 
@@ -896,7 +896,10 @@ const chatItems = computed(() =>
 .thinking-wave::after {
   content: '';
   position: absolute;
-  inset: 0;
+  /* `inset` is Chrome 87+; anchor bar to the left for Chromium 86 */
+  top: 0;
+  bottom: 0;
+  left: 0;
   width: 40%;
   border-radius: inherit;
   background: linear-gradient(90deg, transparent, var(--td-brand-color), transparent);

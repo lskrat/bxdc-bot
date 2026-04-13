@@ -6,6 +6,14 @@ import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Chromium 86 baseline: avoid ES2022+ that older runtimes may not parse if deps ship untranspiled
+  build: {
+    target: 'chrome86',
+    cssTarget: 'chrome86',
+  },
+  esbuild: {
+    target: 'chrome86',
+  },
   plugins: [
     vue(),
     tailwindcss(),
