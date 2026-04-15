@@ -108,21 +108,49 @@ export function useUser() {
     }
   }
 
+  function userHeadersJson(userId: string): Record<string, string> {
+    return {
+      'Content-Type': 'application/json',
+      'X-User-Id': userId,
+    };
+  }
+
   async function updateAvatar(id: string, avatar: string) {
     try {
-        const res = await fetch(apiUrl(`/api/user/${id}/avatar`), {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ avatar })
-        });
-        if (res.ok) {
-            const user = await res.json();
-            currentUser.value = user;
-            return user;
-        }
+      const res = await fetch(apiUrl(`/api/user/${id}/avatar`), {
+        method: 'PUT',
+        headers: userHeadersJson(id),
+        body: JSON.stringify({ avatar }),
+      });
+      if (res.ok) {
+        const user = await res.json();
+        currentUser.value = user;
+        return user;
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error || '更新头像失败');
     } catch (e) {
-        console.error('Failed to update avatar:', e);
+      console.error('Failed to update avatar:', e);
+      throw e;
     }
+  }
+
+  async function updateProfile(
+    id: string,
+    body: { nickname?: string; avatar?: string },
+  ): Promise<User> {
+    const res = await fetch(apiUrl(`/api/user/${id}/profile`), {
+      method: 'PUT',
+      headers: userHeadersJson(id),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error((err as { error?: string }).error || '保存失败');
+    }
+    const user = (await res.json()) as User;
+    currentUser.value = user;
+    return user;
   }
 
   async function fetchLlmSettings(userId: string): Promise<LlmSettingsResponse> {
@@ -157,6 +185,7 @@ export function useUser() {
     logout,
     restoreSession,
     updateAvatar,
+    updateProfile,
     fetchLlmSettings,
     saveLlmSettings,
   };

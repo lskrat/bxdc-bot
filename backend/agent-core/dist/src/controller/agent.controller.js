@@ -77,6 +77,8 @@ Extension skills marked as requiring confirmation and high-risk SSH commands are
 `;
 const AGENT_EXTENDED_SKILL_ROUTING_POLICY = `[Extended skill routing]
 When SkillGateway extension tools are available in this run (names usually start with "extended_"), you MUST call the matching extension tool for requests that fall within that skill's described capability.
+Extension tools use structured parameters: pass fields as top-level tool arguments per the tool schema (not a single "input" JSON string).
+For remote shell tasks, prefer extension SSH skills; the built-in ssh_executor tool may be unavailable in authenticated sessions—use extended SSH skills and server_lookup for server aliases.
 Do NOT use built-in tools such as api_caller, ssh_executor, linux_script_executor, compute, or server_lookup to bypass such an extension skill unless: (1) the user explicitly asks for the low-level/built-in path; (2) no extension skill reasonably matches the request; or (3) the extension tool failed and a built-in fallback is clearly necessary (state briefly when you fall back).
 Do not rely on URLs, hosts, or command fragments remembered from earlier messages to skip the extension tool—invoke the extension tool with explicit parameters when it applies.
 
@@ -375,7 +377,7 @@ let AgentController = class AgentController {
                 const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
                     subject.next({ data: JSON.stringify(event) });
                 });
-                const { agent } = await agent_1.AgentFactory.createAgent(gatewayUrl, apiToken, openAiApiKey, { modelName, baseUrl, callbacks: [llmCallbackHandler] }, this.skillManager, userId);
+                const { agent } = await agent_1.AgentFactory.createAgent(gatewayUrl, apiToken, openAiApiKey, { modelName, baseUrl, callbacks: [llmCallbackHandler], sessionId }, this.skillManager, userId);
                 const memories = await this.memoryService.searchMemories(instruction, userId, 10);
                 console.log(`[Memory] Retrieved ${memories.length} memories for user ${userId}`);
                 if (memories.length > 0) {

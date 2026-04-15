@@ -106,9 +106,13 @@ public class SecurityConfig {
         @Override
         protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
                 throws ServletException, IOException {
-            boolean isSkillRoute = request.getRequestURI().startsWith("/api/skills");
-            boolean isReadOnlySkillRequest = "GET".equalsIgnoreCase(request.getMethod());
-            if (!isSkillRoute || isReadOnlySkillRequest) {
+            String uri = request.getRequestURI();
+            String method = request.getMethod();
+            boolean isSkillRoute = uri.startsWith("/api/skills");
+            boolean isReadOnlySkillRequest = "GET".equalsIgnoreCase(method);
+            boolean internalAuditPost = uri.startsWith("/api/internal/llm-http-audit") && "POST".equalsIgnoreCase(method);
+            boolean needsToken = (isSkillRoute && !isReadOnlySkillRequest) || internalAuditPost;
+            if (!needsToken) {
                 filterChain.doFilter(request, response);
                 return;
             }

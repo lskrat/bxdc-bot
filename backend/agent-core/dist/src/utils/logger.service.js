@@ -138,8 +138,48 @@ let LoggerService = class LoggerService {
         this.writeJsonLine(this.llmLogPath, entry);
         return entry;
     }
+    stripLangChainExtraParamsNoise(value, depth = 0) {
+        if (depth > 10)
+            return '[truncated]';
+        if (value == null)
+            return value;
+        if (typeof value === 'function')
+            return undefined;
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            return value;
+        }
+        if (Array.isArray(value)) {
+            const out = [];
+            for (const item of value) {
+                if (typeof item === 'function')
+                    continue;
+                const cleaned = this.stripLangChainExtraParamsNoise(item, depth + 1);
+                if (cleaned !== undefined)
+                    out.push(cleaned);
+            }
+            return out;
+        }
+        if (typeof value === 'object') {
+            const result = {};
+            for (const [key, raw] of Object.entries(value)) {
+                if (key === 'invocation_params')
+                    continue;
+                if (typeof raw === 'function')
+                    continue;
+                const cleaned = this.stripLangChainExtraParamsNoise(raw, depth + 1);
+                if (cleaned !== undefined) {
+                    result[key] = cleaned;
+                }
+            }
+            return result;
+        }
+        return String(value);
+    }
     sanitizeInvocationParams(extraParams) {
-        return this.sanitizeValue(extraParams);
+        const stripped = this.stripLangChainExtraParamsNoise(extraParams);
+        if (stripped === undefined)
+            return undefined;
+        return this.sanitizeValue(stripped);
     }
     normalizeLangChainRoleToOpenAi(role) {
         if (typeof role !== 'string')
@@ -227,7 +267,7 @@ let LoggerService = class LoggerService {
         return summaryParts.join(' · ') || '收到模型响应';
     }
     sanitizeValue(value, depth = 0) {
-        if (depth > 8)
+        if (depth > 10)
             return '[truncated]';
         if (value == null)
             return value;

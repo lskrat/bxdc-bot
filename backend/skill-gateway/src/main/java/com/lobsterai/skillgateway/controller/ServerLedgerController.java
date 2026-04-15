@@ -21,7 +21,13 @@ public class ServerLedgerController {
     }
 
     private String getUserId(Map<String, String> headers) {
-        String userId = headers.get("x-user-id");
+        String userId = null;
+        for (Map.Entry<String, String> e : headers.entrySet()) {
+            if ("x-user-id".equalsIgnoreCase(e.getKey())) {
+                userId = e.getValue();
+                break;
+            }
+        }
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("X-User-Id header is required");
         }
@@ -46,7 +52,7 @@ public class ServerLedgerController {
             }).collect(Collectors.toList());
             return ResponseEntity.ok(response);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(401).body(Map.of("error", e.getMessage()));
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 

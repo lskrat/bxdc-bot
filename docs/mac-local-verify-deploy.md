@@ -128,6 +128,7 @@ MEM0_URL=http://127.0.0.1:8001
 - 如果本机没有部署 `mem0`，可以临时改成远端可用地址
 - 当前代码在未配置 `MEM0_URL` 时，会回退到默认地址 `http://39.104.81.41:8001`
 - 联调大模型 HTTP 时可将 `LLM_RAW_HTTP_LOG` 设为 `true`（或 `1` / `yes` / `on`），原始请求与响应会写入 `backend/agent-core/logs/llmOrg.log`（单个 JSON 数组、格式化；每次返回后插入 `----------------调用/返回----------------` 分割行，约保留最近 10 次往返）；**日志可能含密钥与用户内容**，默认关闭，勿在生产长期开启
+- 若需将同等审计数据写入数据库便于集中管理：在已配置 `JAVA_GATEWAY_URL` 与 `JAVA_GATEWAY_TOKEN` 的前提下将 `LLM_ORG_LOG_REMOTE` 设为 `true`。agent-core 仅向 skill-gateway `POST /api/internal/llm-http-audit/events`，由网关写入表 `llm_http_audit_logs`（含 `user_id`、`recorded_at` 等）；**agent-core 不直连业务库**。可与本地 `llmOrg.log` 同时开启或单独开启远程；**仍可能含敏感内容**，生产慎用
 - 调试前端入参时可将 `AGENT_RUN_RAW_LOG` 设为 `true`，每次 `POST /agent/run` 的请求体会脱敏后追加到 `logs/agentRun.log`（可用 `AGENT_RUN_RAW_LOG_MAX_CHARS`、`AGENT_RUN_RAW_LOG_PATH` 调整）；**仍可能含用户对话原文**，默认关闭
 
 ### 4.3 Skill Gateway 配置
@@ -136,17 +137,17 @@ MEM0_URL=http://127.0.0.1:8001
 
 - `backend/skill-gateway/src/main/resources/application-local.properties`
 
-建议内容如下：
+建议内容如下（与仓库默认 `application.properties` 一致时可省略本文件；需先在本机 MySQL 中创建库 `fishtank`，字符集建议 `utf8mb4`）：
 
 ```properties
-spring.datasource.url=jdbc:h2:file:./data/fishtank_db;DB_CLOSE_DELAY=-1
-spring.datasource.driverClassName=org.h2.Driver
-spring.datasource.username=sa
-spring.datasource.password=password
+spring.datasource.url=jdbc:mysql://127.0.0.1:3306/fishtank?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&serverTimezone=UTC
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+spring.datasource.username=root
+spring.datasource.password=your-mysql-password
 spring.sql.init.mode=always
-spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
-spring.h2.console.enabled=true
+spring.jpa.database-platform=org.hibernate.dialect.MySQLDialect
 spring.jpa.hibernate.ddl-auto=update
+spring.jpa.defer-datasource-initialization=true
 
 server.address=127.0.0.1
 server.port=18080
@@ -165,7 +166,7 @@ export JAVA_GATEWAY_TOKEN=your-secure-token-here
 
 - `agent.core.url` 必须指向本地 `agent-core`
 - `app.cors.allowed-origins` 需要放通 Vite 本地地址
-- H2 数据库会落到 `backend/skill-gateway/data/` 下
+- 业务数据在 MySQL 库 `fishtank` 中；若曾使用旧版 H2 文件库，可将 H2 数据导出后再导入 MySQL（或在新库上从零开始）
 
 ## 5. 依赖安装
 

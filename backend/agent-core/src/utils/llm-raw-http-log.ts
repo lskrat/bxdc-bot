@@ -50,6 +50,40 @@ export function isLlmRawHttpLogEnabled(): boolean {
   return v === 'true' || v === '1' || v === 'yes' || v === 'on';
 }
 
+/**
+ * When true, POST each audit record to skill-gateway (requires JAVA_GATEWAY_URL + JAVA_GATEWAY_TOKEN).
+ * Independent of local file logging; typically used with LLM_RAW_HTTP_LOG or alone for DB-only audit.
+ */
+export function isLlmOrgLogRemoteEnabled(): boolean {
+  const v = process.env.LLM_ORG_LOG_REMOTE?.trim().toLowerCase();
+  return v === 'true' || v === '1' || v === 'yes' || v === 'on';
+}
+
+export function isLlmHttpAuditActive(): boolean {
+  return isLlmRawHttpLogEnabled() || isLlmOrgLogRemoteEnabled();
+}
+
+function postRemoteAudit(payload: Record<string, unknown>): void {
+  if (!isLlmOrgLogRemoteEnabled()) {
+    return;
+  }
+  const base = process.env.JAVA_GATEWAY_URL?.trim().replace(/\/+$/, '');
+  const token = process.env.JAVA_GATEWAY_TOKEN?.trim();
+  if (!base || !token) {
+    return;
+  }
+  void fetch(`${base}/api/internal/llm-http-audit/events`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Agent-Token': token,
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => {
+    /* never break LLM */
+  });
+}
+
 function truncateBody(text: string): { text: string; truncated: boolean } {
   const limit = maxBodyChars();
   if (text.length <= limit) {
@@ -138,19 +172,40 @@ function sectionDividerRecord(): Record<string, unknown> {
   };
 }
 
-function appendRecord(record: Record<string, unknown>): void {
-  persistChain = persistChain
-    .then(() => {
-      ensureLogsDir();
-      const p = logFilePath();
-      const prev = loadExistingRecords(p);
-      prev.push(record);
-      const next = prev.length > MAX_STORED_RECORDS ? prev.slice(-MAX_STORED_RECORDS) : prev;
-      fs.writeFileSync(p, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
-    })
-    .catch(() => {
-      // Never break LLM calls due to logging
+function appendRecord(
+  record: Record<string, unknown>,
+  meta?: { userId?: string; sessionId?: string },
+): void {
+  if (isLlmRawHttpLogEnabled()) {
+    persistChain = persistChain
+      .then(() => {
+        ensureLogsDir();
+        const p = logFilePath();
+        const prev = loadExistingRecords(p);
+        prev.push(record);
+        const next = prev.length > MAX_STORED_RECORDS ? prev.slice(-MAX_STORED_RECORDS) : prev;
+        fs.writeFileSync(p, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+      })
+      .catch(() => {
+        // Never break LLM calls due to logging
+      });
+  }
+
+  if (isLlmOrgLogRemoteEnabled() && meta) {
+    const kind = record.kind;
+    if (kind === 'llmRawLogSection') {
+      return;
+    }
+    postRemoteAudit({
+      ...record,
+      ...(meta.userId != null && String(meta.userId).trim() !== ''
+        ? { userId: String(meta.userId).trim() }
+        : {}),
+      ...(meta.sessionId != null && String(meta.sessionId).trim() !== ''
+        ? { sessionId: String(meta.sessionId).trim() }
+        : {}),
     });
+  }
 }
 
 function resolveUrl(input: RequestInfo | URL): string {
@@ -208,43 +263,58 @@ async function readRequestBodyForLog(
 async function logResponseClone(
   correlationId: string,
   response: Response,
+  meta?: { userId?: string; sessionId?: string },
 ): Promise<void> {
   try {
     const clone = response.clone();
     const text = await clone.text();
     const { text: bodyText, truncated } = truncateBody(text);
-    appendRecord({
-      ts: new Date().toISOString(),
-      direction: 'response',
-      correlationId,
-      status: response.status,
-      statusText: response.statusText,
-      headers: headersObject(response.headers),
-      contentType: response.headers.get('content-type') ?? undefined,
-      body: tryParseJsonBody(bodyText, truncated),
-      bodyLengthChars: bodyText.length,
-      truncated,
-    });
-    appendRecord(sectionDividerRecord());
+    appendRecord(
+      {
+        ts: new Date().toISOString(),
+        direction: 'response',
+        correlationId,
+        status: response.status,
+        statusText: response.statusText,
+        headers: headersObject(response.headers),
+        contentType: response.headers.get('content-type') ?? undefined,
+        body: tryParseJsonBody(bodyText, truncated),
+        bodyLengthChars: bodyText.length,
+        truncated,
+      },
+      meta,
+    );
+    appendRecord(sectionDividerRecord(), meta);
   } catch {
-    appendRecord({
-      ts: new Date().toISOString(),
-      direction: 'response',
-      correlationId,
-      status: response.status,
-      statusText: response.statusText,
-      body: '[failed to read response body for log]',
-      truncated: false,
-    });
-    appendRecord(sectionDividerRecord());
+    appendRecord(
+      {
+        ts: new Date().toISOString(),
+        direction: 'response',
+        correlationId,
+        status: response.status,
+        statusText: response.statusText,
+        body: '[failed to read response body for log]',
+        truncated: false,
+      },
+      meta,
+    );
+    appendRecord(sectionDividerRecord(), meta);
   }
 }
 
+export type LlmFetchHttpLogContext = {
+  userId?: string;
+  sessionId?: string;
+};
+
 /**
  * Returns a fetch wrapper that logs request + response bodies to logs/llmOrg.log (JSON array, section markers, trimmed length), or undefined when disabled.
+ * When `LLM_ORG_LOG_REMOTE` is set, also POSTs each record to skill-gateway (no direct DB).
  */
-export function getLoggingFetchOrUndefined(): typeof fetch | undefined {
-  if (!isLlmRawHttpLogEnabled()) {
+export function getLoggingFetchOrUndefined(
+  ctx?: LlmFetchHttpLogContext,
+): typeof fetch | undefined {
+  if (!isLlmHttpAuditActive()) {
     return undefined;
   }
 
@@ -259,33 +329,39 @@ export function getLoggingFetchOrUndefined(): typeof fetch | undefined {
       const effHeaders = effectiveRequestHeaders(input, init);
       const headers = headersObject(effHeaders);
       const bodyInfo = await readRequestBodyForLog(input, init);
-      appendRecord({
-        ts: new Date().toISOString(),
-        direction: 'request',
-        correlationId,
-        requestLine: `${method} ${url}`,
-        method,
-        url,
-        headers,
-        body: tryParseJsonBody(bodyInfo?.text, bodyInfo?.truncated ?? false),
-        bodyLengthChars: bodyInfo?.text != null ? bodyInfo.text.length : undefined,
-        truncated: bodyInfo?.truncated ?? false,
-      });
+      appendRecord(
+        {
+          ts: new Date().toISOString(),
+          direction: 'request',
+          correlationId,
+          requestLine: `${method} ${url}`,
+          method,
+          url,
+          headers,
+          body: tryParseJsonBody(bodyInfo?.text, bodyInfo?.truncated ?? false),
+          bodyLengthChars: bodyInfo?.text != null ? bodyInfo.text.length : undefined,
+          truncated: bodyInfo?.truncated ?? false,
+        },
+        ctx,
+      );
     } catch {
-      appendRecord({
-        ts: new Date().toISOString(),
-        direction: 'request',
-        correlationId,
-        method,
-        url,
-        body: '[failed to serialize request for log]',
-        truncated: false,
-      });
+      appendRecord(
+        {
+          ts: new Date().toISOString(),
+          direction: 'request',
+          correlationId,
+          method,
+          url,
+          body: '[failed to serialize request for log]',
+          truncated: false,
+        },
+        ctx,
+      );
     }
 
     const response = await innerFetch(input, init);
 
-    void logResponseClone(correlationId, response);
+    void logResponseClone(correlationId, response, ctx);
 
     return response;
   };

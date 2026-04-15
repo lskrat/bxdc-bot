@@ -25,6 +25,8 @@ export interface SshConfigDraft {
   executor: string
   command: string
   readOnly: boolean
+  /** LLM-facing invocation hints; persisted in configuration like API skills. */
+  interfaceDescription: string
 }
 
 export interface TemplateConfigDraft {
@@ -78,6 +80,7 @@ const SSH_ALLOWED_KEYS = [
   'executor',
   'command',
   'readOnly',
+  'interfaceDescription',
 ]
 
 const TEMPLATE_ALLOWED_KEYS = ['kind', 'prompt']
@@ -201,6 +204,7 @@ function parseSshDraft(configuration: JsonRecord): SshConfigDraft {
     executor: readString(configuration, 'executor', 'ssh_executor'),
     command: readString(configuration, 'command'),
     readOnly: readOnly ?? true,
+    interfaceDescription: readString(configuration, 'interfaceDescription'),
   }
 }
 
@@ -218,6 +222,7 @@ function parseLegacyMonitorDraft(configuration: JsonRecord): SshConfigDraft {
     executor: readString(configuration, 'executor', 'ssh_executor'),
     command: readString(configuration, 'command'),
     readOnly: readOnly ?? true,
+    interfaceDescription: '',
   }
 }
 
@@ -270,6 +275,7 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
       executor: 'ssh_executor',
       command: '',
       readOnly: true,
+      interfaceDescription: '',
     }
   }
 
@@ -386,6 +392,7 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
       executor: requireNonEmpty(draft.executor, '执行器'),
       command: requireNonEmpty(draft.command, '命令内容'),
       readOnly: draft.readOnly,
+      ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
     })
   }
 

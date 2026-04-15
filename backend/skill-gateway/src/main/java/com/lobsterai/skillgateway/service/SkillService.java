@@ -54,6 +54,7 @@ public class SkillService {
         if (skill.getVisibility() == null) {
             skill.setVisibility(SkillVisibility.PRIVATE);
         }
+        validateSkillAvatar(skill.getAvatar());
         skill.setExecutionMode(normalizeExecutionMode(skill.getExecutionMode()));
         skill.setConfiguration(normalizeAndValidateConfiguration(skill.getExecutionMode(), skill.getConfiguration()));
         return skillRepository.save(skill);
@@ -76,6 +77,13 @@ public class SkillService {
         if (skillDetails.getVisibility() != null) {
             skill.setVisibility(skillDetails.getVisibility());
         }
+        // Only touch avatar when the client sends a value. Omitted / null must preserve the stored emoji
+        // (e.g. toggle enabled sends a partial body; JSON.stringify drops undefined → Jackson null).
+        if (skillDetails.getAvatar() != null) {
+            validateSkillAvatar(skillDetails.getAvatar());
+            String trimmed = skillDetails.getAvatar().trim();
+            skill.setAvatar(trimmed.isEmpty() ? null : trimmed);
+        }
 
         return skillRepository.save(skill);
     }
@@ -87,6 +95,17 @@ public class SkillService {
             throw new IllegalArgumentException("Skill not found for this id :: " + id);
         }
         skillRepository.delete(skill);
+    }
+
+    /** Optional emoji; when set, same length bound as user avatar. */
+    private static void validateSkillAvatar(String avatar) {
+        if (avatar == null || avatar.isBlank()) {
+            return;
+        }
+        String t = avatar.trim();
+        if (t.length() > 32) {
+            throw new IllegalArgumentException("Skill avatar is too long.");
+        }
     }
 
     private static boolean canViewSkill(Skill skill, String userId) {

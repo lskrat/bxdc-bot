@@ -59,3 +59,40 @@ test("LoggerService emits structured request and response llm log events", async
     fs.appendFileSync = originalAppendFileSync;
   }
 });
+
+test("LoggerService request params omit invocation_params and function fields", async () => {
+  const originalAppendFileSync = fs.appendFileSync;
+  fs.appendFileSync = () => {};
+
+  try {
+    const { LoggerService } = require("../dist/src/utils/logger.service");
+    const logger = new LoggerService();
+    const events = [];
+    const handler = logger.createLlmCallbackHandler("session-2", (event) => events.push(event));
+
+    await handler.handleChatModelStart(
+      { kwargs: { modelName: "gpt-4o-mini" } },
+      [[{ kwargs: { role: "user", content: "hi" } }]],
+      "run-2",
+      undefined,
+      {
+        model: "gpt-4o-mini",
+        temperature: 0,
+        invocation_params: { model: "gpt-4o-mini", messages: [{ role: "user", content: "dup" }] },
+        writer: () => {},
+        interrupt: function interrupt() {},
+        nested: { invocation_params: { x: 1 }, ok: true },
+      },
+    );
+
+    assert.equal(events.length, 1);
+    const params = events[0].entry.request.params;
+    assert.ok(!("invocation_params" in params));
+    assert.ok(!("writer" in params));
+    assert.ok(!("interrupt" in params));
+    assert.equal(params.model, "gpt-4o-mini");
+    assert.deepEqual(params.nested, { ok: true });
+  } finally {
+    fs.appendFileSync = originalAppendFileSync;
+  }
+});

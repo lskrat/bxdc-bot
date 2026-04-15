@@ -40,7 +40,7 @@ export class AgentFactory {
     gatewayUrl: string,
     apiToken: string,
     openAiApiKey: string,
-    config?: { modelName?: string, baseUrl?: string, callbacks?: any[] },
+    config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string },
     skillManager?: SkillManager,
     userId?: string
   ): Promise<{
@@ -52,7 +52,10 @@ export class AgentFactory {
     if (config?.baseUrl?.trim()) {
       openAiConfiguration.baseURL = config.baseUrl.replace(/\/+$/, "");
     }
-    openAiConfiguration.fetch = composeOpenAiCompatibleFetch();
+    openAiConfiguration.fetch = composeOpenAiCompatibleFetch({
+      userId,
+      sessionId: config?.sessionId,
+    });
 
     const model = new ChatOpenAI({
       modelName: config?.modelName || "gpt-4", // Or use OneAPI compatible model
@@ -65,8 +68,12 @@ export class AgentFactory {
       callbacks: config?.callbacks,
     });
 
-    const baseTools = [
-      new JavaSshTool(gatewayUrl, apiToken, userId),
+    const exposeSshExecutor =
+      !userId?.trim()
+      || process.env.AGENT_EXPOSE_SSH_EXECUTOR === "1"
+      || process.env.AGENT_EXPOSE_SSH_EXECUTOR === "true";
+    const baseTools: BindableAgentTool[] = [
+      ...(exposeSshExecutor ? [new JavaSshTool(gatewayUrl, apiToken, userId)] : []),
       new JavaApiTool(gatewayUrl, apiToken),
       new JavaSkillGeneratorTool(gatewayUrl, apiToken, userId),
       new JavaComputeTool(gatewayUrl, apiToken),

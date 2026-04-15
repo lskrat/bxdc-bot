@@ -7,6 +7,7 @@ exports.JavaApiTool = exports.JavaServerLookupTool = exports.JavaLinuxScriptTool
 exports.describeGatewayExtendedTool = describeGatewayExtendedTool;
 exports.loadGatewayExtendedTools = loadGatewayExtendedTools;
 exports.buildConfirmedToolInputString = buildConfirmedToolInputString;
+exports.buildConfirmedToolArgs = buildConfirmedToolArgs;
 exports.invokeExtendedSkillWithConfirmed = invokeExtendedSkillWithConfirmed;
 const messages_1 = require("@langchain/core/messages");
 const langgraph_1 = require("@langchain/langgraph");
@@ -94,6 +95,44 @@ const skillGeneratorAllowOverwriteSchema = zod_1.z.preprocess((val) => {
     }
     return val;
 }, zod_1.z.boolean().optional().default(false));
+function parseJsonObjectString(val) {
+    if (val === undefined || val === null)
+        return val;
+    if (typeof val === "object" && !Array.isArray(val))
+        return val;
+    if (typeof val === "string") {
+        const t = val.trim();
+        if (!t)
+            return undefined;
+        try {
+            const p = JSON.parse(t);
+            if (p && typeof p === "object" && !Array.isArray(p))
+                return p;
+        }
+        catch {
+            return val;
+        }
+    }
+    return val;
+}
+const skillGeneratorHeadersSchema = zod_1.z.preprocess((val) => parseJsonObjectString(val), zod_1.z.record(zod_1.z.string()).optional());
+const skillGeneratorQuerySchema = zod_1.z.preprocess((val) => parseJsonObjectString(val), zod_1.z.record(zod_1.z.union([zod_1.z.string(), zod_1.z.number(), zod_1.z.boolean()])).optional());
+const skillGeneratorTestInputSchema = zod_1.z.preprocess((val) => parseJsonObjectString(val), zod_1.z.record(zod_1.z.unknown()).optional());
+const skillGeneratorParameterContractSchema = zod_1.z.preprocess((val) => parseJsonObjectString(val), zod_1.z.any().optional());
+const skillGeneratorBooleanOptionalSchema = zod_1.z.preprocess((val) => {
+    if (val === undefined || val === null)
+        return undefined;
+    if (typeof val === "boolean")
+        return val;
+    if (typeof val === "string") {
+        const v = val.trim().toLowerCase();
+        if (v === "true" || v === "1" || v === "yes")
+            return true;
+        if (v === "false" || v === "0" || v === "no" || v === "")
+            return false;
+    }
+    return val;
+}, zod_1.z.boolean().optional());
 const skillGeneratorToolInputSchema = zod_1.z.discriminatedUnion("targetType", [
     zod_1.z.object({
         targetType: zod_1.z.literal("api"),
@@ -102,8 +141,14 @@ const skillGeneratorToolInputSchema = zod_1.z.discriminatedUnion("targetType", [
         description: zod_1.z.string().optional(),
         method: zod_1.z.string().optional(),
         endpoint: zod_1.z.string().optional(),
+        headers: skillGeneratorHeadersSchema,
+        query: skillGeneratorQuerySchema,
+        body: zod_1.z.any().optional(),
         interfaceDescription: zod_1.z.string().optional(),
-        parameterContract: zod_1.z.any().optional(),
+        parameterContract: skillGeneratorParameterContractSchema,
+        testInput: skillGeneratorTestInputSchema,
+        enabled: skillGeneratorBooleanOptionalSchema,
+        requiresConfirmation: skillGeneratorBooleanOptionalSchema,
         allowOverwrite: skillGeneratorAllowOverwriteSchema,
     }),
     zod_1.z.object({
@@ -120,6 +165,7 @@ const skillGeneratorToolInputSchema = zod_1.z.discriminatedUnion("targetType", [
         name: zod_1.z.string().optional(),
         description: zod_1.z.string().optional(),
         systemPrompt: zod_1.z.string().optional(),
+        allowedTools: zod_1.z.array(zod_1.z.string()).optional(),
         allowOverwrite: skillGeneratorAllowOverwriteSchema,
     }),
     zod_1.z.object({
@@ -184,6 +230,62 @@ function isServerMonitorSkillConfig(config) {
     return (kind === "monitor"
         || (kind === "ssh" && (preset === "server-resource-status" || operation === "server-resource-status"))
         || operation === "server-resource-status");
+}
+const extendedSshSkillToolSchema = zod_1.z.object({
+    name: zod_1.z
+        .string()
+        .min(1)
+        .describe("Server alias in the user's Servers ledger (same as server_lookup)."),
+});
+const extendedTemplateSkillToolSchema = zod_1.z.object({
+    input: zod_1.z.string().optional().describe("User message or parameters for this template skill."),
+});
+const extendedOpenClawSkillToolSchema = zod_1.z.object({
+    input: zod_1.z.string().optional().describe("User goal or parameters for the OPENCLAW planner."),
+});
+const extendedApiSkillLooseSchema = zod_1.z
+    .record(zod_1.z.string(), zod_1.z.any())
+    .describe("API parameters as top-level fields; must match the skill parameter contract (JSON Schema). "
+    + "Defaults from the contract apply when keys are omitted.");
+const extendedPassthroughSkillToolSchema = zod_1.z.object({}).passthrough();
+const extendedSkillConfirmationField = zod_1.z.object({
+    confirmed: zod_1.z
+        .boolean()
+        .optional()
+        .describe("Set by the confirmation UI when resuming; omit for normal calls."),
+});
+function withOptionalConfirmationFlag(schema) {
+    if (schema instanceof zod_1.z.ZodObject) {
+        return schema.merge(extendedSkillConfirmationField);
+    }
+    return zod_1.z.intersection(schema, extendedSkillConfirmationField);
+}
+function buildExtendedSkillZodSchema(config) {
+    let inner;
+    if (isCurrentTimeSkillConfig(config)) {
+        inner = extendedPassthroughSkillToolSchema;
+    }
+    else if (isServerMonitorSkillConfig(config)) {
+        inner = extendedSshSkillToolSchema;
+    }
+    else {
+        const executionMode = config.orchestration?.mode;
+        if (executionMode === "OPENCLAW" || (config.kind || "").toLowerCase() === "openclaw") {
+            inner = extendedOpenClawSkillToolSchema;
+        }
+        else if ((config.kind || "").toLowerCase() === "template") {
+            inner = extendedTemplateSkillToolSchema;
+        }
+        else if ((config.kind || "").toLowerCase() === "api"
+            || config.operation === "api-request"
+            || config.operation === "juhe-joke-list") {
+            inner = extendedApiSkillLooseSchema;
+        }
+        else {
+            inner = extendedPassthroughSkillToolSchema;
+        }
+    }
+    return withOptionalConfirmationFlag(inner);
 }
 const gatewayExtendedToolRegistry = new Map();
 const gatewayExtendedToolIdRegistry = new Map();
@@ -279,45 +381,18 @@ function parseSkillConfig(skill) {
         return {};
     }
 }
-function isEmptyishValue(value, depth = 0) {
-    if (depth > 12)
-        return false;
-    if (value === undefined || value === null)
-        return true;
-    if (typeof value === "string")
-        return value.trim() === "";
-    if (typeof value === "number" || typeof value === "boolean")
-        return false;
-    if (Array.isArray(value)) {
-        return value.length === 0 || value.every((v) => isEmptyishValue(v, depth + 1));
-    }
-    if (typeof value === "object") {
-        const keys = Object.keys(value);
-        if (keys.length === 0)
-            return true;
-        return keys.every((k) => isEmptyishValue(value[k], depth + 1));
-    }
-    return false;
-}
-function isEmptyApiToolInput(input) {
-    if (!input?.trim())
-        return true;
-    const payload = parseToolInput(input);
-    const keys = Object.keys(payload);
-    if (keys.length === 0)
-        return true;
-    return keys.every((k) => isEmptyishValue(payload[k]));
-}
-function hasApiProgressiveDisclosureMaterial(config) {
-    const desc = typeof config.interfaceDescription === "string" && config.interfaceDescription.trim().length > 0;
-    const pc = config.parameterContract;
-    const hasContract = pc != null && typeof pc === "object";
-    return desc || hasContract;
+const LLM_API_SKILL_STRUCTURED_HINT = "Tool call: pass parameters as **top-level** fields matching the parameter contract below (structured tool schema). "
+    + "Do not nest the whole payload under a single `input` string.\n\n";
+function appendInterfaceDescriptionTail(base, config) {
+    const extra = config.interfaceDescription?.trim();
+    if (!extra)
+        return base;
+    return base.includes(extra) ? base : `${base}\n\n${extra}`;
 }
 function appendParameterContractToToolDescription(baseDescription, config) {
     const contract = config.parameterContract;
     if (!contract || typeof contract !== "object") {
-        return baseDescription;
+        return appendInterfaceDescriptionTail(baseDescription, config);
     }
     const props = contract.type === "object"
         && contract.properties
@@ -337,13 +412,13 @@ function appendParameterContractToToolDescription(baseDescription, config) {
             return `  - ${key}${req}${type}${desc}${enums}${def}`;
         })
             .join("\n");
-        return `${baseDescription}\n\nParameters:\n${lines}`;
+        return appendInterfaceDescriptionTail(`${baseDescription}\n\n${LLM_API_SKILL_STRUCTURED_HINT}Parameters:\n${lines}`, config);
     }
     try {
-        return `${baseDescription}\n\nParameter contract (JSON Schema):\n${JSON.stringify(contract, null, 2)}`;
+        return appendInterfaceDescriptionTail(`${baseDescription}\n\n${LLM_API_SKILL_STRUCTURED_HINT}Parameter contract (JSON Schema):\n${JSON.stringify(contract, null, 2)}`, config);
     }
     catch {
-        return baseDescription;
+        return appendInterfaceDescriptionTail(baseDescription, config);
     }
 }
 function parseCheckTimePayload(payload) {
@@ -484,7 +559,8 @@ function deriveSkillDescription(input, name) {
     if (input.targetType === "api") {
         const method = typeof input.method === "string" ? input.method.toUpperCase() : "API";
         const endpoint = typeof input.endpoint === "string" ? input.endpoint.trim() : "";
-        return endpoint ? `${name}。通过 ${method} ${endpoint} 发起请求。` : name;
+        const inputHint = "调用时将请求参数合并为一个 JSON 对象，再序列化为字符串传入工具的 `input` 参数。";
+        return endpoint ? `${name}。通过 ${method} ${endpoint} 发起请求。${inputHint}` : `${name}。${inputHint}`;
     }
     if (input.targetType === "ssh") {
         return `${name}。在服务器上执行命令。`;
@@ -572,6 +648,20 @@ function buildGeneratedSkill(input) {
     if (missingFields.length > 0) {
         return { missingFields };
     }
+    function pickGeneratedSkillAvatar(kind) {
+        switch (kind) {
+            case "api":
+                return "🔌";
+            case "ssh":
+                return "🐧";
+            case "openclaw":
+                return "✨";
+            case "template":
+                return "📝";
+            default:
+                return "🧩";
+        }
+    }
     const name = deriveSkillName({ ...input, targetType });
     const description = deriveSkillDescription({ ...input, targetType }, name);
     let config = {};
@@ -606,6 +696,8 @@ function buildGeneratedSkill(input) {
             lookup: "server_lookup",
             executor: "ssh_executor",
             command: input.command?.trim(),
+            interfaceDescription: "Structured invocation: pass top-level `name` (server alias from the Servers ledger, same as server_lookup). "
+                + "The shell command is stored in this skill configuration and is not a tool parameter.",
         };
     }
     else if (targetType === "openclaw") {
@@ -640,6 +732,7 @@ function buildGeneratedSkill(input) {
             enabled: input.enabled ?? true,
             requiresConfirmation: input.requiresConfirmation ?? false,
             visibility: "PRIVATE",
+            avatar: pickGeneratedSkillAvatar(targetType),
         },
     };
 }
@@ -686,10 +779,30 @@ async function executeCurrentTimeSkill(gatewayUrl, apiToken, config) {
         readableTime: parsed.isoTime,
     });
 }
+function parseSshSkillPayload(input) {
+    if (input && typeof input === "object" && !Array.isArray(input)) {
+        return { ...input };
+    }
+    if (typeof input === "string") {
+        const t = input.trim();
+        if (!t)
+            return {};
+        try {
+            const parsed = JSON.parse(t);
+            return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                ? parsed
+                : { name: t };
+        }
+        catch {
+            return { name: t };
+        }
+    }
+    return {};
+}
 async function executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, input, config) {
-    const payload = input ? JSON.parse(input) : {};
-    const serverName = payload.serverName || payload.name;
-    const command = config.command || payload.command;
+    const payload = parseSshSkillPayload(input);
+    const ledgerAlias = (payload.name || payload.serverName || payload.server);
+    const command = typeof config.command === "string" ? config.command.trim() : "";
     if (!command) {
         return JSON.stringify({ error: "No command configured for server-resource-status skill" });
     }
@@ -701,16 +814,16 @@ async function executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, in
         headers["X-User-Id"] = userId;
     }
     let host = payload.host;
-    if (!host && serverName && userId) {
+    if (!host && ledgerAlias && userId) {
         const lookupResponse = await axios_1.default.get(`${gatewayUrl}/api/skills/server-lookup`, {
             headers,
-            params: { name: serverName },
+            params: { name: ledgerAlias },
         });
         host = lookupResponse.data.ip;
     }
     if (!host) {
         return JSON.stringify({
-            error: "Missing server host. Provide host or serverName (with authenticated user context).",
+            error: "Missing server host. Provide `name` (Servers ledger alias) with authenticated user context.",
         });
     }
     const response = await axios_1.default.post(`${gatewayUrl}/api/skills/ssh`, {
@@ -722,7 +835,16 @@ async function executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, in
 }
 async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
     const method = (config.method || "GET").toUpperCase();
-    let payload = parseToolInput(input);
+    let payload;
+    if (typeof input === "string") {
+        payload = parseToolInput(input);
+    }
+    else if (input && typeof input === "object" && !Array.isArray(input)) {
+        payload = { ...input };
+    }
+    else {
+        payload = {};
+    }
     payload = normalizeApiSkillPayload(payload);
     const defaults = collectParameterDefaults(config.parameterContract);
     const merged = { ...defaults, ...payload };
@@ -761,18 +883,39 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
     if (!endpoint) {
         return JSON.stringify({ error: "No endpoint configured for API skill" });
     }
-    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, {
-        url: endpoint,
-        method,
-        headers: config.headers || {},
-        body: merged.body ?? "",
-    }, {
-        headers: {
-            "X-Agent-Token": apiToken,
-            "Content-Type": "application/json",
-        },
-    });
-    return typeof response.data === "string" ? response.data : JSON.stringify(response.data);
+    try {
+        const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, {
+            url: endpoint,
+            method,
+            headers: config.headers || {},
+            body: merged.body ?? "",
+        }, {
+            headers: {
+                "X-Agent-Token": apiToken,
+                "Content-Type": "application/json",
+            },
+        });
+        return typeof response.data === "string" ? response.data : JSON.stringify(response.data);
+    }
+    catch (error) {
+        if (axios_1.default.isAxiosError(error)) {
+            const status = error.response?.status;
+            const data = error.response?.data;
+            const details = typeof data === "string"
+                ? data
+                : data !== undefined && data !== null
+                    ? JSON.stringify(data)
+                    : error.message;
+            return JSON.stringify({
+                error: "Gateway API proxy request failed",
+                status: status ?? null,
+                details,
+                hint: "The Skill Gateway could not complete the HTTP call (network, timeout, or upstream error). "
+                    + "Fix connectivity or URL and retry this skill invocation.",
+            });
+        }
+        throw error;
+    }
 }
 async function invokeToolDirect(tool, input) {
     const callableTool = tool;
@@ -984,15 +1127,22 @@ function gatewaySkillReadHeaders(apiToken, userId) {
     return headers;
 }
 function previewExtendedSkillToolInput(rawInput) {
-    const t = (rawInput ?? "").trim();
-    if (!t)
+    if (rawInput === undefined || rawInput === null)
         return {};
-    try {
-        return JSON.parse(t);
-    }
-    catch {
+    if (typeof rawInput === "object" && !Array.isArray(rawInput))
         return rawInput;
+    if (typeof rawInput === "string") {
+        const t = rawInput.trim();
+        if (!t)
+            return {};
+        try {
+            return JSON.parse(t);
+        }
+        catch {
+            return rawInput;
+        }
     }
+    return rawInput;
 }
 function parseExtendedSkillConfirmationInput(input) {
     const trimmed = (input ?? "").trim();
@@ -1012,6 +1162,40 @@ function parseExtendedSkillConfirmationInput(input) {
     catch {
     }
     return { confirmed: false, executionInput: trimmed };
+}
+function applyExtendedSkillConfirmationGate(execInput, needsConfirmation, runConfig, toolName, currentSkill) {
+    if (!needsConfirmation) {
+        return { proceed: true, payload: execInput };
+    }
+    const o = execInput && typeof execInput === "object" && !Array.isArray(execInput)
+        ? execInput
+        : null;
+    if (o && "confirmed" in o) {
+        if (!Boolean(o.confirmed)) {
+            return { proceed: false, cancelled: true };
+        }
+        const rest = { ...o };
+        delete rest.confirmed;
+        return { proceed: true, payload: rest };
+    }
+    const tc = runConfig?.toolCall;
+    const toolCallId = (typeof tc?.id === "string" && tc.id.trim())
+        ? tc.id.trim()
+        : `${toolName}:pending`;
+    const resume = (0, langgraph_1.interrupt)({
+        kind: "extended_skill_confirmation",
+        toolName,
+        toolCallId,
+        skillName: currentSkill.name || toolName,
+        skillId: currentSkill.id,
+        summary: `Execute extended skill: ${currentSkill.name || toolName}`,
+        details: "",
+        parametersPreview: previewExtendedSkillToolInput(execInput),
+    });
+    if (!resume.confirmed) {
+        return { proceed: false, cancelled: true };
+    }
+    return { proceed: true, payload: execInput };
 }
 async function saveGeneratedSkill(gatewayUrl, apiToken, payload, allowOverwrite, userId) {
     const headers = gatewaySkillMutationHeaders(apiToken, userId);
@@ -1072,25 +1256,40 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
             toolLookup.set(tool.name, tool);
         });
         const resolvedTools = [];
-        extensionSkills.forEach((skill) => {
+        for (const skill of extensionSkills) {
             console.log(`[DEBUG] skill ${skill.id} configuration:`, skill.configuration);
-            const config = skill.configuration ? parseSkillConfig(skill) : {};
+            let workingSkill = skill;
+            let config = skill.configuration ? parseSkillConfig(skill) : {};
+            if (!skill.configuration?.trim()) {
+                try {
+                    const detailResponse = await axios_1.default.get(`${gatewayUrl}/api/skills/${skill.id}`, {
+                        headers: gatewaySkillReadHeaders(apiToken, userId),
+                    });
+                    workingSkill = detailResponse.data;
+                    config = parseSkillConfig(workingSkill);
+                }
+                catch {
+                }
+            }
             const toolName = normalizeToolName(skill.name || `skill_${skill.id}`, skill.id);
-            registerGatewayToolMetadata(toolName, skill);
-            let toolDescription = skill.description || `Execute extended skill: ${skill.name}`;
+            registerGatewayToolMetadata(toolName, workingSkill);
+            let toolDescription = workingSkill.description || `Execute extended skill: ${workingSkill.name}`;
             toolDescription = appendParameterContractToToolDescription(toolDescription, config);
-            if (skill.requiresConfirmation) {
+            if (workingSkill.requiresConfirmation) {
                 toolDescription +=
                     " If this skill requires confirmation, approval happens via the chat UI buttons only; do not instruct the user to type \"confirm\" or to send JSON with confirmed:true.";
             }
-            const dynamicTool = new tools_1.DynamicTool({
+            const zodSchema = buildExtendedSkillZodSchema(config);
+            const structuredTool = new tools_1.DynamicStructuredTool({
                 name: toolName,
                 description: toolDescription,
-                func: async (input, _runManager, runConfig) => {
+                schema: zodSchema,
+                func: async (args, _runManager, runConfig) => {
                     try {
-                        let currentSkill = skill;
+                        let execInput = args;
+                        let currentSkill = workingSkill;
                         let currentConfig = config;
-                        if (!currentSkill.configuration) {
+                        if (!currentSkill.configuration?.trim()) {
                             const detailResponse = await axios_1.default.get(`${gatewayUrl}/api/skills/${skill.id}`, {
                                 headers: gatewaySkillReadHeaders(apiToken, userId),
                             });
@@ -1099,36 +1298,14 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                         }
                         const executionMode = normalizeExecutionMode(currentSkill.executionMode);
                         const needsConfirmation = Boolean(currentSkill.requiresConfirmation);
-                        let execInput = input;
-                        if (needsConfirmation) {
-                            const { confirmed, executionInput } = parseExtendedSkillConfirmationInput(input);
-                            if (!confirmed) {
-                                const tc = runConfig?.toolCall;
-                                const toolCallId = (typeof tc?.id === "string" && tc.id.trim())
-                                    ? tc.id.trim()
-                                    : `${toolName}:pending`;
-                                const resume = (0, langgraph_1.interrupt)({
-                                    kind: "extended_skill_confirmation",
-                                    toolName,
-                                    toolCallId,
-                                    skillName: currentSkill.name || toolName,
-                                    skillId: currentSkill.id,
-                                    summary: `Execute extended skill: ${currentSkill.name || toolName}`,
-                                    details: "",
-                                    parametersPreview: previewExtendedSkillToolInput(input),
-                                });
-                                if (!resume.confirmed) {
-                                    return JSON.stringify({
-                                        status: "CANCELLED",
-                                        message: "User cancelled the skill execution.",
-                                    });
-                                }
-                                execInput = parseExtendedSkillConfirmationInput(input).executionInput;
-                            }
-                            else {
-                                execInput = executionInput;
-                            }
+                        const gate = applyExtendedSkillConfirmationGate(execInput, needsConfirmation, runConfig, toolName, currentSkill);
+                        if (!gate.proceed) {
+                            return JSON.stringify({
+                                status: "CANCELLED",
+                                message: "User cancelled the skill execution.",
+                            });
                         }
+                        execInput = gate.payload;
                         if (isCurrentTimeSkillConfig(currentConfig)) {
                             return await executeCurrentTimeSkill(gatewayUrl, apiToken, currentConfig);
                         }
@@ -1136,11 +1313,20 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                             return await executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, execInput, currentConfig);
                         }
                         if (executionMode === "OPENCLAW" || currentConfig.kind === "openclaw") {
-                            return await executeOpenClawSkill(options?.plannerModel, toolName, execInput, currentConfig, Array.from(toolLookup.values()));
+                            const openClawInput = typeof execInput === "string"
+                                ? execInput
+                                : execInput && typeof execInput === "object" && typeof execInput.input === "string"
+                                    ? String(execInput.input)
+                                    : JSON.stringify(execInput ?? {});
+                            return await executeOpenClawSkill(options?.plannerModel, toolName, openClawInput, currentConfig, Array.from(toolLookup.values()));
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "template") {
                             const basePrompt = (currentConfig.prompt || "").trim();
-                            const userPayload = typeof execInput === "string" ? execInput.trim() : "";
+                            const userPayload = typeof execInput === "string"
+                                ? execInput.trim()
+                                : execInput && typeof execInput === "object" && typeof execInput.input === "string"
+                                    ? String(execInput.input)
+                                    : "";
                             return JSON.stringify({
                                 kind: "template",
                                 prompt: basePrompt,
@@ -1150,17 +1336,6 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                             });
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "api" || currentConfig.operation === "api-request" || currentConfig.operation === "juhe-joke-list") {
-                            if (hasApiProgressiveDisclosureMaterial(currentConfig) && isEmptyApiToolInput(execInput)) {
-                                return JSON.stringify({
-                                    status: "REQUIRE_PARAMETERS",
-                                    message: "This is an API skill. Read the interface description and parameter contract, then call this tool again with the parameters you need to set. "
-                                        + "Fields that have a default in the contract are filled in automatically if you omit them.",
-                                    interfaceDescription: currentConfig.interfaceDescription?.trim()
-                                        || "No separate interface description. Use the parameter contract and tool description above.",
-                                    parameterContract: currentConfig.parameterContract
-                                        ?? "No strict contract defined. Please infer from description.",
-                                });
-                            }
                             return await executeConfiguredApiSkill(gatewayUrl, apiToken, execInput, currentConfig);
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "ssh") {
@@ -1180,12 +1355,12 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                     }
                 },
             });
-            resolvedTools.push(dynamicTool);
-            toolLookup.set(dynamicTool.name, dynamicTool);
+            resolvedTools.push(structuredTool);
+            toolLookup.set(structuredTool.name, structuredTool);
             if (skill.name) {
-                toolLookup.set(skill.name, dynamicTool);
+                toolLookup.set(skill.name, structuredTool);
             }
-        });
+        }
         return resolvedTools;
     }
     catch (error) {
@@ -1194,28 +1369,31 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
     }
 }
 function buildConfirmedToolInputString(args) {
+    return JSON.stringify(buildConfirmedToolArgs(args));
+}
+function buildConfirmedToolArgs(args) {
     if (args === undefined || args === null) {
-        return JSON.stringify({ confirmed: true });
+        return { confirmed: true };
     }
     if (typeof args === "object" && !Array.isArray(args)) {
-        return JSON.stringify({ ...args, confirmed: true });
+        return { ...args, confirmed: true };
     }
     if (typeof args === "string") {
         const trimmed = args.trim();
         if (!trimmed)
-            return JSON.stringify({ confirmed: true });
+            return { confirmed: true };
         try {
             const o = JSON.parse(trimmed);
             if (o && typeof o === "object" && !Array.isArray(o)) {
-                return JSON.stringify({ ...o, confirmed: true });
+                return { ...o, confirmed: true };
             }
         }
         catch {
-            return JSON.stringify({ confirmed: true, input: trimmed });
+            return { confirmed: true, input: trimmed };
         }
-        return JSON.stringify({ confirmed: true, input: trimmed });
+        return { confirmed: true, input: trimmed };
     }
-    return JSON.stringify({ confirmed: true, input: String(args) });
+    return { confirmed: true, input: String(args) };
 }
 async function invokeExtendedSkillWithConfirmed(gatewayUrl, apiToken, userId, toolName, toolArguments, options) {
     const extendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
@@ -1228,8 +1406,8 @@ async function invokeExtendedSkillWithConfirmed(gatewayUrl, apiToken, userId, to
     if (!tool) {
         return JSON.stringify({ error: `Extended skill tool not found: ${toolName}` });
     }
-    const inputStr = buildConfirmedToolInputString(toolArguments);
-    const raw = await tool.invoke(inputStr);
+    const merged = buildConfirmedToolArgs(toolArguments);
+    const raw = await tool.invoke(merged);
     return typeof raw === "string" ? raw : JSON.stringify(raw);
 }
 class JavaSkillGeneratorTool extends tools_1.DynamicStructuredTool {
@@ -1240,7 +1418,10 @@ class JavaSkillGeneratorTool extends tools_1.DynamicStructuredTool {
         super({
             name: "skill_generator",
             description: "Creates a NEW extension skill on SkillGateway—use ONLY after you have confirmed no existing tool (built-in, gateway extensions, or loadable filesystem skills) can fulfill the request, OR the user explicitly asked to add/create a new skill. " +
-                "Provide targetType and the corresponding fields for that type (api, ssh, openclaw, or template). Do NOT wrap everything in a single JSON string under 'input'.",
+                "Provide targetType and the corresponding fields for that type (api, ssh, openclaw, or template) as structured tool arguments. " +
+                "For API skills, headers, query, testInput, and parameterContract may be sent either as objects or as JSON strings; booleans may be true/false strings. " +
+                "After save, API and SSH extension skills are invoked with structured top-level parameters (not a single input envelope string). " +
+                "On success, API-type skills return status VALIDATION_SKIPPED (no automatic HTTP probe); verify by invoking the new skill.",
             schema: skillGeneratorToolInputSchema,
             func: async (args) => {
                 const params = args;
@@ -1263,16 +1444,28 @@ class JavaSkillGeneratorTool extends tools_1.DynamicStructuredTool {
                         },
                     });
                 }
-                let validationRaw = "";
+                let validation;
                 if (params.targetType === "api" || !params.targetType) {
-                    validationRaw = await executeConfiguredApiSkill(this.gatewayUrl, this.apiToken, JSON.stringify(generated.validationInput || {}), generated.config);
+                    validation = {
+                        success: true,
+                        skipped: true,
+                        message: "Automatic post-save API probe is disabled. Invoke the saved skill manually to verify connectivity and parameters.",
+                    };
                 }
                 else {
-                    validationRaw = JSON.stringify({ success: true, message: "Validation skipped for non-API skill type." });
+                    const validationRaw = JSON.stringify({
+                        success: true,
+                        message: "Validation skipped for non-API skill type.",
+                    });
+                    validation = buildValidationSummary(validationRaw);
                 }
-                const validation = buildValidationSummary(validationRaw);
+                const status = "skipped" in validation && validation.skipped
+                    ? "VALIDATION_SKIPPED"
+                    : validation.success
+                        ? "VALIDATION_SUCCEEDED"
+                        : "VALIDATION_FAILED";
                 return JSON.stringify({
-                    status: validation.success ? "VALIDATION_SUCCEEDED" : "VALIDATION_FAILED",
+                    status,
                     saveAction: saveResult.mode,
                     skill: {
                         id: saveResult.skill.id,

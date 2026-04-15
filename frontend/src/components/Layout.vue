@@ -1,15 +1,18 @@
 <script setup lang="ts">
+import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useUser } from '../composables/useUser';
 import { useSkillHub } from '../composables/useSkillHub';
 import { useServerLedger } from '../composables/useServerLedger';
 import UserAvatar from './UserAvatar.vue';
+import ProfileEditModal from './ProfileEditModal.vue';
 import SkillHub from './SkillHub.vue';
 import ServerLedger from './ServerLedger.vue';
 import { AppIcon, ServerIcon } from 'tdesign-icons-vue-next';
 
 const router = useRouter();
 const { currentUser, logout } = useUser();
+const profileEditVisible = ref(false);
 const { toggleSkillHub } = useSkillHub();
 const { toggleServerLedger } = useServerLedger();
 </script>
@@ -37,7 +40,10 @@ const { toggleServerLedger } = useServerLedger();
           <t-button v-if="currentUser" theme="default" variant="text" @click="router.push('/settings')">
             大模型设置
           </t-button>
-          
+          <t-button v-if="currentUser" theme="default" variant="text" @click="profileEditVisible = true">
+            编辑资料
+          </t-button>
+
           <div class="user-info" v-if="currentUser">
             <UserAvatar :avatar="currentUser.avatar" :size="32" />
             <span class="user-name">{{ currentUser.nickname }}</span>
@@ -53,6 +59,7 @@ const { toggleServerLedger } = useServerLedger();
     </t-content>
     <SkillHub />
     <ServerLedger />
+    <ProfileEditModal v-model:visible="profileEditVisible" />
   </t-layout>
 </template>
 

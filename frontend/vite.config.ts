@@ -25,6 +25,9 @@ export default defineConfig({
   },
   // When VITE_API_URL / VITE_AGENT_URL are unset, apiUrl()/agentUrl() use
   // same-origin paths /api/*, /features/*, /agent/* — forward them to backends.
+  //
+  // Twemoji avatars load from jsdelivr fixed version (see src/utils/twemojiAvatar.ts).
+  // If you add CSP headers in production, allow img-src: https://cdn.jsdelivr.net
   server: {
     proxy: {
       '/api': {

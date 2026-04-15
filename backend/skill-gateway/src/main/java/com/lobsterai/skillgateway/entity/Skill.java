@@ -33,6 +33,10 @@ public class Skill {
     @Column(nullable = false, length = 16)
     private SkillVisibility visibility = SkillVisibility.PUBLIC;
 
+    /** 展示用 emoji（与 User.avatar 一致为短字符串）；可选 */
+    @Column(length = 32)
+    private String avatar;
+
     /** 创建者用户 ID；平台种子/Built-in 对应行使用字面量 {@code public} */
     @Column(length = 128)
     private String createdBy;
@@ -53,7 +57,7 @@ public class Skill {
 
     public Skill() {}
 
-    public Skill(Long id, String name, String description, String type, String executionMode, boolean enabled, boolean requiresConfirmation, SkillVisibility visibility, String createdBy, LocalDateTime createdAt, LocalDateTime updatedAt) {
+    public Skill(Long id, String name, String description, String type, String executionMode, boolean enabled, boolean requiresConfirmation, SkillVisibility visibility, String avatar, String createdBy, LocalDateTime createdAt, LocalDateTime updatedAt) {
         this.id = id;
         this.name = name;
         this.description = description;
@@ -62,6 +66,7 @@ public class Skill {
         this.enabled = enabled;
         this.requiresConfirmation = requiresConfirmation;
         this.visibility = visibility != null ? visibility : SkillVisibility.PUBLIC;
+        this.avatar = avatar;
         this.createdBy = createdBy;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
@@ -137,6 +142,14 @@ public class Skill {
 
     public void setVisibility(SkillVisibility visibility) {
         this.visibility = visibility;
+    }
+
+    public String getAvatar() {
+        return avatar;
+    }
+
+    public void setAvatar(String avatar) {
+        this.avatar = avatar;
     }
 
     public String getCreatedBy() {

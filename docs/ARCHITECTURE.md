@@ -167,7 +167,7 @@ Agent 使用 `createReactAgent` 的 `stateSchema` 扩展了默认 `MessagesAnnot
 
 **环境变量**：`JAVA_GATEWAY_URL`（默认 `http://localhost:18080`）
 
-**LLM 对接**：经 LangChain `ChatOpenAI` 访问 OpenAI 兼容 Chat Completions；`messages` 使用标准 `role`（`system`、`user`、`assistant`、`tool` 等）。Agent Core 不对出站 HTTP 请求体做 role 改写，上游须为标准兼容实现。可选 `LLM_RAW_HTTP_LOG` 将请求/响应写入 `logs/llmOrg.log`，内容与实际上发报文一致。
+**LLM 对接**：经 LangChain `ChatOpenAI` 访问 OpenAI 兼容 Chat Completions；`messages` 使用标准 `role`（`system`、`user`、`assistant`、`tool` 等）。Agent Core 不对出站 HTTP 请求体做 role 改写，上游须为标准兼容实现。可选 `LLM_RAW_HTTP_LOG` 将请求/响应写入 `logs/llmOrg.log`，内容与实际上发报文一致。可选 `LLM_ORG_LOG_REMOTE` 将同等记录经 HTTP 发往 skill-gateway 落库（`llm_http_audit_logs`），**不**经 agent-core 直连数据库。
 
 ---
 

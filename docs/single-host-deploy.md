@@ -63,7 +63,7 @@ agent-core -> mem0 / 大模型接口
 │   ├── skill-gateway-0.0.1-SNAPSHOT.jar
 │   └── application-prod.properties
 └── data/
-    └── fishtank_db.mv.db
+    └── (可选) 其他运行时文件；持久化关系数据使用 MySQL 时，库与表由数据库实例维护，不在此目录存放 `.mv.db` 文件
 ```
 
 ## 4. 三端上线前配置修改
@@ -127,18 +127,19 @@ MEM0_URL=http://127.0.0.1:8001
 
 ### 4.3 Skill Gateway 配置
 
+部署前在 MySQL 中创建业务库（示例：`CREATE DATABASE fishtank CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`），并授予应用账号相应权限。
+
 文件来源：`backend/skill-gateway/src/main/resources/application-prod.example.properties`
 
 生产环境建议放置为 `/opt/fishtank/skill-gateway/application-prod.properties`：
 
 ```properties
-spring.datasource.url=jdbc:h2:file:/opt/fishtank/data/fishtank_db;DB_CLOSE_DELAY=-1
-spring.datasource.driverClassName=org.h2.Driver
-spring.datasource.username=sa
+spring.datasource.url=jdbc:mysql://127.0.0.1:3306/fishtank?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&serverTimezone=UTC
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+spring.datasource.username=fishtank_app
 spring.datasource.password=change-this-password
 spring.sql.init.mode=always
-spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
-spring.h2.console.enabled=false
+spring.jpa.database-platform=org.hibernate.dialect.MySQLDialect
 spring.jpa.hibernate.ddl-auto=update
 spring.jpa.defer-datasource-initialization=true
 
@@ -157,7 +158,7 @@ export JAVA_GATEWAY_TOKEN=your-secure-token-here
 
 配置说明：
 
-- `spring.datasource.*`：H2 数据库位置和账号
+- `spring.datasource.*`：MySQL 连接（主机、库名、账号、密码；生产请用强密码并由 `SPRING_DATASOURCE_*` 等环境变量注入，勿提交明文）
 - `spring.jpa.defer-datasource-initialization=true`：**必须保留**。使用 `--spring.config.location` 指向单独 properties 文件时，会覆盖 JAR 内默认配置；若缺少此项，`schema.sql` 会在 Hibernate 建表之前执行，启动会报 `Table "SKILLS" not found`（见 11.7 节）
 - `server.address`：建议改成 `127.0.0.1`，避免直接暴露网关端口
 - `server.port`：网关监听端口，默认 `18080`
@@ -559,7 +560,7 @@ npm run build
 
 典型堆栈：`BeanCreationException` → `dataSourceScriptDatabaseInitializer` → `UPDATE skills SET requires_confirmation ...`。
 
-原因：`spring.sql.init.mode=always` 会执行 `schema.sql`，其中的 `UPDATE skills` 要求表已由 Hibernate 建好。若 **`spring.jpa.defer-datasource-initialization` 未设为 `true`**，`schema.sql` 会在空库上先于 Hibernate 执行，就会报「表不存在」。
+原因：`spring.sql.init.mode=always` 会执行 `schema.sql`，其中的 `UPDATE skills` 要求表已由 Hibernate 建好。若 **`spring.jpa.defer-datasource-initialization` 未设为 `true`**，`schema.sql` 会在空库上先于 Hibernate 执行，就会报「表不存在」（MySQL 下为 `skills` 不存在等类似错误）。
 
 常见触发方式：启动命令使用 `--spring.config.location=.../application-prod.properties` 时，**只会加载该文件**，JAR 里 `application.properties` 中的 `defer-datasource-initialization=true` 不会生效；若生产 properties 是从文档复制的旧片段且漏了该项，就会复现。
 

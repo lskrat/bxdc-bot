@@ -6,6 +6,8 @@ import Button from '../components/ui/Button.vue';
 import Input from '../components/ui/Input.vue';
 import Card from '../components/ui/Card.vue';
 import { apiUrl } from '../services/config';
+import { AVATAR_EMOJI_CHOICES } from '../constants/avatarEmojiChoices';
+import UserAvatar from '../components/UserAvatar.vue';
 
 const userId = ref('');
 const nickname = ref('');
@@ -19,11 +21,6 @@ const step = ref<'form' | 'complete'>('form');
 const selectedEmoji = ref('👤');
 const canAiAvatar = ref(false);
 const aiLoading = ref(false);
-
-const EMOJI_CHOICES = [
-  '🐱', '🐶', '🦊', '🐻', '🐼', '🐨', '🐯', '🦁', '🐮', '🐷', '🐸', '🐵',
-  '🦄', '🐙', '🦋', '🐝', '🌸', '⭐', '🎯', '🎨', '🚀', '💡', '📚', '🎮',
-];
 
 async function handleRegister() {
   error.value = '';
@@ -115,14 +112,14 @@ function goToChat() {
           <label class="text-sm font-medium text-slate-700">头像（点选 emoji）</label>
           <div class="emoji-grid">
             <button
-              v-for="em in EMOJI_CHOICES"
+              v-for="em in AVATAR_EMOJI_CHOICES"
               :key="em"
               type="button"
               class="emoji-btn"
               :class="{ selected: selectedEmoji === em }"
               @click="selectedEmoji = em"
             >
-              {{ em }}
+              <UserAvatar :avatar="em" :size="32" rounded />
             </button>
           </div>
           <p class="text-xs text-slate-500 mt-2">当前：{{ selectedEmoji }}</p>
@@ -150,9 +147,9 @@ function goToChat() {
     <Card v-else class="w-full max-w-md shadow-lg border-0 text-center py-10" title="准备就绪！">
       <div class="flex flex-col items-center justify-center space-y-6">
         <div
-          class="w-32 h-32 rounded-full bg-blue-50 flex items-center justify-center text-6xl shadow-inner transform transition-transform hover:scale-110 duration-300"
+          class="w-32 h-32 rounded-full bg-blue-50 flex items-center justify-center shadow-inner transform transition-transform hover:scale-110 duration-300 p-2 box-border"
         >
-          {{ selectedEmoji }}
+          <UserAvatar :avatar="selectedEmoji" :size="112" />
         </div>
         <div class="space-y-2">
           <h3 class="text-xl font-medium text-slate-900">欢迎，{{ nickname }}！</h3>
@@ -183,19 +180,27 @@ function goToChat() {
 <style scoped>
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 8px;
   margin-top: 8px;
+  max-height: calc(40px * 3.5 + 8px * 3);
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 .emoji-btn {
-  font-size: 1.5rem;
-  line-height: 1;
-  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 40px;
+  padding: 4px;
   border-radius: 8px;
   border: 2px solid transparent;
   background: #fff;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
+  box-sizing: border-box;
 }
 .emoji-btn:hover {
   background: #f1f5f9;

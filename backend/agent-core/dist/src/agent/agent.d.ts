@@ -7,6 +7,7 @@ export declare class AgentFactory {
         modelName?: string;
         baseUrl?: string;
         callbacks?: any[];
+        sessionId?: string;
     }, skillManager?: SkillManager, userId?: string): Promise<{
         agent: ReturnType<typeof createReactAgent>;
         plannerModel: ChatOpenAI;

@@ -15,6 +15,7 @@
     "markdown-it": "^14.1.1",
     "tdesign-icons-vue-next": "^0.4.2",
     "tdesign-vue-next": "^1.18.3",
+    "twemoji": "^14.0.2",
     "vue": "^3.5.25",
     "vue-router": "^5.0.3"
   },

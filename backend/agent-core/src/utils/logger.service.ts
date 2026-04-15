@@ -132,8 +132,47 @@ export class LoggerService {
     return entry;
   }
 
+  /**
+   * 回调里的 extraParams 会带上 LangChain/LangGraph 噪音：
+   * - `invocation_params` 与顶层的 `messages` 重复，不必再记一遍；
+   * - 函数值（如 LangGraph 的 writer、interrupt）会被序列化成整段源码。
+   * 日志里只保留与「请求上下文」相关的可序列化字段，再交给 sanitizeValue 脱敏。
+   */
+  private stripLangChainExtraParamsNoise(value: unknown, depth = 0): unknown {
+    if (depth > 10) return '[truncated]';
+    if (value == null) return value;
+    if (typeof value === 'function') return undefined;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      const out: unknown[] = [];
+      for (const item of value) {
+        if (typeof item === 'function') continue;
+        const cleaned = this.stripLangChainExtraParamsNoise(item, depth + 1);
+        if (cleaned !== undefined) out.push(cleaned);
+      }
+      return out;
+    }
+    if (typeof value === 'object') {
+      const result: Record<string, unknown> = {};
+      for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+        if (key === 'invocation_params') continue;
+        if (typeof raw === 'function') continue;
+        const cleaned = this.stripLangChainExtraParamsNoise(raw, depth + 1);
+        if (cleaned !== undefined) {
+          result[key] = cleaned;
+        }
+      }
+      return result;
+    }
+    return String(value);
+  }
+
   private sanitizeInvocationParams(extraParams: any) {
-    return this.sanitizeValue(extraParams);
+    const stripped = this.stripLangChainExtraParamsNoise(extraParams);
+    if (stripped === undefined) return undefined;
+    return this.sanitizeValue(stripped);
   }
 
   /**
@@ -235,7 +274,7 @@ export class LoggerService {
   }
 
   private sanitizeValue(value: any, depth = 0): any {
-    if (depth > 8) return '[truncated]';
+    if (depth > 10) return '[truncated]';
     if (value == null) return value;
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return value;

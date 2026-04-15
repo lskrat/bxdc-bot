@@ -17,8 +17,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 
 /**
- * Runs before Hibernate ddl-auto so adding NOT NULL columns (e.g. visibility) does not fail on H2
- * when copying existing rows. Removes all persisted extended skills ({@code type=EXTENSION}), including former
+ * Runs before Hibernate ddl-auto. Removes all persisted extended skills ({@code type=EXTENSION}), including former
  * platform seeds; built-in capabilities are not stored in this table.
  */
 @Component
@@ -51,7 +50,7 @@ public class SkillTablePreMigration implements BeanPostProcessor {
 
     private void runCleanup() {
         try (Connection c = dataSource.getConnection()) {
-            if (!tableExists(c, "SKILLS")) {
+            if (!tableExists(c, "skills", "SKILLS")) {
                 return;
             }
             try (Statement s = c.createStatement()) {
@@ -61,14 +60,23 @@ public class SkillTablePreMigration implements BeanPostProcessor {
                 }
             }
         } catch (SQLException e) {
-            log.warn("Pre-Hibernate skill cleanup failed ({}). If schema migration fails on visibility, delete user extension rows or reset the H2 file.", e.getMessage());
+            log.warn("Pre-Hibernate skill cleanup failed ({}). If schema migration fails on visibility, delete conflicting extension rows or repair the skills table in MySQL.", e.getMessage());
         }
     }
 
-    private static boolean tableExists(Connection c, String tableName) throws SQLException {
+    /**
+     * MySQL typically reports {@code skills}; H2 may use {@code SKILLS} depending on mode.
+     */
+    private static boolean tableExists(Connection c, String... tableNames) throws SQLException {
         DatabaseMetaData md = c.getMetaData();
-        try (ResultSet rs = md.getTables(null, null, tableName, new String[] { "TABLE" })) {
-            return rs.next();
+        String catalog = c.getCatalog();
+        for (String tableName : tableNames) {
+            try (ResultSet rs = md.getTables(catalog, null, tableName, new String[] { "TABLE" })) {
+                if (rs.next()) {
+                    return true;
+                }
+            }
         }
+        return false;
     }
 }

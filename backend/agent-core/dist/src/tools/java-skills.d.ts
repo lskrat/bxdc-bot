@@ -34,14 +34,14 @@ declare const apiCallerToolInputSchema: z.ZodObject<{
     body: z.ZodOptional<z.ZodAny>;
 }, "strip", z.ZodTypeAny, {
     method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
-    url?: string;
     headers?: Record<string, string>;
     body?: any;
+    url?: string;
 }, {
     method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
-    url?: string;
     headers?: Record<string, string>;
     body?: any;
+    url?: string;
 }>;
 declare const sshExecutorToolInputSchema: z.ZodObject<{
     host: z.ZodString;
@@ -72,8 +72,14 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     description: z.ZodOptional<z.ZodString>;
     method: z.ZodOptional<z.ZodString>;
     endpoint: z.ZodOptional<z.ZodString>;
+    headers: z.ZodEffects<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>, Record<string, string>, unknown>;
+    query: z.ZodEffects<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnion<[z.ZodString, z.ZodNumber, z.ZodBoolean]>>>, Record<string, string | number | boolean>, unknown>;
+    body: z.ZodOptional<z.ZodAny>;
     interfaceDescription: z.ZodOptional<z.ZodString>;
-    parameterContract: z.ZodOptional<z.ZodAny>;
+    parameterContract: z.ZodEffects<z.ZodOptional<z.ZodAny>, any, unknown>;
+    testInput: z.ZodEffects<z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>, Record<string, unknown>, unknown>;
+    enabled: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
+    requiresConfirmation: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
     allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
 }, "strip", z.ZodTypeAny, {
     targetType?: "api";
@@ -82,8 +88,14 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     description?: string;
     method?: string;
     endpoint?: string;
+    headers?: Record<string, string>;
+    query?: Record<string, string | number | boolean>;
+    body?: any;
     interfaceDescription?: string;
     parameterContract?: any;
+    testInput?: Record<string, unknown>;
+    enabled?: boolean;
+    requiresConfirmation?: boolean;
     allowOverwrite?: boolean;
 }, {
     targetType?: "api";
@@ -92,8 +104,14 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     description?: string;
     method?: string;
     endpoint?: string;
+    headers?: unknown;
+    query?: unknown;
+    body?: any;
     interfaceDescription?: string;
-    parameterContract?: any;
+    parameterContract?: unknown;
+    testInput?: unknown;
+    enabled?: unknown;
+    requiresConfirmation?: unknown;
     allowOverwrite?: unknown;
 }>, z.ZodObject<{
     targetType: z.ZodLiteral<"ssh">;
@@ -122,6 +140,7 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     name: z.ZodOptional<z.ZodString>;
     description: z.ZodOptional<z.ZodString>;
     systemPrompt: z.ZodOptional<z.ZodString>;
+    allowedTools: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
     allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
 }, "strip", z.ZodTypeAny, {
     targetType?: "openclaw";
@@ -130,6 +149,7 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     description?: string;
     allowOverwrite?: boolean;
     systemPrompt?: string;
+    allowedTools?: string[];
 }, {
     targetType?: "openclaw";
     rawDescription?: string;
@@ -137,6 +157,7 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     description?: string;
     allowOverwrite?: unknown;
     systemPrompt?: string;
+    allowedTools?: string[];
 }>, z.ZodObject<{
     targetType: z.ZodLiteral<"template">;
     rawDescription: z.ZodOptional<z.ZodString>;
@@ -169,8 +190,9 @@ export type BindableAgentTool = Tool | DynamicTool | StructuredTool;
 export declare function loadGatewayExtendedTools(gatewayUrl: string, apiToken: string, userId?: string, options?: {
     plannerModel?: any;
     availableTools?: BindableAgentTool[];
-}): Promise<DynamicTool[]>;
+}): Promise<StructuredTool[]>;
 export declare function buildConfirmedToolInputString(args: unknown): string;
+export declare function buildConfirmedToolArgs(args: unknown): Record<string, unknown>;
 export declare function invokeExtendedSkillWithConfirmed(gatewayUrl: string, apiToken: string, userId: string | undefined, toolName: string, toolArguments: unknown, options: {
     plannerModel: any;
     availableTools: BindableAgentTool[];

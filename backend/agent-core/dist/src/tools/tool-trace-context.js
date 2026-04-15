@@ -10,7 +10,7 @@ exports.getActiveParentToolId = getActiveParentToolId;
 const node_async_hooks_1 = require("node:async_hooks");
 const toolTraceContext = new node_async_hooks_1.AsyncLocalStorage();
 function sanitizeToolTraceArguments(value, depth = 0) {
-    if (depth > 8)
+    if (depth > 10)
         return "[truncated]";
     if (value == null)
         return value;

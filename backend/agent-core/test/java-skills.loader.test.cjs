@@ -42,7 +42,7 @@ test("loadGatewayExtendedTools loads enabled EXTENSION tools", async () => {
     const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token");
 
     assert.equal(tools.length, 1);
-    assert.equal(tools[0].name, "extended_skill_1");
+    assert.equal(tools[0].name, "extended_huo_qu_shi_jian");
     const result = await tools[0].func("{}");
     const parsed = JSON.parse(result);
     assert.equal(parsed.timestamp, 1773013121);
@@ -165,8 +165,8 @@ test("configured API extended skill validates parameter contract", async () => {
     const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token");
     assert.equal(tools.length, 1);
 
-    // 1. Missing required field
-    let result = await tools[0].func(JSON.stringify({}));
+    // 1. Missing required field (Ajv rejects merged payload)
+    let result = await tools[0].func(JSON.stringify({ _probe: 1 }));
     let parsed = JSON.parse(result);
     assert.equal(parsed.error, "Parameter validation failed");
     assert.ok(parsed.details.some(d => d.includes("must have required property 'reqField'")));
@@ -191,14 +191,18 @@ test("configured API extended skill validates parameter contract", async () => {
     parsed = JSON.parse(result);
     assert.equal(parsed.ok, true);
     assert.ok(capturedRequest);
-    assert.equal(capturedRequest.url, "http://example.com/api?reqField=val&enumField=A&defField=default_val");
+    const successUrl = new URL(capturedRequest.url);
+    assert.equal(successUrl.origin + successUrl.pathname, "http://example.com/api");
+    assert.equal(successUrl.searchParams.get("reqField"), "val");
+    assert.equal(successUrl.searchParams.get("enumField"), "A");
+    assert.equal(successUrl.searchParams.get("defField"), "default_val");
   } finally {
     axios.get = originalGet;
     axios.post = originalPost;
   }
 });
 
-test("api skill generator creates and validates a generated API skill", async () => {
+test("api skill generator creates skill without post-save probe (no /api/skills/api)", async () => {
   const originalGet = axios.get;
   const originalPost = axios.post;
   const originalPut = axios.put;
@@ -222,15 +226,6 @@ test("api skill generator creates and validates a generated API skill", async ()
       };
     }
 
-    if (url.endsWith("/api/skills/api")) {
-      return {
-        data: {
-          ok: true,
-          result: "pong",
-        },
-      };
-    }
-
     throw new Error(`Unexpected POST ${url}`);
   };
   axios.put = async () => {
@@ -240,7 +235,8 @@ test("api skill generator creates and validates a generated API skill", async ()
   try {
     const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
-    const result = await tool._call(JSON.stringify({
+    const result = await tool.invoke({
+      targetType: "api",
       rawDescription: "调用 ping 接口检测服务可用性",
       name: "Ping API",
       description: "调用 ping 接口验证服务是否存活",
@@ -250,22 +246,17 @@ test("api skill generator creates and validates a generated API skill", async ()
       testInput: { query: { env: "prod" } },
       interfaceDescription: "Ping 接口说明",
       parameterContract: { type: "object", properties: {} },
-    }));
+    });
 
     const parsed = JSON.parse(result);
-    assert.equal(parsed.status, "VALIDATION_SUCCEEDED");
+    assert.equal(parsed.status, "VALIDATION_SKIPPED");
     assert.equal(parsed.saveAction, "created");
     assert.equal(parsed.skill.name, "Ping API");
     assert.equal(parsed.skill.configuration.kind, "api");
+    assert.equal(parsed.validation.skipped, true);
     assert.equal(parsed.validation.success, true);
-    assert.equal(postCalls.length, 2);
+    assert.equal(postCalls.length, 1);
     assert.equal(postCalls[0].url, "http://localhost:18080/api/skills");
-    assert.equal(postCalls[1].url, "http://localhost:18080/api/skills/api");
-    assert.equal(postCalls[1].body.method, "GET");
-
-    const requestUrl = new URL(postCalls[1].body.url);
-    assert.equal(requestUrl.origin + requestUrl.pathname, "https://example.com/ping");
-    assert.equal(requestUrl.searchParams.get("env"), "prod");
   } finally {
     axios.get = originalGet;
     axios.post = originalPost;
@@ -277,10 +268,11 @@ test("api skill generator reports missing required fields", async () => {
   const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
   const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
 
-  const result = await tool._call(JSON.stringify({
+  const result = await tool.invoke({
+    targetType: "api",
     rawDescription: "调用某个接口",
     endpoint: "https://example.com/demo",
-  }));
+  });
   const parsed = JSON.parse(result);
 
   assert.equal(parsed.status, "INPUT_INCOMPLETE");
@@ -307,9 +299,6 @@ test("api skill generator updates existing skill when overwrite is enabled", asy
     ],
   });
   axios.post = async (url) => {
-    if (url.endsWith("/api/skills/api")) {
-      return { data: { ok: true } };
-    }
     throw new Error(`Unexpected POST ${url}`);
   };
 
@@ -332,17 +321,18 @@ test("api skill generator updates existing skill when overwrite is enabled", asy
   try {
     const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
-    const result = await tool._call(JSON.stringify({
+    const result = await tool.invoke({
+      targetType: "api",
       name: "Ping API",
       method: "GET",
       endpoint: "https://example.com/ping",
       allowOverwrite: true,
       interfaceDescription: "desc",
       parameterContract: {},
-    }));
+    });
     const parsed = JSON.parse(result);
 
-    assert.equal(parsed.status, "VALIDATION_SUCCEEDED");
+    assert.equal(parsed.status, "VALIDATION_SKIPPED");
     assert.equal(parsed.saveAction, "updated");
     assert.ok(putCall);
     assert.equal(putCall.url, "http://localhost:18080/api/skills/12");
@@ -448,7 +438,7 @@ test("openclaw skill executes allowed tools serially", async () => {
     });
 
     assert.equal(tools.length, 2);
-    const birthdayTool = tools.find((tool) => tool.name === "extended_skill_2");
+    const birthdayTool = tools.find((tool) => tool.name === "extended_cha_xun_ju_li_sheng_ri_hai_you_ji_tian");
     assert.ok(birthdayTool);
     const result = await birthdayTool.func("我的生日是 3 月 12 日");
     assert.equal(result, "距离下一次生日还有 4 天");
@@ -654,7 +644,7 @@ test("openclaw skill can return next birthday result after current year passed",
       availableTools: [computeTool],
     });
 
-    const birthdayTool = tools.find((tool) => tool.name === "extended_skill_2");
+    const birthdayTool = tools.find((tool) => tool.name === "extended_cha_xun_ju_li_sheng_ri_hai_you_ji_tian");
     assert.ok(birthdayTool);
     const result = await birthdayTool.func("我生日是 3 月 12 日");
     assert.equal(result, "你距离下一次生日还有 345 天");
@@ -691,11 +681,11 @@ test("skill generator creates an SSH skill", async () => {
   try {
     const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
-    const result = await tool._call(JSON.stringify({
+    const result = await tool.invoke({
       targetType: "ssh",
       name: "Restart Nginx",
       command: "systemctl restart nginx",
-    }));
+    });
 
     const parsed = JSON.parse(result);
     assert.equal(parsed.status, "VALIDATION_SUCCEEDED");
@@ -743,12 +733,12 @@ test("skill generator creates an OPENCLAW skill", async () => {
   try {
     const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
-    const result = await tool._call(JSON.stringify({
+    const result = await tool.invoke({
       targetType: "openclaw",
       name: "Smart Assistant",
       systemPrompt: "You are a smart assistant.",
       allowedTools: ["tool1", "tool2"],
-    }));
+    });
 
     const parsed = JSON.parse(result);
     assert.equal(parsed.status, "VALIDATION_SUCCEEDED");
@@ -764,13 +754,15 @@ test("skill generator creates an OPENCLAW skill", async () => {
     axios.post = originalPost;
   }
 });
-test("skill generator keeps saved skill when validation fails", async () => {
+test("skill generator saves api skill without calling gateway proxy", async () => {
   const originalGet = axios.get;
   const originalPost = axios.post;
   const originalPut = axios.put;
 
+  let postCalls = 0;
   axios.get = async () => ({ data: [] });
   axios.post = async (url, body) => {
+    postCalls += 1;
     if (url.endsWith("/api/skills")) {
       return {
         data: {
@@ -785,14 +777,6 @@ test("skill generator keeps saved skill when validation fails", async () => {
       };
     }
 
-    if (url.endsWith("/api/skills/api")) {
-      return {
-        data: {
-          error: "401 unauthorized",
-        },
-      };
-    }
-
     throw new Error(`Unexpected POST ${url}`);
   };
   axios.put = async () => {
@@ -802,18 +786,20 @@ test("skill generator keeps saved skill when validation fails", async () => {
   try {
     const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
     const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
-    const result = await tool._call(JSON.stringify({
+    const result = await tool.invoke({
+      targetType: "api",
       name: "Failing API",
       method: "GET",
       endpoint: "https://example.com/protected",
       interfaceDescription: "A failing API",
       parameterContract: { type: "object", properties: {} },
-    }));
+    });
     const parsed = JSON.parse(result);
 
-    assert.equal(parsed.status, "VALIDATION_FAILED");
+    assert.equal(parsed.status, "VALIDATION_SKIPPED");
     assert.equal(parsed.saveAction, "created");
-    assert.equal(parsed.validation.success, false);
+    assert.equal(parsed.validation.skipped, true);
+    assert.equal(postCalls, 1);
   } finally {
     axios.get = originalGet;
     axios.post = originalPost;

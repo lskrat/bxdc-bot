@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { Chat as TChat, ChatAction as TChatAction, ChatContent as TChatContent } from '@tdesign-vue-next/chat'
 import { useChat, type LlmLogEntry, type Message, type ToolInvocation, type ConfirmationRequest } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
+import UserAvatar from './UserAvatar.vue'
 import { ChevronUpIcon, ChevronDownIcon } from 'tdesign-icons-vue-next'
 
 const { messages, isThinking, confirmSkillAction } = useChat()
@@ -178,21 +179,6 @@ const latestAssistantMessage = computed(() =>
 
 const latestAssistantLogCount = computed(() => latestAssistantMessage.value?.llmLogs?.length ?? 0)
 
-function getAvatarUrl(emoji: string) {
-  // Check if it's already a URL
-  if (emoji.startsWith('http') || emoji.startsWith('data:')) {
-    return emoji;
-  }
-
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
-      <rect width="100%" height="100%" fill="#f0f0f0"/>
-      <text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-size="70">${emoji}</text>
-    </svg>
-  `.trim();
-  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
-}
-
 function handleConfirmation(toolCallId: string, confirmed: boolean) {
   confirmSkillAction(toolCallId, confirmed)
 }
@@ -260,7 +246,7 @@ const chatItems = computed(() =>
     showThinking: message.role === 'assistant' && isThinking.value && index === list.length - 1,
     name: message.role === 'assistant' ? 'BXDC.bot' : '你',
     datetime: formatTime(message.timestamp),
-    avatar: message.role === 'assistant' ? getAvatarUrl('🤖') : getAvatarUrl(currentUser.value?.avatar || '👤'),
+    avatarEmoji: message.role === 'assistant' ? '🤖' : (currentUser.value?.avatar || '👤'),
   } as any)),
 )
 </script>
@@ -297,8 +283,12 @@ const chatItems = computed(() =>
       :animation="'moving'"
     >
       <template #avatar="{ item }">
-        <div class="chat-avatar" :class="item.role">
-          <img :src="item.avatar" class="avatar-img" />
+        <div class="chat-avatar-slot">
+          <UserAvatar
+            :avatar="item.avatarEmoji"
+            :size="24"
+            :variant="item.role === 'assistant' ? 'chatAssistant' : 'chatUser'"
+          />
         </div>
       </template>
 
@@ -921,8 +911,58 @@ const chatItems = computed(() =>
   color: var(--td-text-color-placeholder);
 }
 
+/* 槽位：横向比头像略宽以留白；纵向与昵称顶对齐（TChat 已在 .t-chat__avatar 上设 padding-top 与 content--base 一致，勿再垂直居中把头像顶下去） */
+.chat-avatar-slot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  min-width: 40px;
+  min-height: 24px;
+  box-sizing: border-box;
+}
+
 :deep(.t-chat) {
   height: 100%;
+}
+
+:deep(.t-chat__inner) {
+  display: flex !important;
+  align-items: flex-start;
+}
+
+/* TChat 在 avatar 外包一层 __avatar / __avatar__box；原先写死 24×24 会压扁槽位，导致留白无效 */
+:deep(.t-chat__avatar) {
+  overflow: visible !important;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+:deep(.t-chat__avatar__box) {
+  overflow: visible !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  width: 40px !important;
+  height: auto !important;
+  min-width: 40px;
+  min-height: 24px;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+:deep(.t-chat__content) {
+  border-radius: var(--td-radius-large);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+/* 昵称与时间不要紧贴气泡正文 */
+:deep(.t-chat__base) {
+  margin-bottom: 6px;
 }
 
 :deep(.t-chat__list) {
@@ -932,10 +972,6 @@ const chatItems = computed(() =>
 
 :deep(.t-chat__item) {
   margin-bottom: 20px;
-}
-
-:deep(.t-chat__content) {
-  border-radius: var(--td-radius-large);
 }
 
 :deep(.t-chat__content-markdown pre) {
@@ -980,37 +1016,6 @@ const chatItems = computed(() =>
 .thinking-fade-leave-to {
   opacity: 0;
   transform: translateY(6px);
-}
-
-.chat-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  background-color: #f0f0f0;
-  overflow: hidden;
-}
-
-.chat-avatar.assistant {
-  background-color: #e6f7ff;
-}
-
-.chat-avatar.user {
-  background-color: #f6ffed;
-}
-
-.avatar-emoji {
-  line-height: 1;
-}
-
-.avatar-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 50%;
 }
 
 .confirmation-card {

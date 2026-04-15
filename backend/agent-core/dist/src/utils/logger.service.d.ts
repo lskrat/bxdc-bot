@@ -77,6 +77,7 @@ export declare class LoggerService {
         toJSONNotImplemented(): import("@langchain/core/load/serializable").SerializedNotImplemented;
     };
     private appendLlmEntry;
+    private stripLangChainExtraParamsNoise;
     private sanitizeInvocationParams;
     private normalizeLangChainRoleToOpenAi;
     private sanitizeMessages;

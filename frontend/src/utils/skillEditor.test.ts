@@ -38,6 +38,20 @@ describe('skillEditor', () => {
       executor: 'ssh_executor',
       command: 'uptime',
       readOnly: true,
+      interfaceDescription: '',
+    })
+  })
+
+  it('parses ssh draft with interfaceDescription from generator', () => {
+    const result = parseSkillDraft(
+      'CONFIG',
+      '{"kind":"ssh","preset":"server-resource-status","operation":"server-resource-status","lookup":"server_lookup","executor":"ssh_executor","command":"uptime","readOnly":true,"interfaceDescription":"Pass top-level name."}',
+    )
+
+    expect(result.error).toBeNull()
+    expect(result.draft).toMatchObject({
+      kind: 'ssh',
+      interfaceDescription: 'Pass top-level name.',
     })
   })
 
@@ -154,6 +168,21 @@ describe('skillEditor', () => {
       command: 'netstat -tlnp | grep LISTEN',
       readOnly: true,
     })
+  })
+
+  it('serializes ssh draft with optional interfaceDescription', () => {
+    const draft = createDefaultSkillDraft('CONFIG', 'ssh')
+    if (draft.kind !== 'ssh') {
+      throw new Error('Expected ssh draft')
+    }
+
+    draft.command = 'uptime'
+    draft.interfaceDescription = 'Use ledger alias `name`.'
+
+    const raw = serializeSkillDraft('CONFIG', draft)
+    const parsed = JSON.parse(raw)
+
+    expect(parsed.interfaceDescription).toBe('Use ledger alias `name`.')
   })
 
   it('serializes OPENCLAW draft and trims tool entries', () => {

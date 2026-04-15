@@ -15,7 +15,10 @@ class AgentFactory {
         if (config?.baseUrl?.trim()) {
             openAiConfiguration.baseURL = config.baseUrl.replace(/\/+$/, "");
         }
-        openAiConfiguration.fetch = (0, llm_request_role_normalize_1.composeOpenAiCompatibleFetch)();
+        openAiConfiguration.fetch = (0, llm_request_role_normalize_1.composeOpenAiCompatibleFetch)({
+            userId,
+            sessionId: config?.sessionId,
+        });
         const model = new openai_1.ChatOpenAI({
             modelName: config?.modelName || "gpt-4",
             apiKey: openAiApiKey,
@@ -25,8 +28,11 @@ class AgentFactory {
             temperature: 0,
             callbacks: config?.callbacks,
         });
+        const exposeSshExecutor = !userId?.trim()
+            || process.env.AGENT_EXPOSE_SSH_EXECUTOR === "1"
+            || process.env.AGENT_EXPOSE_SSH_EXECUTOR === "true";
         const baseTools = [
-            new java_skills_1.JavaSshTool(gatewayUrl, apiToken, userId),
+            ...(exposeSshExecutor ? [new java_skills_1.JavaSshTool(gatewayUrl, apiToken, userId)] : []),
             new java_skills_1.JavaApiTool(gatewayUrl, apiToken),
             new java_skills_1.JavaSkillGeneratorTool(gatewayUrl, apiToken, userId),
             new java_skills_1.JavaComputeTool(gatewayUrl, apiToken),

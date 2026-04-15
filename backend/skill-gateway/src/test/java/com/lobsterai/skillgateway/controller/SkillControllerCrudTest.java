@@ -25,8 +25,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.username=sa",
         "spring.datasource.password=password",
         "spring.jpa.hibernate.ddl-auto=create-drop",
-        "spring.sql.init.mode=always",
-        "spring.jpa.defer-datasource-initialization=true"
+        "spring.sql.init.mode=never",
+        "spring.jpa.defer-datasource-initialization=false"
 })
 @AutoConfigureMockMvc
 class SkillControllerCrudTest {

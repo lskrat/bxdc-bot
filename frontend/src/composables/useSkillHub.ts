@@ -15,6 +15,8 @@ export interface Skill {
   requiresConfirmation?: boolean;
   visibility?: SkillVisibility;
   createdBy?: string;
+  /** 展示用 emoji；未设置时由 {@link extendedSkillEmoji} 按 id+名称派生 */
+  avatar?: string;
 }
 
 /** 与 SkillGateway `SKILL_PLATFORM_ADMIN_USER_ID` 一致；可管理 `createdBy=public` 的平台行 */
@@ -92,6 +94,7 @@ export const BUILT_IN_SKILLS = [
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
+    emoji: '🔌',
   },
   {
     id: -2,
@@ -100,6 +103,7 @@ export const BUILT_IN_SKILLS = [
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
+    emoji: '🧮',
   },
   {
     id: -3,
@@ -108,6 +112,7 @@ export const BUILT_IN_SKILLS = [
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
+    emoji: '🐧',
   },
   {
     id: -4,
@@ -116,8 +121,26 @@ export const BUILT_IN_SKILLS = [
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
+    emoji: '✨',
   },
 ];
+
+const EXTENDED_SKILL_EMOJI_POOL = ['🧩', '⚙️', '📦', '🛠️', '🔧', '📡', '🎯', '💡', '🌐', '📎'] as const;
+
+/** 优先使用保存的 avatar；否则按 id+名称稳定映射，扩展 Skill 列表头像用 Twemoji 展示 */
+export function extendedSkillEmoji(skill: Pick<Skill, 'id' | 'name' | 'avatar'>): string {
+  const raw = skill.avatar;
+  const custom =
+    raw !== undefined && raw !== null && String(raw).trim() ? String(raw).trim() : '';
+  if (custom) return custom;
+  const s = `${skill.id}:${skill.name}`;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  const idx = h % EXTENDED_SKILL_EMOJI_POOL.length;
+  return EXTENDED_SKILL_EMOJI_POOL[idx] ?? '🧩';
+}
 
 export function useSkillHub() {
   const { currentUser } = useUser();
@@ -163,6 +186,7 @@ export function useSkillHub() {
     error.value = null;
     try {
       const res = await fetch(apiUrl('/api/skills'), {
+        cache: 'no-store',
         headers: userIdHeader(),
       });
       if (!res.ok) {
@@ -179,6 +203,7 @@ export function useSkillHub() {
 
   async function fetchSkill(id: number): Promise<Skill> {
     const res = await fetch(apiUrl(`/api/skills/${id}`), {
+      cache: 'no-store',
       headers: userIdHeader(),
     });
     if (!res.ok) {
@@ -200,7 +225,12 @@ export function useSkillHub() {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to create skill');
     }
+    const created = (await res.json()) as Skill;
     await fetchSkills();
+    const i = skills.value.findIndex((s) => s.id === created.id);
+    if (i >= 0) {
+      skills.value[i] = { ...skills.value[i], ...created };
+    }
   }
 
   async function updateSkill(id: number, payload: Omit<Skill, 'id'>) {
@@ -224,7 +254,12 @@ export function useSkillHub() {
       }
       throw new Error(message);
     }
+    const updated = (await res.json()) as Skill;
     await fetchSkills();
+    const i = skills.value.findIndex((s) => s.id === id);
+    if (i >= 0) {
+      skills.value[i] = { ...skills.value[i], ...updated };
+    }
   }
 
   async function deleteSkill(id: number) {
@@ -249,6 +284,7 @@ export function useSkillHub() {
 
   async function toggleSkillEnabled(skill: Skill, enabled: boolean) {
     const fullSkill = await fetchSkill(skill.id);
+    // Do not send `avatar`: gateway update preserves it when the field is omitted (see SkillService).
     await updateSkill(skill.id, {
       name: fullSkill.name,
       description: fullSkill.description,

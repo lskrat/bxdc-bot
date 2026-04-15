@@ -25,6 +25,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 class SkillControllerSshLedgerTest {
 
+    private static final String TOKEN = "your-secure-token-here";
+
     @Autowired
     private MockMvc mockMvc;
 
@@ -46,6 +48,7 @@ class SkillControllerSshLedgerTest {
                 .thenReturn("file1.txt");
 
         mockMvc.perform(post("/api/skills/ssh")
+                        .header("X-Agent-Token", TOKEN)
                         .header("X-User-Id", "123456")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"host\":\"192.168.1.1\",\"command\":\"ls\"}"))
@@ -58,6 +61,7 @@ class SkillControllerSshLedgerTest {
         when(serverLedgerService.getServerLedgerByIp("123456", "192.168.1.1")).thenReturn(Optional.empty());
 
         mockMvc.perform(post("/api/skills/ssh")
+                        .header("X-Agent-Token", TOKEN)
                         .header("X-User-Id", "123456")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"host\":\"192.168.1.1\",\"command\":\"ls\"}"))
@@ -70,6 +74,7 @@ class SkillControllerSshLedgerTest {
                 .thenReturn("legacy");
 
         mockMvc.perform(post("/api/skills/ssh")
+                        .header("X-Agent-Token", TOKEN)
                         // No X-User-Id
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"host\":\"192.168.1.1\",\"username\":\"user\",\"privateKey\":\"key\",\"command\":\"ls\"}"))

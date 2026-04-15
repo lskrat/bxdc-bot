@@ -14,10 +14,30 @@ import java.util.Map;
 @CrossOrigin(origins = "*")
 public class UserController {
 
+    private static final String HEADER_USER_ID = "X-User-Id";
+
     private final UserService userService;
 
     public UserController(UserService userService) {
         this.userService = userService;
+    }
+
+    private static boolean isSelf(String pathUserId, String xUserId) {
+        if (xUserId == null || xUserId.isBlank()) {
+            return false;
+        }
+        return pathUserId.equals(xUserId.trim());
+    }
+
+    private static String stringField(Map<String, Object> body, String key) {
+        if (body == null || !body.containsKey(key)) {
+            return null;
+        }
+        Object v = body.get(key);
+        if (v == null) {
+            return null;
+        }
+        return v instanceof String s ? s : String.valueOf(v);
     }
 
     @GetMapping("/{id}")
@@ -30,8 +50,14 @@ public class UserController {
     }
 
     @PutMapping("/{id}/avatar")
-    public ResponseEntity<?> updateAvatar(@PathVariable String id, @RequestBody Map<String, String> payload) {
-        String avatar = payload.get("avatar");
+    public ResponseEntity<?> updateAvatar(
+            @PathVariable String id,
+            @RequestHeader(value = HEADER_USER_ID, required = false) String xUserId,
+            @RequestBody Map<String, String> payload) {
+        if (!isSelf(id, xUserId)) {
+            return ResponseEntity.status(403).body(Map.of("error", "X-User-Id must match path user id"));
+        }
+        String avatar = payload != null ? payload.get("avatar") : null;
         if (avatar == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Avatar is required"));
         }
@@ -39,7 +65,43 @@ public class UserController {
             User user = userService.updateAvatar(id, avatar);
             return ResponseEntity.ok(user);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.notFound().build();
+            String msg = e.getMessage() != null ? e.getMessage() : "Bad request";
+            if ("User not found".equals(msg)) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.badRequest().body(Map.of("error", msg));
+        }
+    }
+
+    /**
+     * Update nickname and/or avatar for the logged-in user. Requires {@code X-User-Id} to match {@code id}.
+     * Request body must not contain {@code id} (immutable).
+     */
+    @PutMapping("/{id}/profile")
+    public ResponseEntity<?> updateProfile(
+            @PathVariable String id,
+            @RequestHeader(value = HEADER_USER_ID, required = false) String xUserId,
+            @RequestBody(required = false) Map<String, Object> body) {
+        if (!isSelf(id, xUserId)) {
+            return ResponseEntity.status(403).body(Map.of("error", "X-User-Id must match path user id"));
+        }
+        if (body == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Body is required"));
+        }
+        if (body.containsKey("id")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "id cannot be changed"));
+        }
+        String nickname = body.containsKey("nickname") ? stringField(body, "nickname") : null;
+        String avatar = body.containsKey("avatar") ? stringField(body, "avatar") : null;
+        try {
+            User user = userService.updateProfile(id, nickname, avatar);
+            return ResponseEntity.ok(user);
+        } catch (IllegalArgumentException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "Bad request";
+            if ("User not found".equals(msg)) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.badRequest().body(Map.of("error", msg));
         }
     }
 

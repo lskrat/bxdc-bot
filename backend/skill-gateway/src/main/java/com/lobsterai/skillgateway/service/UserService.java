@@ -179,9 +179,57 @@ public class UserService {
         return user;
     }
 
-    public User updateAvatar(String id, String avatar) {
+    /**
+     * Same rules as {@link #register}: nickname non-null, max 10 chars (empty allowed).
+     */
+    public void validateNickname(String nickname) {
+        if (nickname == null) {
+            throw new IllegalArgumentException("Nickname must not be null.");
+        }
+        if (nickname.length() > 10) {
+            throw new IllegalArgumentException("Nickname must be no longer than 10 characters.");
+        }
+    }
+
+    /** Avatar stored as short emoji / text; keep bounded. */
+    public void validateAvatar(String avatar) {
+        if (avatar == null) {
+            throw new IllegalArgumentException("Avatar is required.");
+        }
+        String t = avatar.trim();
+        if (t.isEmpty()) {
+            throw new IllegalArgumentException("Avatar cannot be empty.");
+        }
+        if (t.length() > 32) {
+            throw new IllegalArgumentException("Avatar is too long.");
+        }
+    }
+
+    /**
+     * Updates nickname and/or avatar. At least one field must be non-null.
+     */
+    public User updateProfile(String id, String nickname, String avatar) {
+        boolean hasNickname = nickname != null;
+        boolean hasAvatar = avatar != null;
+        if (!hasNickname && !hasAvatar) {
+            throw new IllegalArgumentException("At least one of nickname or avatar is required.");
+        }
         User user = userRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("User not found"));
-        user.setAvatar(avatar);
+        if (hasNickname) {
+            validateNickname(nickname);
+            user.setNickname(nickname);
+        }
+        if (hasAvatar) {
+            validateAvatar(avatar);
+            user.setAvatar(avatar.trim());
+        }
+        return userRepository.save(user);
+    }
+
+    public User updateAvatar(String id, String avatar) {
+        validateAvatar(avatar);
+        User user = userRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("User not found"));
+        user.setAvatar(avatar.trim());
         return userRepository.save(user);
     }
 

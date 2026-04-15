@@ -407,6 +407,13 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
           <t-form-item label="执行器" name="sshExecutor">
             <t-input v-model="sshDraft.executor" placeholder="例如：ssh_executor" />
           </t-form-item>
+          <t-form-item label="调用说明（可选，面向模型）" name="sshInterfaceDescription">
+            <t-textarea
+              v-model="sshDraft.interfaceDescription"
+              :autosize="{ minRows: 3, maxRows: 8 }"
+              placeholder="说明工具调用方式（例如台账别名字段）；生成器会写入，也可留空"
+            />
+          </t-form-item>
           <t-form-item label="执行命令" name="sshCommand">
             <t-textarea v-model="sshDraft.command" :autosize="{ minRows: 5, maxRows: 10 }" />
           </t-form-item>

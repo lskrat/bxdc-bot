@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { useSkillHub, BUILT_IN_SKILLS, getExecutionModeLabel, getConfigSummary } from '../composables/useSkillHub';
-import { AppIcon, CalculatorIcon, ExtensionIcon } from 'tdesign-icons-vue-next';
+import { useSkillHub, BUILT_IN_SKILLS, extendedSkillEmoji, getExecutionModeLabel, getConfigSummary } from '../composables/useSkillHub';
 import SkillManagementModal from './SkillManagementModal.vue';
+import UserAvatar from './UserAvatar.vue';
 
 const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillManagement, refreshSkills } = useSkillHub();
 </script>
@@ -24,11 +24,12 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillMan
             </template>
             <t-list-item-meta :title="skill.name" :description="skill.description">
               <template #image>
-                <div class="skill-icon builtin">
-                  <AppIcon v-if="skill.name.includes('API')" />
-                  <CalculatorIcon v-else-if="skill.name.includes('Compute')" />
-                  <ExtensionIcon v-else />
-                </div>
+                <UserAvatar
+                  :avatar="skill.emoji"
+                  :size="32"
+                  rounded
+                  variant="skillBuiltin"
+                />
               </template>
             </t-list-item-meta>
           </t-list-item>
@@ -57,7 +58,7 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillMan
           <p>No extended skills found.</p>
         </div>
         <t-list v-else :split="true">
-          <t-list-item v-for="skill in skills" :key="skill.id">
+          <t-list-item v-for="skill in skills" :key="`${skill.id}-${skill.avatar ?? ''}`">
             <template #action>
               <div class="skill-tags">
                 <t-tag theme="success" variant="light">Extended</t-tag>
@@ -71,9 +72,12 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillMan
             </template>
             <t-list-item-meta :title="skill.name" :description="skill.description || 'No description provided.'">
               <template #image>
-                <div class="skill-icon extended">
-                  <ExtensionIcon />
-                </div>
+                <UserAvatar
+                  :avatar="extendedSkillEmoji(skill)"
+                  :size="32"
+                  rounded
+                  variant="skillExtended"
+                />
               </template>
             </t-list-item-meta>
           </t-list-item>
@@ -85,6 +89,27 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillMan
 </template>
 
 <style scoped>
+/* TDesign 默认把 meta 头像包成圆形并 overflow:hidden，导致 Twemoji 被裁成「左上角」 */
+.skill-hub-content :deep(.t-list-item__meta) {
+  align-items: flex-start;
+}
+
+.skill-hub-content :deep(.t-list-item__meta-avatar) {
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 !important;
+  /* 与右侧标题/描述留白（与 TDesign meta 布局兼容） */
+  margin: 0 12px 0 0 !important;
+  border-radius: 6px !important;
+  overflow: visible !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  flex-shrink: 0;
+}
+
 .skill-hub-content {
   display: flex;
   flex-direction: column;
@@ -113,26 +138,6 @@ const { isSkillHubVisible, skills, isLoading, error, closeSkillHub, openSkillMan
 .skill-tags {
   display: flex;
   gap: 8px;
-}
-
-.skill-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-}
-
-.skill-icon.builtin {
-  background-color: var(--td-brand-color-light);
-  color: var(--td-brand-color);
-}
-
-.skill-icon.extended {
-  background-color: var(--td-success-color-light);
-  color: var(--td-success-color);
 }
 
 .loading-state,
