@@ -343,6 +343,129 @@ test("api skill generator updates existing skill when overwrite is enabled", asy
   }
 });
 
+test("api skill parameterBinding jsonBody sends flat fields as JSON body without query pollution", async () => {
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+  let capturedApiPayload = null;
+
+  axios.get = async () => ({
+    data: [
+      {
+        id: 99,
+        name: "Register API",
+        description: "register user",
+        type: "EXTENSION",
+        executionMode: "CONFIG",
+        enabled: true,
+        configuration: JSON.stringify({
+          kind: "api",
+          operation: "register",
+          method: "POST",
+          endpoint: "http://localhost:18080/api/auth/register",
+          parameterBinding: "jsonBody",
+          parameterContract: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              nickname: { type: "string" },
+              systemAdminPassword: { type: "string" },
+            },
+            required: ["id", "nickname", "systemAdminPassword"],
+          },
+        }),
+      },
+    ],
+  });
+
+  axios.post = async (url, body) => {
+    if (url.endsWith("/api/skills/api")) {
+      capturedApiPayload = body;
+      return { data: { ok: true } };
+    }
+    throw new Error(`Unexpected POST ${url}`);
+  };
+
+  try {
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
+    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token", undefined, {});
+    assert.equal(tools.length, 1);
+    const result = await tools[0].func({
+      id: "123456",
+      nickname: "n",
+      systemAdminPassword: "secret",
+    });
+    const parsed = JSON.parse(result);
+    assert.equal(parsed.ok, true);
+    assert.ok(capturedApiPayload);
+    assert.equal(capturedApiPayload.url, "http://localhost:18080/api/auth/register");
+    assert.equal(capturedApiPayload.method, "POST");
+    assert.deepEqual(capturedApiPayload.body, {
+      id: "123456",
+      nickname: "n",
+      systemAdminPassword: "secret",
+    });
+    assert.equal(capturedApiPayload.headers["Content-Type"], "application/json");
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
+test("api skill parameterBinding jsonBody on GET falls back to query mapping", async () => {
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+  let capturedApiPayload = null;
+
+  axios.get = async () => ({
+    data: [
+      {
+        id: 100,
+        name: "Query API",
+        description: "get with flat params",
+        type: "EXTENSION",
+        executionMode: "CONFIG",
+        enabled: true,
+        configuration: JSON.stringify({
+          kind: "api",
+          operation: "q",
+          method: "GET",
+          endpoint: "https://example.com/api/items",
+          parameterBinding: "jsonBody",
+          parameterContract: {
+            type: "object",
+            properties: {
+              page: { type: "number" },
+            },
+            required: ["page"],
+          },
+        }),
+      },
+    ],
+  });
+
+  axios.post = async (url, body) => {
+    if (url.endsWith("/api/skills/api")) {
+      capturedApiPayload = body;
+      return { data: { items: [] } };
+    }
+    throw new Error(`Unexpected POST ${url}`);
+  };
+
+  try {
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
+    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token", undefined, {});
+    assert.equal(tools.length, 1);
+    await tools[0].func({ page: 2 });
+    assert.ok(capturedApiPayload);
+    const u = new URL(capturedApiPayload.url);
+    assert.equal(u.searchParams.get("page"), "2");
+    assert.equal(capturedApiPayload.body, "");
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
 test("openclaw skill executes allowed tools serially", async () => {
   const originalGet = axios.get;
   const originalPost = axios.post;
@@ -754,6 +877,52 @@ test("skill generator creates an OPENCLAW skill", async () => {
     axios.post = originalPost;
   }
 });
+test("skill generator defaults parameterBinding jsonBody for POST API", async () => {
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+
+  axios.get = async () => ({ data: [] });
+  axios.post = async (url, body) => {
+    if (url.endsWith("/api/skills")) {
+      const cfg = typeof body.configuration === "string" ? JSON.parse(body.configuration) : body.configuration;
+      assert.equal(cfg.kind, "api");
+      assert.equal(cfg.method, "POST");
+      assert.equal(cfg.parameterBinding, "jsonBody");
+      return {
+        data: {
+          id: 200,
+          name: body.name,
+          description: body.description,
+          type: body.type,
+          configuration: body.configuration,
+          enabled: body.enabled,
+          requiresConfirmation: body.requiresConfirmation,
+        },
+      };
+    }
+    throw new Error(`Unexpected POST ${url}`);
+  };
+
+  try {
+    const { JavaSkillGeneratorTool } = require("../dist/src/tools/java-skills");
+    const tool = new JavaSkillGeneratorTool("http://localhost:18080", "test-token");
+    const result = await tool.invoke({
+      targetType: "api",
+      name: "Register",
+      method: "POST",
+      endpoint: "https://example.com/register",
+      interfaceDescription: "Register user",
+      parameterContract: { type: "object", properties: { id: { type: "string" } } },
+    });
+    const parsed = JSON.parse(result);
+    assert.equal(parsed.status, "VALIDATION_SKIPPED");
+    assert.equal(parsed.skill.configuration.parameterBinding, "jsonBody");
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
 test("skill generator saves api skill without calling gateway proxy", async () => {
   const originalGet = axios.get;
   const originalPost = axios.post;

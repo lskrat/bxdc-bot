@@ -117,6 +117,28 @@ describe('skillEditor', () => {
     }
   })
 
+  it('parses and serializes api parameterBinding jsonBody', () => {
+    const result = parseSkillDraft(
+      'CONFIG',
+      JSON.stringify({
+        kind: 'api',
+        operation: 'register',
+        method: 'POST',
+        endpoint: 'http://localhost:18080/api/auth/register',
+        parameterBinding: 'jsonBody',
+        parameterContract: { type: 'object', properties: { id: { type: 'string' } } },
+      }),
+    )
+    expect(result.error).toBeNull()
+    expect(result.draft?.kind).toBe('api')
+    if (result.draft?.kind !== 'api') throw new Error('expected api')
+    expect(result.draft.parameterBinding).toBe('jsonBody')
+
+    const raw = serializeSkillDraft('CONFIG', result.draft)
+    const parsed = JSON.parse(raw)
+    expect(parsed.parameterBinding).toBe('jsonBody')
+  })
+
   it('serializes api draft with nested JSON fields and new contract fields', () => {
     const draft = createDefaultSkillDraft('CONFIG', 'api')
     if (draft.kind !== 'api') {

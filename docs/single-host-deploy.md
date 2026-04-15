@@ -91,6 +91,8 @@ VITE_AGENT_URL=https://your-domain.example.com
 
 如果采用同域名反向代理，这两个值都写成同一个域名即可，例如 `https://your-domain.example.com`。
 
+**Emoji 头像（Twemoji）**：前端将 Twemoji 静态文件打包在 `frontend/public/twemoji/` 下，运行时从**同源路径**加载，**不需要**浏览器访问外网 CDN。若生产环境配置了 **Content-Security-Policy**，`img-src` 允许 `self` 与 `data:` 即可；无需为 `cdn.jsdelivr.net` 放行。若静态资源托管在单独域名，可设置 `VITE_TWEMOJI_ASSETS_BASE` 指向该资源根地址。
+
 ### 4.2 Agent Core 配置
 
 文件来源：`backend/agent-core/.env.example`

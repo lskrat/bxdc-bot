@@ -353,8 +353,20 @@ function describeGatewayExtendedTool(toolName) {
         executionLabel: idDisplayName.executionLabel,
     };
 }
+function normalizeParameterBindingValue(raw) {
+    if (raw === "jsonBody" || raw === "query")
+        return raw;
+    return undefined;
+}
 function normalizeExtendedConfig(cfg) {
     const next = { ...cfg };
+    const pb = normalizeParameterBindingValue(cfg.parameterBinding);
+    if (pb) {
+        next.parameterBinding = pb;
+    }
+    else {
+        delete next.parameterBinding;
+    }
     const rawPc = cfg.parameterContract;
     if (typeof rawPc === "string" && rawPc.trim()) {
         try {
@@ -677,11 +689,14 @@ function buildGeneratedSkill(input) {
                 return rawPc;
             } })()
             : rawPc;
+        const methodUpper = typeof input.method === "string" ? input.method.trim().toUpperCase() : "";
+        const defaultJsonBody = ["POST", "PUT", "PATCH", "DELETE"].includes(methodUpper);
         config = {
             kind: "api",
             operation: normalizeGeneratedOperation(name),
             method: input.method?.trim().toUpperCase(),
             endpoint: input.endpoint?.trim(),
+            ...(defaultJsonBody ? { parameterBinding: "jsonBody" } : {}),
             ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
             ...(input.query && Object.keys(input.query).length > 0 ? { query: input.query } : {}),
             ...(input.interfaceDescription?.trim() ? { interfaceDescription: input.interfaceDescription.trim() } : {}),
@@ -833,6 +848,52 @@ async function executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, in
     }, { headers });
     return typeof response.data === "string" ? response.data : JSON.stringify(response.data);
 }
+function collectMergedScalarFields(merged) {
+    const out = {};
+    for (const [key, value] of Object.entries(merged)) {
+        if (["query", "headers", "body"].includes(key))
+            continue;
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+            out[key] = value;
+        }
+    }
+    return out;
+}
+function isMethodAllowingJsonBodyBinding(method) {
+    const m = method.toUpperCase();
+    return m !== "GET" && m !== "HEAD";
+}
+function mergeJsonBodyForProxy(merged, flatScalars) {
+    let bodyObj = { ...flatScalars };
+    const raw = merged.body;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        bodyObj = { ...bodyObj, ...raw };
+    }
+    else if (typeof raw === "string" && raw.trim()) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                bodyObj = { ...bodyObj, ...parsed };
+            }
+        }
+        catch {
+        }
+    }
+    return bodyObj;
+}
+function mergeHeadersForApiProxy(configHeaders, method, useJsonBody) {
+    const out = { ...(configHeaders || {}) };
+    if (!useJsonBody)
+        return out;
+    const m = method.toUpperCase();
+    if (!["POST", "PUT", "PATCH", "DELETE"].includes(m))
+        return out;
+    const hasContentType = Object.keys(out).some((k) => k.toLowerCase() === "content-type");
+    if (!hasContentType) {
+        out["Content-Type"] = "application/json";
+    }
+    return out;
+}
 async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
     const method = (config.method || "GET").toUpperCase();
     let payload;
@@ -868,27 +929,36 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
             });
         }
     }
+    const binding = normalizeParameterBindingValue(config.parameterBinding) ?? "query";
+    const flatScalars = collectMergedScalarFields(merged);
+    const useJsonBody = binding === "jsonBody" && isMethodAllowingJsonBodyBinding(method);
     const query = {
         ...toQueryRecord(config.query),
         ...toQueryRecord(merged.query),
     };
-    for (const [key, value] of Object.entries(merged)) {
-        if (["query", "headers", "body"].includes(key))
-            continue;
-        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-            query[key] = value;
+    if (!useJsonBody) {
+        for (const [key, value] of Object.entries(merged)) {
+            if (["query", "headers", "body"].includes(key))
+                continue;
+            if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+                query[key] = value;
+            }
         }
     }
     const endpoint = config.endpoint ? buildUrlWithQuery(config.endpoint, query) : "";
     if (!endpoint) {
         return JSON.stringify({ error: "No endpoint configured for API skill" });
     }
+    const headersOut = mergeHeadersForApiProxy(config.headers, method, useJsonBody);
+    const requestBody = useJsonBody
+        ? mergeJsonBodyForProxy(merged, flatScalars)
+        : (merged.body ?? "");
     try {
         const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, {
             url: endpoint,
             method,
-            headers: config.headers || {},
-            body: merged.body ?? "",
+            headers: headersOut,
+            body: requestBody,
         }, {
             headers: {
                 "X-Agent-Token": apiToken,
@@ -1420,6 +1490,7 @@ class JavaSkillGeneratorTool extends tools_1.DynamicStructuredTool {
             description: "Creates a NEW extension skill on SkillGateway—use ONLY after you have confirmed no existing tool (built-in, gateway extensions, or loadable filesystem skills) can fulfill the request, OR the user explicitly asked to add/create a new skill. " +
                 "Provide targetType and the corresponding fields for that type (api, ssh, openclaw, or template) as structured tool arguments. " +
                 "For API skills, headers, query, testInput, and parameterContract may be sent either as objects or as JSON strings; booleans may be true/false strings. " +
+                "Generated POST/PUT/PATCH/DELETE API skills default `parameterBinding` to jsonBody so flat contract fields map to the JSON request body; use query in configuration for URL-only APIs. " +
                 "After save, API and SSH extension skills are invoked with structured top-level parameters (not a single input envelope string). " +
                 "On success, API-type skills return status VALIDATION_SKIPPED (no automatic HTTP probe); verify by invoking the new skill.",
             schema: skillGeneratorToolInputSchema,

@@ -3,12 +3,17 @@ export type ConfigKind = 'api' | 'ssh' | 'template'
 export type ApiPreset = 'none' | 'current-time'
 export type SshPreset = 'server-resource-status'
 
+/** 与 agent-core `ExtendedSkillConfig.parameterBinding` 一致：扁平契约字段进 query 或 JSON body。 */
+export type ApiParameterBinding = 'query' | 'jsonBody'
+
 export interface ApiConfigDraft {
   kind: 'api'
   preset: ApiPreset
   operation: string
   method: string
   endpoint: string
+  /** 默认 query；POST/PUT/PATCH 等 JSON 接口选 jsonBody */
+  parameterBinding: ApiParameterBinding
   responseTimestampField: string
   headersText: string
   queryText: string
@@ -69,6 +74,7 @@ const API_ALLOWED_KEYS = [
   'body',
   'interfaceDescription',
   'parameterContract',
+  'parameterBinding',
 ]
 
 const SSH_ALLOWED_KEYS = [
@@ -155,6 +161,13 @@ function parseJsonText(text: string, fieldName: string): unknown {
   }
 }
 
+function readParameterBinding(record: JsonRecord): ApiParameterBinding {
+  const v = record.parameterBinding
+  if (v === undefined || v === null || v === '') return 'query'
+  if (v === 'jsonBody' || v === 'query') return v
+  throw new Error('parameterBinding 必须是 query 或 jsonBody')
+}
+
 function parseApiDraft(configuration: JsonRecord): ApiConfigDraft {
   ensureNoUnknownKeys(configuration, API_ALLOWED_KEYS)
   const preset = readPreset(configuration)
@@ -164,6 +177,7 @@ function parseApiDraft(configuration: JsonRecord): ApiConfigDraft {
     operation: readString(configuration, 'operation', preset === 'current-time' ? 'current-time' : ''),
     method: readString(configuration, 'method', 'GET'),
     endpoint: readString(configuration, 'endpoint'),
+    parameterBinding: readParameterBinding(configuration),
     responseTimestampField: readString(configuration, 'responseTimestampField'),
     headersText: formatJsonText(configuration.headers),
     queryText: formatJsonText(configuration.query),
@@ -181,6 +195,7 @@ function parseLegacyTimeDraft(configuration: JsonRecord): ApiConfigDraft {
     operation: readString(configuration, 'operation', 'current-time'),
     method: readString(configuration, 'method', 'GET'),
     endpoint: readString(configuration, 'endpoint'),
+    parameterBinding: 'query',
     responseTimestampField: readString(configuration, 'responseTimestampField'),
     headersText: '',
     queryText: '',
@@ -292,6 +307,7 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
       operation: '',
       method: 'GET',
       endpoint: '',
+      parameterBinding: 'query',
       responseTimestampField: '',
       headersText: '',
       queryText: '',
@@ -374,6 +390,7 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
       operation: requireNonEmpty(draft.operation, '操作标识'),
       method: requireNonEmpty(draft.method, '请求方法'),
       endpoint: requireNonEmpty(draft.endpoint, '请求地址'),
+      ...(draft.parameterBinding === 'jsonBody' ? { parameterBinding: 'jsonBody' } : {}),
       ...(draft.responseTimestampField.trim() ? { responseTimestampField: draft.responseTimestampField.trim() } : {}),
       ...(headers !== undefined ? { headers } : {}),
       ...(query !== undefined ? { query } : {}),

@@ -27,3 +27,11 @@ npm run dev
 ```
 
 默认开发服务器：<http://localhost:5173>。API 代理见 `vite.config.ts`。
+
+## Twemoji 头像（内网 / 离线）
+
+用户与 Skill 列表等处的 emoji 头像使用 **Twemoji** 转为图片。静态资源位于 `public/twemoji/14.0.2/assets/`（`svg` 与 `72x72` PNG），与 npm 依赖 `twemoji@14.0.2` 一致，**构建后从同源加载**，不依赖外网 CDN。
+
+- 可选环境变量 **`VITE_TWEMOJI_ASSETS_BASE`**：自定义资源根 URL（末尾须带 `/`），用于单独 CDN 或子路径；未设置时使用 `import.meta.env.BASE_URL` + `twemoji/14.0.2/assets/`。
+- 若需从官方仓库重新同步资源（升级版本或空目录时）：在项目根执行 `cd frontend && npm run vendor:twemoji`（需能访问 GitHub 一次）。
+- 图形许可见 `node_modules/twemoji/LICENSE-GRAPHICS`（CC-BY 4.0）。

@@ -374,6 +374,15 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
           <t-form-item label="请求地址" name="apiEndpoint">
             <t-input v-model="apiDraft.endpoint" :placeholder="apiDraft.preset === 'current-time' ? '例如：https://vv.video.qq.com/checktime?otype=json' : '例如：http://v.juhe.cn/joke/content/list'" />
           </t-form-item>
+          <t-form-item label="参数绑定" name="apiParameterBinding">
+            <t-radio-group v-model="apiDraft.parameterBinding">
+              <t-radio-button value="query">URL Query（默认）</t-radio-button>
+              <t-radio-button value="jsonBody">JSON Body</t-radio-button>
+            </t-radio-group>
+            <p class="skill-param-binding-hint">
+              扁平契约字段写入 URL 查询参数，或作为 JSON 请求体（POST/PUT/PATCH 等；GET 仍走 Query）。注册类 POST JSON 接口请选「JSON Body」。
+            </p>
+          </t-form-item>
           <t-form-item label="时间戳字段" name="apiResponseTimestampField">
             <t-input v-model="apiDraft.responseTimestampField" placeholder="例如：t" />
           </t-form-item>
@@ -518,6 +527,13 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
 .empty-state {
   padding: 24px;
   text-align: center;
+  color: var(--td-text-color-secondary);
+}
+
+.skill-param-binding-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--td-text-color-secondary);
 }
 </style>

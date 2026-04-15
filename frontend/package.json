@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "vendor:twemoji": "node scripts/vendor-twemoji-assets.mjs",
+    "prune:twemoji": "node scripts/prune-twemoji-assets.mjs"
   },
   "dependencies": {
     "@tdesign-vue-next/chat": "^0.5.0",

@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import { BUILTIN_SKILL_EMOJIS, EXTENDED_SKILL_EMOJI_POOL } from '../constants/twemojiCoveredEmoji';
 import { agentUrl, apiUrl } from '../services/config';
 import { useUser } from './useUser';
 
@@ -94,7 +95,7 @@ export const BUILT_IN_SKILLS = [
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
-    emoji: '🔌',
+    emoji: BUILTIN_SKILL_EMOJIS[0],
   },
   {
     id: -2,
@@ -103,7 +104,7 @@ export const BUILT_IN_SKILLS = [
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
-    emoji: '🧮',
+    emoji: BUILTIN_SKILL_EMOJIS[1],
   },
   {
     id: -3,
@@ -112,7 +113,7 @@ export const BUILT_IN_SKILLS = [
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
-    emoji: '🐧',
+    emoji: BUILTIN_SKILL_EMOJIS[2],
   },
   {
     id: -4,
@@ -121,11 +122,9 @@ export const BUILT_IN_SKILLS = [
     type: 'BUILTIN',
     configuration: '{}',
     enabled: true,
-    emoji: '✨',
+    emoji: BUILTIN_SKILL_EMOJIS[3],
   },
 ];
-
-const EXTENDED_SKILL_EMOJI_POOL = ['🧩', '⚙️', '📦', '🛠️', '🔧', '📡', '🎯', '💡', '🌐', '📎'] as const;
 
 /** 优先使用保存的 avatar；否则按 id+名称稳定映射，扩展 Skill 列表头像用 Twemoji 展示 */
 export function extendedSkillEmoji(skill: Pick<Skill, 'id' | 'name' | 'avatar'>): string {

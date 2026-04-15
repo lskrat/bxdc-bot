@@ -79,8 +79,7 @@ Spring Boot 支持以环境变量覆盖，例如：
    路径：`backend/skill-gateway/src/main/resources/schema.sql`  
    在 Hibernate 执行完毕后运行，用于 **兼容老版本 MySQL** 的增量变更（如 `ADD COLUMN`、补索引、在表不存在时 `CREATE TABLE llm_http_audit_logs` 等）。脚本内使用 `INFORMATION_SCHEMA` 与动态 SQL，避免在不支持 `IF NOT EXISTS` 的语法上硬失败。
 
-3. **启动前预迁移**  
-   `SkillTablePreMigration` 在 Hibernate 之前运行，在 `skills` 表已存在时清理历史 `EXTENSION` 类型行（与 MySQL 元数据表名大小写兼容）。不影响空库首次启动。
+`skills` 等业务数据由 JPA 持久化；网关进程重启**不会**自动清空或删除库内 skill 行。
 
 ## 5. 逻辑表清单
 
