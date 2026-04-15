@@ -100,7 +100,7 @@ fishtank/
 
 ### 4.2 Skill Gateway（技能网关）
 
-**技术栈**：Spring Boot 3.2、Java 17、Spring Security、Spring Data JPA、H2、SSHJ、WebFlux、Lombok
+**技术栈**：Spring Boot 3.2、Java 17、Spring Security、Spring Data JPA、MySQL、SSHJ、WebFlux、Lombok
 
 **职责**：
 - **API 网关**：暴露 REST 接口供 Agent 调用
@@ -119,7 +119,7 @@ fishtank/
 - `ApiProxyService` - HTTP API 代理
 - `AuditAspect` - 审计切面
 
-**数据库**：H2（内存/文件）
+**数据库**：**MySQL**（运行时关系库；JPA `ddl-auto` + `schema.sql` 补充迁移）。配置与参考建表见 `docs/skill-gateway-mysql.md`。
 
 ---
 
@@ -204,7 +204,7 @@ Agent 使用 `createReactAgent` 的 `stateSchema` 扩展了默认 `MessagesAnnot
 | | Spring Security | 认证授权 |
 | | Spring Data JPA | ORM |
 | | SSHJ | SSH 客户端 |
-| | H2 | 数据库 |
+| | MySQL | 数据库 |
 | **Agent** | NestJS 10 | Web 框架 |
 | | LangGraph.js、LangChain.js | Agent 编排 |
 | | OpenAI | LLM |
