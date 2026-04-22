@@ -11,6 +11,7 @@ import {
   JavaLinuxScriptTool,
   JavaServerLookupTool,
   loadGatewayExtendedTools,
+  getAgentBuiltinSkillDispatch,
   type BindableAgentTool,
 } from "../tools/java-skills";
 import { ManageTasksTool } from "../tools/manage-tasks";
@@ -72,11 +73,14 @@ export class AgentFactory {
       !userId?.trim()
       || process.env.AGENT_EXPOSE_SSH_EXECUTOR === "1"
       || process.env.AGENT_EXPOSE_SSH_EXECUTOR === "true";
+    const builtinDispatch = getAgentBuiltinSkillDispatch();
     const baseTools: BindableAgentTool[] = [
-      ...(exposeSshExecutor ? [new JavaSshTool(gatewayUrl, apiToken, userId)] : []),
-      new JavaApiTool(gatewayUrl, apiToken),
+      ...(exposeSshExecutor
+        ? [new JavaSshTool(gatewayUrl, apiToken, userId, { dispatch: builtinDispatch })]
+        : []),
+      new JavaApiTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
       new JavaSkillGeneratorTool(gatewayUrl, apiToken, userId),
-      new JavaComputeTool(gatewayUrl, apiToken),
+      new JavaComputeTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
       new JavaLinuxScriptTool(gatewayUrl, apiToken),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),
     ];

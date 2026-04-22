@@ -17,6 +17,14 @@ import { pinyin } from "pinyin-pro";
 const ajv = new Ajv({ allErrors: true, useDefaults: true });
 addFormats(ajv);
 
+/** Built-in 工具调用路径：`legacy` 直连 `/api/skills/*`；`gateway` 经 `/api/system-skills/execute`（见 OpenSpec unified-skill-db-agent-thin）。扩展 Skill 不受此开关影响。 */
+export function getAgentBuiltinSkillDispatch(): "legacy" | "gateway" {
+  const v = (process.env.AGENT_BUILTIN_SKILL_DISPATCH ?? "legacy").trim().toLowerCase();
+  return v === "gateway" ? "gateway" : "legacy";
+}
+
+export type BuiltinSkillDispatch = "legacy" | "gateway";
+
 /* ====================== Zod Schemas (must be before any class that uses them) ====================== */
 
 const COMPUTE_OPERATIONS = [
@@ -31,7 +39,8 @@ const COMPUTE_OPERATIONS = [
   "date_diff_days",
 ] as const;
 
-const computeToolInputSchema = z.object({
+/** Exported for gateway-dispatch builtin tools (same shapes as legacy Java*Tool). */
+export const computeToolInputSchema = z.object({
   operation: z
     .enum(COMPUTE_OPERATIONS)
     .describe(
@@ -63,7 +72,7 @@ const linuxScriptToolInputSchema = z.object({
     .describe("Shell command to execute on the server"),
 });
 
-const apiCallerToolInputSchema = z.object({
+export const apiCallerToolInputSchema = z.object({
   url: z.string().url().describe("Full target URL"),
   method: z
     .enum(["GET", "POST", "PUT", "DELETE", "PATCH"])
@@ -79,7 +88,7 @@ const apiCallerToolInputSchema = z.object({
     .describe("Request body (object, string, or null)"),
 });
 
-const sshExecutorToolInputSchema = z.object({
+export const sshExecutorToolInputSchema = z.object({
   host: z.string().min(1).describe("SSH host (IP or hostname)"),
   username: z.string().min(1).describe("SSH username"),
   command: z.string().min(1).describe("Shell command to execute"),
@@ -1960,7 +1969,14 @@ export class JavaSkillGeneratorTool extends DynamicStructuredTool<typeof skillGe
  * </p>
  */
 export class JavaSshTool extends DynamicStructuredTool<typeof sshExecutorToolInputSchema> {
-  constructor(gatewayUrl: string, apiToken: string, userId?: string) {
+  constructor(
+    gatewayUrl: string,
+    apiToken: string,
+    userId?: string,
+    options?: { dispatch?: BuiltinSkillDispatch },
+  ) {
+    const dispatch: BuiltinSkillDispatch = options?.dispatch ?? "legacy";
+    const baseUrl = gatewayUrl.replace(/\/+$/, "");
     super({
       name: "ssh_executor",
       description:
@@ -2020,11 +2036,12 @@ export class JavaSshTool extends DynamicStructuredTool<typeof sshExecutorToolInp
             }
           }
 
-          const response = await axios.post(
-            `${gatewayUrl}/api/skills/ssh`,
-            args,
-            { headers }
-          );
+          const url =
+            dispatch === "gateway"
+              ? `${baseUrl}/api/system-skills/execute`
+              : `${gatewayUrl}/api/skills/ssh`;
+          const body = dispatch === "gateway" ? { toolName: "ssh_executor", arguments: args } : args;
+          const response = await axios.post(url, body, { headers });
           return response.data;
         } catch (error) {
           if (isGraphInterrupt(error)) throw error;
@@ -2043,7 +2060,9 @@ export class JavaSshTool extends DynamicStructuredTool<typeof sshExecutorToolInp
  * </p>
  */
 export class JavaComputeTool extends DynamicStructuredTool<typeof computeToolInputSchema> {
-  constructor(gatewayUrl: string, apiToken: string) {
+  constructor(gatewayUrl: string, apiToken: string, options?: { dispatch?: BuiltinSkillDispatch }) {
+    const dispatch: BuiltinSkillDispatch = options?.dispatch ?? "legacy";
+    const baseUrl = gatewayUrl.replace(/\/+$/, "");
     super({
       name: "compute",
       description:
@@ -2052,16 +2071,19 @@ export class JavaComputeTool extends DynamicStructuredTool<typeof computeToolInp
       schema: computeToolInputSchema,
       func: async (args) => {
         try {
-          const response = await axios.post(
-            `${gatewayUrl}/api/skills/compute`,
-            { operation: args.operation, operands: args.operands },
-            {
-              headers: {
-                "X-Agent-Token": apiToken,
-                "Content-Type": "application/json",
-              },
-            },
-          );
+          const headers = {
+            "X-Agent-Token": apiToken,
+            "Content-Type": "application/json",
+          };
+          const payload =
+            dispatch === "gateway"
+              ? { toolName: "compute", arguments: { operation: args.operation, operands: args.operands } }
+              : { operation: args.operation, operands: args.operands };
+          const url =
+            dispatch === "gateway"
+              ? `${baseUrl}/api/system-skills/execute`
+              : `${gatewayUrl}/api/skills/compute`;
+          const response = await axios.post(url, payload, { headers });
           return JSON.stringify(response.data);
         } catch (error) {
           return `Error executing compute: ${formatToolError(error)}`;
@@ -2154,27 +2176,31 @@ export class JavaServerLookupTool extends DynamicStructuredTool<typeof serverLoo
  * 模型不再需要把所有参数塞进一个字符串。
  * </p>
  */
+const JAVA_API_TOOL_DESCRIPTION =
+  "Calls an external API via the Java gateway. " +
+  "Provide url, method, headers, and body as separate fields (do NOT wrap everything in a single JSON string under 'input'). " +
+  "If an extension skill covers the same HTTP capability, use that extension tool instead of this built-in.";
+
 export class JavaApiTool extends DynamicStructuredTool<typeof apiCallerToolInputSchema> {
-  constructor(gatewayUrl: string, apiToken: string) {
+  constructor(gatewayUrl: string, apiToken: string, options?: { dispatch?: BuiltinSkillDispatch }) {
+    const dispatch: BuiltinSkillDispatch = options?.dispatch ?? "legacy";
+    const baseUrl = gatewayUrl.replace(/\/+$/, "");
     super({
       name: "api_caller",
-      description:
-        "Calls an external API via the Java gateway. " +
-        "Provide url, method, headers, and body as separate fields (do NOT wrap everything in a single JSON string under 'input'). " +
-        "If an extension skill covers the same HTTP capability, use that extension tool instead of this built-in.",
+      description: JAVA_API_TOOL_DESCRIPTION,
       schema: apiCallerToolInputSchema,
       func: async (args) => {
         try {
-          const response = await axios.post(
-            `${gatewayUrl}/api/skills/api`,
-            args,
-            {
-              headers: {
-                "X-Agent-Token": apiToken,
-                "Content-Type": "application/json",
-              },
-            }
-          );
+          const headers = {
+            "X-Agent-Token": apiToken,
+            "Content-Type": "application/json",
+          };
+          const url =
+            dispatch === "gateway"
+              ? `${baseUrl}/api/system-skills/execute`
+              : `${gatewayUrl}/api/skills/api`;
+          const body = dispatch === "gateway" ? { toolName: "api_caller", arguments: args } : args;
+          const response = await axios.post(url, body, { headers });
           return JSON.stringify(response.data);
         } catch (error) {
           return `Error calling API: ${formatToolError(error)}`;

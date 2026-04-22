@@ -1,22 +1,14 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.Skill;
-import com.lobsterai.skillgateway.service.ApiProxyService;
+import com.lobsterai.skillgateway.service.BuiltinToolExecutionService;
 import com.lobsterai.skillgateway.service.LinuxScriptExecutionService;
-import com.lobsterai.skillgateway.service.SSHExecutorService;
-import com.lobsterai.skillgateway.service.SecurityFilterService;
 import com.lobsterai.skillgateway.service.ServerLedgerService;
 import com.lobsterai.skillgateway.service.SkillService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
-import java.math.BigInteger;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
 import java.util.NoSuchElementException;
 import java.util.List;
 import java.util.Map;
@@ -33,27 +25,21 @@ import java.util.Map;
 @RequestMapping("/api/skills")
 public class SkillController {
 
-    private final SSHExecutorService sshExecutorService;
-    private final ApiProxyService apiProxyService;
-    private final SecurityFilterService securityFilterService;
     private final SkillService skillService;
     private final LinuxScriptExecutionService linuxScriptExecutionService;
     private final ServerLedgerService serverLedgerService;
+    private final BuiltinToolExecutionService builtinToolExecutionService;
 
     public SkillController(
-            SSHExecutorService sshExecutorService,
-            ApiProxyService apiProxyService,
-            SecurityFilterService securityFilterService,
             SkillService skillService,
             LinuxScriptExecutionService linuxScriptExecutionService,
-            ServerLedgerService serverLedgerService
+            ServerLedgerService serverLedgerService,
+            BuiltinToolExecutionService builtinToolExecutionService
     ) {
-        this.sshExecutorService = sshExecutorService;
-        this.apiProxyService = apiProxyService;
-        this.securityFilterService = securityFilterService;
         this.skillService = skillService;
         this.linuxScriptExecutionService = linuxScriptExecutionService;
         this.serverLedgerService = serverLedgerService;
+        this.builtinToolExecutionService = builtinToolExecutionService;
     }
 
     // --- Skill Management (CRUD) ---
@@ -148,46 +134,7 @@ public class SkillController {
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestBody SshRequest request
     ) {
-        if (!securityFilterService.isCommandSafe(request.getCommand())) {
-            return ResponseEntity.badRequest().body("Command blocked by security policy");
-        }
-
-        try {
-            if (userId != null && !userId.isBlank()) {
-                // Ledger mode: Resolve credentials from server ledger
-                return serverLedgerService.getServerLedgerByIp(userId, request.getHost())
-                        .map(ledger -> {
-                            try {
-                                String output = sshExecutorService.executeCommandWithPassword(
-                                        ledger.getIp(),
-                                        request.getPort(),
-                                        ledger.getUsername(),
-                                        ledger.getPassword(),
-                                        request.getCommand()
-                                );
-                                return ResponseEntity.ok(output);
-                            } catch (IOException e) {
-                                return ResponseEntity.internalServerError().body("SSH execution failed: " + e.getMessage());
-                            }
-                        })
-                        .orElseGet(() -> ResponseEntity.badRequest().body("Server not found in user ledger: " + request.getHost()));
-            } else {
-                // Legacy mode: Use provided credentials
-                if (request.getUsername() == null || request.getPrivateKey() == null) {
-                    return ResponseEntity.badRequest().body("Missing username/privateKey for legacy SSH execution");
-                }
-                String output = sshExecutorService.executeCommand(
-                        request.getHost(),
-                        request.getPort(),
-                        request.getUsername(),
-                        request.getPrivateKey(),
-                        request.getCommand()
-                );
-                return ResponseEntity.ok(output);
-            }
-        } catch (IOException e) {
-            return ResponseEntity.internalServerError().body("SSH execution failed: " + e.getMessage());
-        }
+        return builtinToolExecutionService.executeSsh(request, userId);
     }
 
     /**
@@ -199,7 +146,7 @@ public class SkillController {
     @PostMapping("/api")
     public ResponseEntity<Object> callApi(@RequestBody ApiRequest request) {
         try {
-            Object response = apiProxyService.callApi(request.getUrl(), request.getMethod(), request.getHeaders(), request.getBody());
+            Object response = builtinToolExecutionService.callExternalApi(request);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body("API call failed: " + e.getMessage());
@@ -235,138 +182,7 @@ public class SkillController {
      */
     @PostMapping("/compute")
     public ResponseEntity<Map<String, Object>> compute(@RequestBody ComputeRequest request) {
-        try {
-            Object result = executeCompute(request.getOperation(), request.getOperands());
-            return ResponseEntity.ok(Map.of("result", result));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.ok(Map.of("error", e.getMessage()));
-        }
-    }
-
-    private Object executeCompute(String operation, List<Object> operands) {
-        if (operation == null || operation.isBlank()) {
-            throw new IllegalArgumentException("operation is required");
-        }
-        if (operands == null) {
-            throw new IllegalArgumentException("operands is required");
-        }
-
-        return switch (operation) {
-            case "add" -> {
-                requireOperands(operands, 2);
-                double a = toDouble(operands.get(0)), b = toDouble(operands.get(1));
-                yield a + b;
-            }
-            case "subtract" -> {
-                requireOperands(operands, 2);
-                double a = toDouble(operands.get(0)), b = toDouble(operands.get(1));
-                yield a - b;
-            }
-            case "multiply" -> {
-                requireOperands(operands, 2);
-                double a = toDouble(operands.get(0)), b = toDouble(operands.get(1));
-                yield a * b;
-            }
-            case "divide" -> {
-                requireOperands(operands, 2);
-                double a = toDouble(operands.get(0)), b = toDouble(operands.get(1));
-                if (b == 0) throw new IllegalArgumentException("division by zero");
-                yield a / b;
-            }
-            case "factorial" -> {
-                requireOperands(operands, 1);
-                int n = toInt(operands.get(0));
-                if (n < 0) throw new IllegalArgumentException("factorial requires non-negative integer");
-                if (n > 170) throw new IllegalArgumentException("factorial overflow: n must be <= 170");
-                yield factorial(n).toString();
-            }
-            case "square" -> {
-                requireOperands(operands, 1);
-                double x = toDouble(operands.get(0));
-                yield x * x;
-            }
-            case "sqrt" -> {
-                requireOperands(operands, 1);
-                double x = toDouble(operands.get(0));
-                if (x < 0) throw new IllegalArgumentException("sqrt requires non-negative number");
-                yield Math.sqrt(x);
-            }
-            case "timestamp_to_date" -> {
-                requireOperands(operands, 1);
-                long ts = toLong(operands.get(0));
-                // 秒级时间戳（< 10^12）自动转为毫秒，兼容常见 Unix 秒级时间戳
-                if (ts > 0 && ts < 10_000_000_000_000L) {
-                    ts = ts * 1000;
-                }
-                LocalDate date = Instant.ofEpochMilli(ts).atZone(ZoneId.systemDefault()).toLocalDate();
-                yield date.format(DateTimeFormatter.ISO_LOCAL_DATE);
-            }
-            case "date_diff_days" -> {
-                requireOperands(operands, 2);
-                LocalDate start = toLocalDate(operands.get(0));
-                LocalDate end = toLocalDate(operands.get(1));
-                yield ChronoUnit.DAYS.between(start, end);
-            }
-            default -> throw new IllegalArgumentException("unknown operation: " + operation);
-        };
-    }
-
-    private static void requireOperands(List<?> operands, int expected) {
-        if (operands.size() != expected) {
-            throw new IllegalArgumentException("expected " + expected + " operand(s), got " + operands.size());
-        }
-    }
-
-    private static double toDouble(Object n) {
-        if (n instanceof Number number) {
-            return number.doubleValue();
-        }
-        if (n instanceof String value && !value.isBlank()) {
-            try {
-                return Double.parseDouble(value);
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("invalid numeric operand: " + value);
-            }
-        }
-        throw new IllegalArgumentException("numeric operand is required");
-    }
-
-    private static int toInt(Object n) {
-        return (int) toLong(n);
-    }
-
-    private static long toLong(Object n) {
-        if (n instanceof Number number) {
-            return number.longValue();
-        }
-        if (n instanceof String value && !value.isBlank()) {
-            try {
-                return Long.parseLong(value);
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("invalid numeric operand: " + value);
-            }
-        }
-        throw new IllegalArgumentException("numeric operand is required");
-    }
-
-    private static LocalDate toLocalDate(Object value) {
-        if (!(value instanceof String text) || text.isBlank()) {
-            throw new IllegalArgumentException("date_diff_days requires YYYY-MM-DD date strings");
-        }
-        try {
-            return LocalDate.parse(text.trim(), DateTimeFormatter.ISO_LOCAL_DATE);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("invalid date operand: " + text);
-        }
-    }
-
-    private static BigInteger factorial(int n) {
-        if (n <= 1) return BigInteger.ONE;
-        BigInteger r = BigInteger.ONE;
-        for (int i = 2; i <= n; i++) {
-            r = r.multiply(BigInteger.valueOf(i));
-        }
-        return r;
+        return ResponseEntity.ok(builtinToolExecutionService.compute(request));
     }
 
     /**

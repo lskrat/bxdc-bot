@@ -115,8 +115,12 @@ public class UserService {
     }
 
     public Object proxyAvatarGenerate(Map<String, Object> payload) {
-        return apiProxyService.callApi(agentCoreUrl + "/features/avatar/generate", "POST",
-                Map.of("Content-Type", "application/json"), payload);
+        return apiProxyService.callApi(
+                agentCoreUrl + "/features/avatar/generate",
+                "POST",
+                Map.of("Content-Type", "application/json"),
+                payload
+        );
     }
 
     private void validateRegistrationGate(String systemAdminPassword) {
@@ -171,7 +175,12 @@ public class UserService {
             body.put("text", "我的昵称是" + nickname);
             body.put("role", "user"); // Attribute to user so it feels like user said it
             
-            apiProxyService.callApi(agentCoreUrl + "/memory/add", "POST", null, body);
+            apiProxyService.callApi(
+                    agentCoreUrl + "/memory/add",
+                    "POST",
+                    Map.of("Content-Type", "application/json"),
+                    body
+            );
         } catch (Exception e) {
             System.err.println("[UserService] Failed to inject initial memory: " + e.getMessage());
         }

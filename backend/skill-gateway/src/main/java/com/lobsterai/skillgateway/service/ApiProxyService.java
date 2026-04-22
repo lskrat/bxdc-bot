@@ -1,6 +1,9 @@
 package com.lobsterai.skillgateway.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lobsterai.skillgateway.audit.HttpClientAuditContext;
+import com.lobsterai.skillgateway.audit.HttpClientAuditMode;
+import com.lobsterai.skillgateway.http.OutboundUrlNormalizer;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -12,50 +15,55 @@ import org.springframework.web.client.RestTemplate;
 import java.util.Map;
 
 /**
- * API 代理服务。
- * <p>
- * 封装 RestTemplate，提供通用的 HTTP 请求转发能力。
- * </p>
+ * API 代理服务：封装 {@link RestTemplate}，供 Skill 对外 HTTP 与内部 HTTP 调用共用。
  */
 @Service
 public class ApiProxyService {
 
-    private final RestTemplate restTemplate;
+    private final RestTemplate gatewayRestTemplate;
     private final ObjectMapper objectMapper;
 
-    public ApiProxyService() {
-        this.restTemplate = new RestTemplate();
-        this.objectMapper = new ObjectMapper();
+    public ApiProxyService(RestTemplate gatewayRestTemplate, ObjectMapper objectMapper) {
+        this.gatewayRestTemplate = gatewayRestTemplate;
+        this.objectMapper = objectMapper;
     }
 
-    /**
-     * 调用外部 API。
-     *
-     * @param url     目标 URL
-     * @param method  HTTP 方法 (GET, POST, etc.)
-     * @param headers 请求头
-     * @param body    请求体
-     * @return 响应体
-     */
     public Object callApi(String url, String method, Map<String, String> headers, Object body) {
-        HttpHeaders httpHeaders = new HttpHeaders();
-        if (headers != null) {
-            headers.forEach(httpHeaders::add);
+        return callApi(url, method, headers, body, HttpClientAuditMode.NONE);
+    }
+
+    public Object callApi(
+            String url,
+            String method,
+            Map<String, String> headers,
+            Object body,
+            HttpClientAuditMode mode
+    ) {
+            HttpClientAuditContext.set(mode);
+        try {
+            String outboundUrl = OutboundUrlNormalizer.normalizeForOutboundHttp(url);
+            HttpHeaders httpHeaders = new HttpHeaders();
+            if (headers != null) {
+                headers.forEach(httpHeaders::add);
+            }
+            HttpEntity<Object> entity = new HttpEntity<>(body, httpHeaders);
+            ResponseEntity<String> response = gatewayRestTemplate.exchange(
+                    outboundUrl,
+                    HttpMethod.valueOf(method.toUpperCase()),
+                    entity,
+                    String.class
+            );
+            return parseResponseBody(response);
+        } finally {
+            HttpClientAuditContext.clear();
         }
+    }
 
-        HttpEntity<Object> entity = new HttpEntity<>(body, httpHeaders);
-        ResponseEntity<String> response = restTemplate.exchange(
-                url,
-                HttpMethod.valueOf(method.toUpperCase()),
-                entity,
-                String.class
-        );
-
+    private Object parseResponseBody(ResponseEntity<String> response) {
         String responseBody = response.getBody();
         if (responseBody == null) {
             return null;
         }
-
         MediaType contentType = response.getHeaders().getContentType();
         if (contentType != null && (
                 MediaType.APPLICATION_JSON.includes(contentType)
@@ -64,10 +72,8 @@ public class ApiProxyService {
             try {
                 return objectMapper.readValue(responseBody, Object.class);
             } catch (Exception ignored) {
-                // Fall back to the raw payload when the body is JSON-like but not strict JSON.
             }
         }
-
         return responseBody;
     }
 }

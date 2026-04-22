@@ -1,5 +1,13 @@
 # Agent 任务执行中的 Skill 逻辑与数据流
 
+## 系统内置 Built-in 与扩展表分离（概要）
+
+- **扩展 Skill** 仍存于 **`skills` 表**，经 **`GET /api/skills`** 加载并在 agent 侧注册为 `DynamicStructuredTool`（`EXTENSION` 等类型）。
+- **平台内置** `api_caller`、`compute`、`ssh_executor` 的定义在 Gateway **`system_skills` 表**（与用户扩展 **分表**），发现接口：**`GET /api/system-skills/agent`**；统一执行：**`POST /api/system-skills/execute`**（body：`toolName` + `arguments`），内部复用与 `/api/skills/api`、`/compute`、`/ssh` 相同的 Java 逻辑（见 `BuiltinToolExecutionService`）。
+- **agent-core** 环境变量 **`AGENT_BUILTIN_SKILL_DISPATCH`**：`legacy`（默认）直连旧路径；`gateway` 对上述三内置改为只调 `/api/system-skills/execute`。**`skill_generator`、linux_script、server_lookup 等本阶段仍走原逻辑**，不受该开关约束（与 OpenSpec `unified-skill-db-agent-thin` 一致）。
+
+---
+
 本文说明 **agent-core** 在单次对话任务中如何装配工具、如何从 Skill Gateway 加载 **EXTENSION** skill，以及内置 **`skill_generator`**、扩展 **API / SSH / template / OPENCLAW** 等路径上的数据如何流动。叙述以当前实现为准，主要代码位于：
 
 | 模块 | 路径 |

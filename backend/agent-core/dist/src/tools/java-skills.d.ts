@@ -1,6 +1,8 @@
 import { DynamicTool, Tool, DynamicStructuredTool, StructuredTool } from "@langchain/core/tools";
 import { z } from "zod";
-declare const computeToolInputSchema: z.ZodObject<{
+export declare function getAgentBuiltinSkillDispatch(): "legacy" | "gateway";
+export type BuiltinSkillDispatch = "legacy" | "gateway";
+export declare const computeToolInputSchema: z.ZodObject<{
     operation: z.ZodEnum<["add", "subtract", "multiply", "divide", "factorial", "square", "sqrt", "timestamp_to_date", "date_diff_days"]>;
     operands: z.ZodArray<z.ZodUnion<[z.ZodNumber, z.ZodString]>, "many">;
 }, "strip", z.ZodTypeAny, {
@@ -27,23 +29,23 @@ declare const linuxScriptToolInputSchema: z.ZodObject<{
     command?: string;
     serverId?: string;
 }>;
-declare const apiCallerToolInputSchema: z.ZodObject<{
+export declare const apiCallerToolInputSchema: z.ZodObject<{
     url: z.ZodString;
     method: z.ZodDefault<z.ZodEnum<["GET", "POST", "PUT", "DELETE", "PATCH"]>>;
     headers: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodString>>;
     body: z.ZodOptional<z.ZodAny>;
 }, "strip", z.ZodTypeAny, {
+    url?: string;
     method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
     headers?: Record<string, string>;
     body?: any;
-    url?: string;
 }, {
+    url?: string;
     method?: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
     headers?: Record<string, string>;
     body?: any;
-    url?: string;
 }>;
-declare const sshExecutorToolInputSchema: z.ZodObject<{
+export declare const sshExecutorToolInputSchema: z.ZodObject<{
     host: z.ZodString;
     username: z.ZodString;
     command: z.ZodString;
@@ -51,16 +53,16 @@ declare const sshExecutorToolInputSchema: z.ZodObject<{
     password: z.ZodOptional<z.ZodString>;
     confirmed: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
-    command?: string;
     host?: string;
     username?: string;
+    command?: string;
     privateKey?: string;
     password?: string;
     confirmed?: boolean;
 }, {
-    command?: string;
     host?: string;
     username?: string;
+    command?: string;
     privateKey?: string;
     password?: string;
     confirmed?: boolean;
@@ -82,15 +84,15 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     requiresConfirmation: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
     allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
 }, "strip", z.ZodTypeAny, {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: any;
     targetType?: "api";
     rawDescription?: string;
     name?: string;
     description?: string;
-    method?: string;
     endpoint?: string;
-    headers?: Record<string, string>;
     query?: Record<string, string | number | boolean>;
-    body?: any;
     interfaceDescription?: string;
     parameterContract?: any;
     testInput?: Record<string, unknown>;
@@ -98,15 +100,15 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     requiresConfirmation?: boolean;
     allowOverwrite?: boolean;
 }, {
+    method?: string;
+    headers?: unknown;
+    body?: any;
     targetType?: "api";
     rawDescription?: string;
     name?: string;
     description?: string;
-    method?: string;
     endpoint?: string;
-    headers?: unknown;
     query?: unknown;
-    body?: any;
     interfaceDescription?: string;
     parameterContract?: unknown;
     testInput?: unknown;
@@ -121,19 +123,19 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     command: z.ZodOptional<z.ZodString>;
     allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
 }, "strip", z.ZodTypeAny, {
+    command?: string;
     targetType?: "ssh";
     rawDescription?: string;
     name?: string;
     description?: string;
     allowOverwrite?: boolean;
-    command?: string;
 }, {
+    command?: string;
     targetType?: "ssh";
     rawDescription?: string;
     name?: string;
     description?: string;
     allowOverwrite?: unknown;
-    command?: string;
 }>, z.ZodObject<{
     targetType: z.ZodLiteral<"openclaw">;
     rawDescription: z.ZodOptional<z.ZodString>;
@@ -204,10 +206,14 @@ export declare class JavaSkillGeneratorTool extends DynamicStructuredTool<typeof
     constructor(gatewayUrl: string, apiToken: string, userId?: string);
 }
 export declare class JavaSshTool extends DynamicStructuredTool<typeof sshExecutorToolInputSchema> {
-    constructor(gatewayUrl: string, apiToken: string, userId?: string);
+    constructor(gatewayUrl: string, apiToken: string, userId?: string, options?: {
+        dispatch?: BuiltinSkillDispatch;
+    });
 }
 export declare class JavaComputeTool extends DynamicStructuredTool<typeof computeToolInputSchema> {
-    constructor(gatewayUrl: string, apiToken: string);
+    constructor(gatewayUrl: string, apiToken: string, options?: {
+        dispatch?: BuiltinSkillDispatch;
+    });
 }
 export declare class JavaLinuxScriptTool extends DynamicStructuredTool<typeof linuxScriptToolInputSchema> {
     constructor(gatewayUrl: string, apiToken: string);
@@ -216,6 +222,8 @@ export declare class JavaServerLookupTool extends DynamicStructuredTool<typeof s
     constructor(gatewayUrl: string, apiToken: string, userId?: string);
 }
 export declare class JavaApiTool extends DynamicStructuredTool<typeof apiCallerToolInputSchema> {
-    constructor(gatewayUrl: string, apiToken: string);
+    constructor(gatewayUrl: string, apiToken: string, options?: {
+        dispatch?: BuiltinSkillDispatch;
+    });
 }
 export {};

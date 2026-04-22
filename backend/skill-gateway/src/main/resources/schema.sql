@@ -79,3 +79,43 @@ SET @sql = IF(@tbl = 0,
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
+
+-- gateway_outbound_audit_logs（Skill 对外 HTTP/SSH 统一审计，含 agent-core 入站原始报文）
+SET @tbl_gw = (
+  SELECT COUNT(*) FROM information_schema.tables
+  WHERE table_schema = @db AND table_name = 'gateway_outbound_audit_logs'
+);
+SET @sql = IF(@tbl_gw = 0,
+  'CREATE TABLE gateway_outbound_audit_logs (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    correlation_id VARCHAR(64) NOT NULL,
+    user_id VARCHAR(128) NULL,
+    recorded_at DATETIME(6) NOT NULL,
+    outbound_kind VARCHAR(16) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    error_message TEXT NULL,
+    destination TEXT NOT NULL,
+    http_method VARCHAR(16) NULL,
+    origin_incomplete BOOLEAN NOT NULL DEFAULT FALSE,
+    origin_headers_json LONGTEXT NULL,
+    origin_body LONGBLOB NULL,
+    origin_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    origin_sha256 CHAR(64) NULL,
+    outbound_headers_json LONGTEXT NULL,
+    outbound_body LONGBLOB NULL,
+    outbound_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    outbound_sha256 CHAR(64) NULL,
+    ssh_command TEXT NULL,
+    skill_context VARCHAR(256) NULL,
+    PRIMARY KEY (id),
+    KEY idx_gw_out_audit_corr (correlation_id),
+    KEY idx_gw_out_audit_user_time (user_id, recorded_at)
+  )',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- 已废弃表：若库中仍存在则删除（agent_core_invocation_audit_logs、user_skill_invocation_logs）
+DROP TABLE IF EXISTS user_skill_invocation_logs;
+DROP TABLE IF EXISTS agent_core_invocation_audit_logs;

@@ -53,7 +53,9 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/skills", "/api/skills/*").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/system-skills/**").permitAll()
                 .requestMatchers("/api/skills/**").authenticated()
+                .requestMatchers("/api/system-skills/**").authenticated()
                 .anyRequest().permitAll()
             )
             .addFilterBefore(new ApiTokenFilter(), UsernamePasswordAuthenticationFilter.class);
@@ -109,9 +111,12 @@ public class SecurityConfig {
             String uri = request.getRequestURI();
             String method = request.getMethod();
             boolean isSkillRoute = uri.startsWith("/api/skills");
+            boolean isSystemSkillRoute = uri.startsWith("/api/system-skills");
             boolean isReadOnlySkillRequest = "GET".equalsIgnoreCase(method);
             boolean internalAuditPost = uri.startsWith("/api/internal/llm-http-audit") && "POST".equalsIgnoreCase(method);
-            boolean needsToken = (isSkillRoute && !isReadOnlySkillRequest) || internalAuditPost;
+            boolean needsToken = (isSkillRoute && !isReadOnlySkillRequest)
+                    || (isSystemSkillRoute && !isReadOnlySkillRequest)
+                    || internalAuditPost;
             if (!needsToken) {
                 filterChain.doFilter(request, response);
                 return;
