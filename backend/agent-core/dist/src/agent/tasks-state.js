@@ -6,6 +6,7 @@ exports.buildTasksSummary = buildTasksSummary;
 exports.preModelHook = preModelHook;
 const langgraph_1 = require("@langchain/langgraph");
 const messages_1 = require("@langchain/core/messages");
+const prompts_1 = require("../prompts");
 exports.AgentAnnotation = langgraph_1.Annotation.Root({
     ...langgraph_1.MessagesAnnotation.spec,
     tasks_status: (0, langgraph_1.Annotation)({
@@ -52,18 +53,7 @@ function isAIMessageWithToolCalls(msg) {
         msg.tool_calls.length > 0);
 }
 function buildTasksSummary(tasks) {
-    const entries = Object.entries(tasks);
-    if (entries.length === 0)
-        return "";
-    const lines = entries.map(([id, t]) => `- [${t.status}] ${id}: ${t.label}`);
-    const completed = entries.filter(([, t]) => t.status === "completed").length;
-    const total = entries.length;
-    return [
-        `[Current Task Status] (${completed}/${total} completed)`,
-        ...lines,
-        "",
-        "Focus on pending/in_progress tasks. Do NOT repeat work for completed tasks unless the user explicitly asks.",
-    ].join("\n");
+    return prompts_1.Prompts.buildTasksSummary(tasks);
 }
 function preModelHook(state) {
     const freshStatus = rebuildTasksStatusFromMessages(state.messages ?? []);

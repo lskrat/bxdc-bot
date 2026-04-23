@@ -1,29 +1,84 @@
+/**
+ * Agent 状态管理模块
+ * 
+ * 模块职责：
+ * 1. 定义 Agent 状态的数据结构（State Annotation）
+ * 2. 实现任务状态的跟踪和管理（pending/in_progress/completed/cancelled）
+ * 3. 提供 preModelHook 在每次 LLM 调用前注入任务状态摘要
+ * 4. 支持从消息历史中重建任务状态
+ * 
+ * 核心概念：
+ * - AgentAnnotation: LangGraph 状态注解，定义状态结构和归约逻辑
+ * - TasksStatusMap: 任务状态映射表，记录每个任务的当前状态
+ * - preModelHook: 在 LLM 调用前执行的钩子函数，用于状态注入
+ * 
+ * 设计说明：
+ * - 确认流程（CONFIRMATION_REQUIRED）已从本层移除，改由控制器层处理
+ * - 通过 SSE 事件 + REST 端点实现技能确认（参见 agent.controller.ts）
+ * 
+ * @module TasksState
+ * @author Agent Core Team
+ * @since 1.0.0
+ */
+
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 import type { BaseMessage } from "@langchain/core/messages";
 import { SystemMessage } from "@langchain/core/messages";
+import { Prompts } from "../prompts";
 
-// NOTE: CONFIRMATION_REQUIRED detection helpers (toolMessageIsConfirmationRequired,
-// hasPendingConfirmationRequiredFromTool) have been removed. Confirmation flow is now
-// handled at the controller layer via SSE events + REST endpoint (see agent.controller.ts).
+// 注意：CONFIRMATION_REQUIRED 检测辅助函数已移除
+// 确认流程现在由控制器层通过 SSE 事件 + REST 端点处理
+// 详见 agent.controller.ts
 
-/* ── Task status types ── */
+/* ==================== 任务状态类型定义 ==================== */
 
+/**
+ * 任务状态枚举值
+ * 
+ * - pending: 任务待处理，尚未开始执行
+ * - in_progress: 任务正在执行中
+ * - completed: 任务已完成
+ * - cancelled: 任务已取消（用户拒绝或出错）
+ */
 export type TaskStatusValue =
   | "pending"
   | "in_progress"
   | "completed"
   | "cancelled";
 
+/**
+ * 单个任务的状态对象
+ * 
+ * @property label - 任务描述标签
+ * @property status - 当前状态
+ * @property updatedAt - 最后更新时间（ISO 8601 格式）
+ */
 export interface TaskState {
   label: string;
   status: TaskStatusValue;
   updatedAt: string;
 }
 
+/**
+ * 任务状态映射表
+ * 
+ * 键：任务唯一标识符（如 "check-disk", "restart-nginx"）
+ * 值：任务状态对象
+ */
 export type TasksStatusMap = Record<string, TaskState>;
 
-/* ── Extended agent state annotation ── */
+/* ==================== Agent 状态注解定义 ==================== */
 
+/**
+ * 扩展的 Agent 状态注解
+ * 
+ * 继承 MessagesAnnotation 的消息管理能力
+ * 添加 tasks_status 字段用于任务状态跟踪
+ * 
+ * 归约逻辑（reducer）：
+ * - 合并当前状态和更新状态，更新状态优先
+ * - 支持增量更新，无需传递完整状态
+ */
 export const AgentAnnotation = Annotation.Root({
   ...MessagesAnnotation.spec,
   tasks_status: Annotation<TasksStatusMap>({
@@ -35,15 +90,29 @@ export const AgentAnnotation = Annotation.Root({
   }),
 });
 
+/**
+ * Agent 状态类型
+ * 
+ * 从 AgentAnnotation 推导出的 TypeScript 类型
+ */
 export type AgentState = typeof AgentAnnotation.State;
 
-/* ── Helpers ── */
+/* ==================== 辅助函数 ==================== */
 
+/** manage_tasks 工具的名称常量 */
 const MANAGE_TASKS_TOOL_NAME = "manage_tasks";
 
 /**
- * Scan message history for manage_tasks tool calls and rebuild tasks_status
- * from those calls in chronological order (idempotent).
+ * 从消息历史中重建任务状态
+ * 
+ * 算法：
+ * 1. 遍历所有消息，筛选出包含工具调用的 AI 消息
+ * 2. 查找 manage_tasks 工具调用
+ * 3. 按时间顺序应用任务更新（幂等操作）
+ * 4. 返回最终的任务状态映射表
+ * 
+ * @param messages - 消息历史数组
+ * @returns 重建的任务状态映射表
  */
 export function rebuildTasksStatusFromMessages(
   messages: BaseMessage[],
@@ -74,6 +143,14 @@ export function rebuildTasksStatusFromMessages(
   return result;
 }
 
+/**
+ * 判断消息是否为包含工具调用的 AI 消息
+ * 
+ * 支持多种消息类型格式（考虑不同 LangChain 版本的兼容性）
+ * 
+ * @param msg - 消息对象
+ * @returns 是否为包含工具调用的 AI 消息
+ */
 function isAIMessageWithToolCalls(msg: BaseMessage): boolean {
   const type =
     (msg as any).getType?.() ??
@@ -88,49 +165,69 @@ function isAIMessageWithToolCalls(msg: BaseMessage): boolean {
 }
 
 /**
- * Build a short textual summary of the current tasks_status for prompt injection.
+ * 构建任务状态摘要文本
+ * 
+ * 委托给 Prompts 模块的对应实现，支持多语言
+ * 
+ * 格式示例（英文）：
+ * ```
+ * [Current Task Status] (1/2 completed)
+ * - [completed] check-disk: Check disk space
+ * - [in_progress] restart-nginx: Restart Nginx
+ * 
+ * Focus on pending/in_progress tasks...
+ * ```
+ * 
+ * 格式示例（中文）：
+ * ```
+ * [当前任务状态] (1/2 已完成)
+ * - [已完成] check-disk: 检查磁盘空间
+ * - [进行中] restart-nginx: 重启 Nginx
+ * 
+ * 专注于待处理/进行中的任务...
+ * ```
+ * 
+ * @param tasks - 任务状态映射表
+ * @returns 格式化的任务状态摘要（根据 AGENT_PROMPTS_LANGUAGE 环境变量选择语言）
  */
 export function buildTasksSummary(tasks: TasksStatusMap): string {
-  const entries = Object.entries(tasks);
-  if (entries.length === 0) return "";
-
-  const lines = entries.map(
-    ([id, t]) => `- [${t.status}] ${id}: ${t.label}`,
-  );
-
-  const completed = entries.filter(([, t]) => t.status === "completed").length;
-  const total = entries.length;
-
-  return [
-    `[Current Task Status] (${completed}/${total} completed)`,
-    ...lines,
-    "",
-    "Focus on pending/in_progress tasks. Do NOT repeat work for completed tasks unless the user explicitly asks.",
-  ].join("\n");
+  return Prompts.buildTasksSummary(tasks);
 }
 
 /**
- * preModelHook — runs before each LLM invocation.
- *
- * 1. Rebuilds tasks_status from message history (idempotent).
- * 2. Injects a task-status summary into llmInputMessages so the LLM is aware.
+ * preModelHook - LLM 调用前钩子函数
+ * 
+ * 执行流程：
+ * 1. 从消息历史中重建任务状态（幂等）
+ * 2. 合并当前状态和重建状态
+ * 3. 生成任务状态摘要
+ * 4. 将摘要作为系统消息注入到 LLM 输入消息列表顶部
+ * 
+ * 目的：让 LLM 在执行前了解当前任务进度，避免重复工作
+ * 
+ * @param state - 当前 Agent 状态，可能包含 llmInputMessages
+ * @returns 更新后的状态和 LLM 输入消息
  */
 export function preModelHook(
   state: AgentState & { llmInputMessages?: BaseMessage[] },
 ) {
+  // 从消息历史重建最新任务状态
   const freshStatus = rebuildTasksStatusFromMessages(state.messages ?? []);
 
+  // 合并状态（重建状态优先）
   const merged: TasksStatusMap = { ...state.tasks_status, ...freshStatus };
 
+  // 生成任务摘要
   const summary = buildTasksSummary(merged);
 
-  // llmInputMessages may be undefined on the first invocation before the
-  // internal message-preparation step populates it; fall back to state.messages.
+  // 获取基础消息列表
+  // llmInputMessages 可能在第一次调用时为 undefined，此时回退到 state.messages
   const base = Array.isArray(state.llmInputMessages)
     ? state.llmInputMessages
     : (state.messages ?? []);
   const llmInputMessages: BaseMessage[] = [...base];
 
+  // 如果有任务摘要，作为系统消息插入到最前面
   if (summary) {
     llmInputMessages.unshift(new SystemMessage(summary));
   }

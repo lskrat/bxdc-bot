@@ -1,3 +1,43 @@
+/**
+ * 长期记忆服务模块
+ * 
+ * 模块职责：
+ * 1. 与 mem0 服务通信，实现长期记忆的存储和检索
+ * 2. 在 Agent 对话过程中自动提取和存储用户画像信息
+ * 3. 支持基于语义的相似度搜索
+ * 4. 提供记忆的添加、搜索、处理轮次对话等能力
+ * 
+ * 服务架构：
+ * - 本服务作为 mem0 服务的客户端
+ * - mem0 提供向量存储和语义搜索能力
+ * - 通过 HTTP API 与 mem0 通信
+ * 
+ * 记忆生命周期：
+ * 1. Agent 对话完成后，调用 processTurn() 处理一轮对话
+ * 2. 提取用户指令和助手回复中的关键信息
+ * 3. 调用 mem0 API 存储记忆
+ * 4. 新对话开始时，调用 searchMemories() 检索相关记忆
+ * 5. 将检索到的记忆注入到提示词中
+ * 
+ * 记忆使用场景：
+ * - 用户画像：籍贯、家乡、喜好、昵称
+ * - 家庭信息：儿子名字、女儿名字、爱人名字
+ * - 历史上下文：之前讨论过的内容
+ * 
+ * 环境变量：
+ * - MEM0_URL: mem0 服务地址（默认：http://39.104.81.41:8001）
+ * - MEM0_ENABLED: 是否启用记忆功能（默认：true）
+ * 
+ * API 端点：
+ * - POST /msearch: 语义搜索记忆
+ * - POST /madd: 添加记忆
+ * - POST /mprocess: 处理对话轮次
+ * 
+ * @module MemoryService
+ * @author Agent Core Team
+ * @since 1.0.0
+ */
+
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import axios from 'axios';
 import { LoggerService } from '../utils/logger.service';

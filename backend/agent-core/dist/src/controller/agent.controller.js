@@ -25,6 +25,7 @@ const llm_merge_1 = require("../utils/llm-merge");
 const agent_run_raw_log_1 = require("../utils/agent-run-raw-log");
 const history_sanitize_1 = require("../utils/history-sanitize");
 const langgraph_1 = require("@langchain/langgraph");
+const prompts_1 = require("../prompts");
 function unwrapLangGraphStreamPayload(raw) {
     if (Array.isArray(raw) && raw.length >= 2 && typeof raw[0] === 'string') {
         return raw[1];
@@ -54,35 +55,6 @@ const pendingConfirmations = new Map();
 function confirmationKey(sessionId, toolCallId) {
     return `${sessionId}:${toolCallId}`;
 }
-const AGENT_SKILL_GENERATOR_POLICY = `[Skill generation policy]
-Before using the skill_generator tool to create a new extension skill on SkillGateway, you MUST satisfy at least one of:
-(1) You have verified that no existing capability can complete the task—this includes built-in tools, gateway extension tools already available, and filesystem skills the user can load via skill tools; OR
-(2) The user explicitly asks you to create, add, or register a new skill/extension.
-
-Do not reach for skill_generator as a default. Prefer existing tools and loaded skills first.
-
-`;
-const AGENT_TASK_TRACKING_POLICY = `[Task tracking policy]
-When the user's request involves multiple distinct sub-tasks (e.g. "check disk AND restart nginx AND verify logs"):
-1. Call manage_tasks to register each sub-task with status "pending" or "in_progress" BEFORE starting work.
-2. After completing a sub-task, call manage_tasks to mark it "completed".
-3. If a sub-task fails or is no longer needed, mark it "cancelled".
-4. Do NOT repeat work for tasks already marked completed unless the user explicitly asks.
-Use short, stable IDs (e.g. "check-disk", "restart-nginx") so the system can track progress across turns.
-
-`;
-const AGENT_CONFIRMATION_UI_POLICY = `[Confirmation policy]
-Extension skills marked as requiring confirmation and high-risk SSH commands are approved only through the in-app confirmation buttons in the chat UI. Do NOT tell the user to type "yes", "confirm", or to send JSON with "confirmed": true as the only way to proceed — the client sends approval via a separate channel after they click Confirm.
-
-`;
-const AGENT_EXTENDED_SKILL_ROUTING_POLICY = `[Extended skill routing]
-When SkillGateway extension tools are available in this run (names usually start with "extended_"), you MUST call the matching extension tool for requests that fall within that skill's described capability.
-Extension tools use structured parameters: pass fields as top-level tool arguments per the tool schema (not a single "input" JSON string).
-For remote shell tasks, prefer extension SSH skills; the built-in ssh_executor tool may be unavailable in authenticated sessions—use extended SSH skills and server_lookup for server aliases.
-Do NOT use built-in tools such as api_caller, ssh_executor, linux_script_executor, compute, or server_lookup to bypass such an extension skill unless: (1) the user explicitly asks for the low-level/built-in path; (2) no extension skill reasonably matches the request; or (3) the extension tool failed and a built-in fallback is clearly necessary (state briefly when you fall back).
-Do not rely on URLs, hosts, or command fragments remembered from earlier messages to skip the extension tool—invoke the extension tool with explicit parameters when it applies.
-
-`;
 function asArray(value) {
     if (!value)
         return [];
@@ -386,7 +358,7 @@ let AgentController = class AgentController {
                 const memoryContext = memories.length > 0
                     ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
                     : '';
-                const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${AGENT_EXTENDED_SKILL_ROUTING_POLICY}${AGENT_TASK_TRACKING_POLICY}${AGENT_CONFIRMATION_UI_POLICY}${memoryContext}User Instruction:\n${instruction}`;
+                const fullInstruction = `${skillContext}${prompts_1.Prompts.skillGeneratorPolicy}${prompts_1.Prompts.extendedSkillRoutingPolicy}${prompts_1.Prompts.taskTrackingPolicy}${prompts_1.Prompts.confirmationUIPolicy}${memoryContext}User Instruction:\n${instruction}`;
                 const allowedHistoryRoles = new Set(['user', 'assistant', 'system']);
                 const validHistory = sanitizedHistory
                     .map((m) => {

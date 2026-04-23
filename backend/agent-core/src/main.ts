@@ -1,6 +1,41 @@
+/**
+ * Agent Core 服务入口文件
+ * 
+ * 模块职责：
+ * 1. 初始化 NestJS 应用程序框架
+ * 2. 配置跨域支持（CORS）
+ * 3. 启动 HTTP 服务器监听指定端口和主机
+ * 
+ * 架构说明：
+ * - 使用 NestJS 作为底层框架，提供依赖注入、模块化等能力
+ * - 端口号通过环境变量 PORT 配置，默认为 3000
+ * - 主机地址通过环境变量 HOST 配置，默认为 0.0.0.0（监听所有接口）
+ * 
+ * 环境变量：
+ * - PORT: 服务监听端口（默认：3000）
+ * - HOST: 服务监听地址（默认：0.0.0.0）
+ * 
+ * @module Main
+ * @author Agent Core Team
+ * @since 1.0.0
+ */
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 
+/**
+ * 启动 NestJS 应用程序
+ * 
+ * 流程：
+ * 1. 使用 NestFactory 创建应用实例，加载 AppModule 根模块
+ * 2. 启用 CORS 跨域支持，允许前端应用访问
+ * 3. 从环境变量读取端口和主机配置
+ * 4. 启动 HTTP 服务器，开始监听请求
+ * 
+ * 错误处理：
+ * - 若端口被占用，Node.js 会抛出 EADDRINUSE 错误
+ * - 启动失败时会打印错误信息到 stderr
+ */
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableCors();

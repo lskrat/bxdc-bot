@@ -1,3 +1,47 @@
+/**
+ * Agent 控制器模块
+ * 
+ * 模块职责：
+ * 1. 暴露 HTTP RESTful API 端点供外部调用 Agent 服务
+ * 2. 实现 SSE（Server-Sent Events）流式响应，实时返回 Agent 执行过程
+ * 3. 处理技能确认流程（中断/恢复），支持用户在 UI 上确认敏感操作
+ * 4. 管理长期记忆（Memory）的检索和更新
+ * 5. 跟踪工具调用状态并发送 trace 事件到前端
+ * 
+ * 核心端点：
+ * - POST /agent/run: 启动 Agent 任务，返回 SSE 流
+ * - POST /agent/confirm: 确认技能执行，恢复中断的 Agent
+ * 
+ * 架构设计：
+ * - 使用 NestJS 装饰器定义路由和请求处理
+ * - 使用 RxJS Subject 实现 SSE 流式响应
+ * - 使用 LangGraph 的 interrupt/Command 机制实现确认流程
+ * - 内存级别的确认状态管理（pendingConfirmations Map）
+ * 
+ * 确认流程说明：
+ * 1. Agent 执行到需要确认的技能时触发 interrupt
+ * 2. 控制器提取中断信息，通过 SSE 发送 confirmation_request 事件
+ * 3. 前端展示确认对话框，用户点击确认/取消
+ * 4. 前端调用 POST /agent/confirm 提交确认结果
+ * 5. 控制器恢复（resolve）对应的 Promise，Agent 继续执行
+ * 6. 用户取消时，发送 Command({ resume: { confirmed: false } })，Agent 优雅终止
+ * 
+ * 环境变量：
+ * - JAVA_GATEWAY_URL: Java Skill Gateway 地址（默认：http://localhost:18080）
+ * - JAVA_GATEWAY_TOKEN: Gateway 认证令牌
+ * - LLM 相关配置通过 context.llm 传递
+ * 
+ * 策略提示词（Policy Prompts）：
+ * - AGENT_SKILL_GENERATOR_POLICY: 技能生成策略
+ * - AGENT_TASK_TRACKING_POLICY: 任务跟踪策略
+ * - AGENT_CONFIRMATION_UI_POLICY: 确认 UI 策略
+ * - AGENT_EXTENDED_SKILL_ROUTING_POLICY: 扩展技能路由策略
+ * 
+ * @module AgentController
+ * @author Agent Core Team
+ * @since 1.0.0
+ */
+
 import { Controller, Post, Body, Sse, MessageEvent, HttpCode, NotFoundException } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 import { AgentFactory } from '../agent/agent';
@@ -17,6 +61,7 @@ import { pickMergedLlm } from '../utils/llm-merge';
 import { logAgentRunRawIfEnabled } from '../utils/agent-run-raw-log';
 import { sanitizeHistoryForAgent } from '../utils/history-sanitize';
 import { Command, INTERRUPT } from '@langchain/langgraph';
+import { Prompts } from '../prompts';
 
 /** Payload from {@link interrupt} in extended skills / SSH tools (see java-skills). */
 type SkillInterruptPayload = {
@@ -78,40 +123,6 @@ const pendingConfirmations = new Map<string, PendingConfirmation>();
 function confirmationKey(sessionId: string, toolCallId: string): string {
   return `${sessionId}:${toolCallId}`;
 }
-
-/** Injected into each run as part of the user message (main agent has no separate SystemMessage). */
-const AGENT_SKILL_GENERATOR_POLICY = `[Skill generation policy]
-Before using the skill_generator tool to create a new extension skill on SkillGateway, you MUST satisfy at least one of:
-(1) You have verified that no existing capability can complete the task—this includes built-in tools, gateway extension tools already available, and filesystem skills the user can load via skill tools; OR
-(2) The user explicitly asks you to create, add, or register a new skill/extension.
-
-Do not reach for skill_generator as a default. Prefer existing tools and loaded skills first.
-
-`;
-
-const AGENT_TASK_TRACKING_POLICY = `[Task tracking policy]
-When the user's request involves multiple distinct sub-tasks (e.g. "check disk AND restart nginx AND verify logs"):
-1. Call manage_tasks to register each sub-task with status "pending" or "in_progress" BEFORE starting work.
-2. After completing a sub-task, call manage_tasks to mark it "completed".
-3. If a sub-task fails or is no longer needed, mark it "cancelled".
-4. Do NOT repeat work for tasks already marked completed unless the user explicitly asks.
-Use short, stable IDs (e.g. "check-disk", "restart-nginx") so the system can track progress across turns.
-
-`;
-
-const AGENT_CONFIRMATION_UI_POLICY = `[Confirmation policy]
-Extension skills marked as requiring confirmation and high-risk SSH commands are approved only through the in-app confirmation buttons in the chat UI. Do NOT tell the user to type "yes", "confirm", or to send JSON with "confirmed": true as the only way to proceed — the client sends approval via a separate channel after they click Confirm.
-
-`;
-
-const AGENT_EXTENDED_SKILL_ROUTING_POLICY = `[Extended skill routing]
-When SkillGateway extension tools are available in this run (names usually start with "extended_"), you MUST call the matching extension tool for requests that fall within that skill's described capability.
-Extension tools use structured parameters: pass fields as top-level tool arguments per the tool schema (not a single "input" JSON string).
-For remote shell tasks, prefer extension SSH skills; the built-in ssh_executor tool may be unavailable in authenticated sessions—use extended SSH skills and server_lookup for server aliases.
-Do NOT use built-in tools such as api_caller, ssh_executor, linux_script_executor, compute, or server_lookup to bypass such an extension skill unless: (1) the user explicitly asks for the low-level/built-in path; (2) no extension skill reasonably matches the request; or (3) the extension tool failed and a built-in fallback is clearly necessary (state briefly when you fall back).
-Do not rely on URLs, hosts, or command fragments remembered from earlier messages to skip the extension tool—invoke the extension tool with explicit parameters when it applies.
-
-`;
 
 type ToolStatus = 'running' | 'completed' | 'failed';
 
@@ -519,7 +530,7 @@ export class AgentController {
           ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n` 
           : '';
         
-        const fullInstruction = `${skillContext}${AGENT_SKILL_GENERATOR_POLICY}${AGENT_EXTENDED_SKILL_ROUTING_POLICY}${AGENT_TASK_TRACKING_POLICY}${AGENT_CONFIRMATION_UI_POLICY}${memoryContext}User Instruction:\n${instruction}`;
+        const fullInstruction = `${skillContext}${Prompts.skillGeneratorPolicy}${Prompts.extendedSkillRoutingPolicy}${Prompts.taskTrackingPolicy}${Prompts.confirmationUIPolicy}${memoryContext}User Instruction:\n${instruction}`;
 
         // Combine history (short-term memory) with current instruction
         // OpenAI-style roles only; drop unknown roles. Assistant turns stay `assistant`.

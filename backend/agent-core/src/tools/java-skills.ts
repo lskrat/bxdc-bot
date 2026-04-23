@@ -1,3 +1,39 @@
+/**
+ * Java Skill Gateway 工具集合
+ * 
+ * 模块职责：
+ * 1. 提供与 Java Skill Gateway 通信的各类工具实现
+ * 2. 内置工具：SSH、API调用、数学计算、Linux脚本、服务器查询
+ * 3. 支持动态加载 Gateway 扩展技能
+ * 4. 实现技能确认机制（高风险操作需用户确认）
+ * 5. 提供技能生成工具（通过自然语言创建新技能）
+ * 
+ * 内置工具列表：
+ * - JavaSshTool: SSH 远程命令执行
+ * - JavaApiTool: HTTP API 调用
+ * - JavaComputeTool: 数学计算（加减乘除、阶乘、日期计算等）
+ * - JavaLinuxScriptTool: Linux 服务器脚本执行
+ * - JavaServerLookupTool: 服务器信息查询
+ * - JavaSkillGeneratorTool: 自然语言生成技能
+ * 
+ * 路由模式：
+ * - legacy: 直接调用 /api/skills/* 端点
+ * - gateway: 通过 /api/system-skills/execute 统一入口
+ * 
+ * 确认机制：
+ * - 扩展技能和危险 SSH 命令需要用户确认
+ * - 使用 LangGraph interrupt/Command 实现中断/恢复
+ * - 确认超时时间为 5 分钟
+ * 
+ * 环境变量：
+ * - AGENT_BUILTIN_SKILL_DISPATCH: 内置技能路由模式（legacy/gateway）
+ * - AGENT_EXPOSE_SSH_EXECUTOR: 是否暴露 SSH 执行器
+ * 
+ * @module JavaSkills
+ * @author Agent Core Team
+ * @since 1.0.0
+ */
+
 import { AIMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { interrupt, isGraphInterrupt } from "@langchain/langgraph";
@@ -14,6 +50,13 @@ import Ajv from "ajv";
 import addFormats from "ajv-formats";
 import { pinyin } from "pinyin-pro";
 
+/**
+ * AJV 实例，用于 JSON Schema 验证
+ * 
+ * 配置：
+ * - allErrors: 返回所有验证错误
+ * - useDefaults: 自动填充默认值
+ */
 const ajv = new Ajv({ allErrors: true, useDefaults: true });
 addFormats(ajv);
 
