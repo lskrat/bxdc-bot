@@ -20,8 +20,23 @@
  * @since 1.0.0
  */
 
+import { config } from 'dotenv';
 import { NestFactory } from '@nestjs/core';
+import { resolve } from 'path';
 import { AppModule } from './app.module';
+
+// 尽早加载 .env 文件，确保环境变量在模块导入前可用
+// 这对于 prompts 模块在启动时正确选择语言至关重要
+// 显式指定路径以确保能找到 .env 文件
+const envPath = resolve(process.cwd(), '.env');
+console.log('[Bootstrap] Loading .env from:', envPath);
+const result = config({ path: envPath });
+if (result.error) {
+  console.log('[Bootstrap] No .env file found or error loading:', result.error.message);
+} else {
+  console.log('[Bootstrap] .env loaded successfully');
+  console.log('[Bootstrap] AGENT_PROMPTS_LANGUAGE =', process.env.AGENT_PROMPTS_LANGUAGE || '(not set)');
+}
 
 /**
  * 启动 NestJS 应用程序
