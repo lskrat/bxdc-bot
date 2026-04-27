@@ -2,6 +2,7 @@ package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.service.BuiltinToolExecutionService;
+import com.lobsterai.skillgateway.service.GatewayOutboundAuditService;
 import com.lobsterai.skillgateway.service.LinuxScriptExecutionService;
 import com.lobsterai.skillgateway.service.ServerLedgerService;
 import com.lobsterai.skillgateway.service.SkillService;
@@ -9,7 +10,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
-import java.util.NoSuchElementException;
 import java.util.List;
 import java.util.Map;
 
@@ -29,17 +29,20 @@ public class SkillController {
     private final LinuxScriptExecutionService linuxScriptExecutionService;
     private final ServerLedgerService serverLedgerService;
     private final BuiltinToolExecutionService builtinToolExecutionService;
+    private final GatewayOutboundAuditService gatewayOutboundAuditService;
 
     public SkillController(
             SkillService skillService,
             LinuxScriptExecutionService linuxScriptExecutionService,
             ServerLedgerService serverLedgerService,
-            BuiltinToolExecutionService builtinToolExecutionService
+            BuiltinToolExecutionService builtinToolExecutionService,
+            GatewayOutboundAuditService gatewayOutboundAuditService
     ) {
         this.skillService = skillService;
         this.linuxScriptExecutionService = linuxScriptExecutionService;
         this.serverLedgerService = serverLedgerService;
         this.builtinToolExecutionService = builtinToolExecutionService;
+        this.gatewayOutboundAuditService = gatewayOutboundAuditService;
     }
 
     // --- Skill Management (CRUD) ---
@@ -105,20 +108,30 @@ public class SkillController {
     @GetMapping("/server-lookup")
     public ResponseEntity<?> lookupServer(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
-            @RequestParam String name
+            @RequestParam(value = "serverName", required = false) String serverName,
+            @RequestParam(value = "name", required = false) String name
     ) {
         if (userId == null || userId.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "X-User-Id header is required for server lookup"));
         }
-        return serverLedgerService.getServerLedgerByName(userId, name)
-                .map(ledger -> {
-                    Map<String, Object> response = new java.util.HashMap<>();
-                    response.put("ip", ledger.getIp());
-                    response.put("username", ledger.getUsername());
-                    response.put("password", ledger.getPassword());
-                    return ResponseEntity.ok(response);
-                })
-                .orElseGet(() -> ResponseEntity.status(404).body(Map.of("error", "Server not found with name: " + name)));
+        String q = (serverName != null && !serverName.isBlank()) ? serverName : name;
+        if (q == null || q.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "serverName (or legacy name) query parameter is required"));
+        }
+        var candidates = serverLedgerService.findTopServerNameMatches(userId, q, 5);
+        List<Map<String, Object>> list = new java.util.ArrayList<>();
+        for (ServerLedgerService.ServerNameCandidate c : candidates) {
+            java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
+            row.put("id", c.id());
+            row.put("name", c.name());
+            list.add(row);
+        }
+        int n = list.size();
+        return ResponseEntity.ok(Map.of(
+                "candidates", list,
+                "count", n,
+                "needsUserConfirmation", n > 1
+        ));
     }
 
     // --- Skill Execution ---
@@ -156,19 +169,77 @@ public class SkillController {
     /**
      * 在预配置的 Linux 服务器上执行脚本命令。
      *
-     * @param request 包含 serverId 和 command 的请求体
+     * @param request 包含台账 id 与 command；需 {@code X-User-Id} 以解析当前用户下的服务器名称
      * @return 成功时 { "result": "..." }，失败时返回错误信息
      */
     @PostMapping("/linux-script")
-    public ResponseEntity<Map<String, Object>> executeLinuxScript(@RequestBody LinuxScriptRequest request) {
+    public ResponseEntity<Map<String, Object>> executeLinuxScript(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestBody LinuxScriptRequest request
+    ) {
+        if (userId == null || userId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "X-User-Id header is required for linux-script"));
+        }
+        if (request.getId() == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
+        }
+        var ledgerOpt = serverLedgerService.getServerLedgerByUserIdAndId(userId, request.getId());
+        if (ledgerOpt.isEmpty()) {
+            gatewayOutboundAuditService.recordSsh(
+                    userId,
+                    "unknown",
+                    0,
+                    request.getCommand() != null ? request.getCommand() : "",
+                    false,
+                    "Unknown server id: " + request.getId(),
+                    "skill.linux-script",
+                    null,
+                    request.getId()
+            );
+            return ResponseEntity.status(404).body(Map.of("error", "Unknown server id: " + request.getId()));
+        }
+        var ledger = ledgerOpt.get();
+        int defaultPort = ledger.getPort() != null && ledger.getPort() > 0 ? ledger.getPort() : 22;
+        String defaultHost = ledger.getHost() != null ? ledger.getHost().trim() : "unknown";
         try {
-            String output = linuxScriptExecutionService.execute(request.getServerId(), request.getCommand());
+            String output = linuxScriptExecutionService.executeFromLedger(ledger, request.getCommand());
+            gatewayOutboundAuditService.recordSsh(
+                    userId,
+                    defaultHost,
+                    defaultPort,
+                    request.getCommand() != null ? request.getCommand() : "",
+                    true,
+                    null,
+                    "skill.linux-script",
+                    output,
+                    ledger.getId()
+            );
             return ResponseEntity.ok(Map.of("result", output));
-        } catch (NoSuchElementException e) {
-            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         } catch (IllegalArgumentException e) {
+            gatewayOutboundAuditService.recordSsh(
+                    userId,
+                    defaultHost,
+                    defaultPort,
+                    request.getCommand() != null ? request.getCommand() : "",
+                    false,
+                    e.getMessage(),
+                    "skill.linux-script",
+                    null,
+                    ledger.getId()
+            );
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         } catch (IOException e) {
+            gatewayOutboundAuditService.recordSsh(
+                    userId,
+                    defaultHost,
+                    defaultPort,
+                    request.getCommand() != null ? request.getCommand() : "",
+                    false,
+                    e.getMessage(),
+                    "skill.linux-script",
+                    null,
+                    ledger.getId()
+            );
             return ResponseEntity.internalServerError().body(Map.of("error", "Linux script execution failed: " + e.getMessage()));
         }
     }
@@ -213,15 +284,19 @@ public class SkillController {
     public static class ApiRequest {
         private String url;
         private String method;
-        private Map<String, String> headers;
+        /**
+         * Outgoing headers; values are usually strings. Arrays (e.g. {@code "Origin": ["https://a"]})
+         * are accepted so OpenAPI-style or UI-exported skills deserialize; see {@code ApiProxyService}.
+         */
+        private Map<String, Object> headers;
         private Object body;
         // getters/setters
         public String getUrl() { return url; }
         public void setUrl(String url) { this.url = url; }
         public String getMethod() { return method; }
         public void setMethod(String method) { this.method = method; }
-        public Map<String, String> getHeaders() { return headers; }
-        public void setHeaders(Map<String, String> headers) { this.headers = headers; }
+        public Map<String, Object> getHeaders() { return headers; }
+        public void setHeaders(Map<String, Object> headers) { this.headers = headers; }
         public Object getBody() { return body; }
         public void setBody(Object body) { this.body = body; }
     }

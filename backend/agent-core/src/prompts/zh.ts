@@ -61,7 +61,7 @@ const extendedSkillRoutingPolicy = `[扩展技能路由策略]
 当本次运行中 SkillGateway 扩展工具可用时（名称通常以"extended_"开头），对于落在该技能描述能力范围内的请求，你必须调用匹配的扩展工具。
 扩展工具使用结构化参数：按照工具模式将字段作为顶层工具参数传递（而不是单个"input" JSON 字符串）。
 对于远程 shell 任务，优先使用扩展 SSH 技能；内置的 ssh_executor 工具在认证会话中可能不可用——请使用扩展 SSH 技能和 server_lookup 来查找服务器别名。
-除非满足以下条件，否则不要使用 api_caller、ssh_executor、linux_script_executor、compute 或 server_lookup 等内置工具来绕过此类扩展技能：(1) 用户明确要求使用低层级/内置路径；(2) 没有扩展技能合理地匹配该请求；或 (3) 扩展工具失败且内置回退明显必要（简要说明回退原因）。
+除非满足以下条件，否则不要使用 ssh_executor、linux_script_executor、compute 或 server_lookup 等内置工具来绕过此类扩展技能：(1) 用户明确要求使用低层级/内置路径；(2) 没有扩展技能合理地匹配该请求；或 (3) 扩展工具失败且内置回退明显必要（简要说明回退原因）。
 不要依赖之前消息中记住的 URL、主机或命令片段来跳过扩展工具——当扩展工具适用时，使用明确的参数调用它。
 
 `;

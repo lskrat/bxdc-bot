@@ -3,8 +3,8 @@ export type ConfigKind = 'api' | 'ssh' | 'template'
 export type ApiPreset = 'none' | 'current-time'
 export type SshPreset = 'server-resource-status'
 
-/** 与 agent-core `ExtendedSkillConfig.parameterBinding` 一致：扁平契约字段进 query 或 JSON body。 */
-export type ApiParameterBinding = 'query' | 'jsonBody'
+/** 与 agent-core `ExtendedSkillConfig.parameterBinding` 一致：扁平契约字段进 query、JSON body 或 form-urlencoded body。 */
+export type ApiParameterBinding = 'query' | 'jsonBody' | 'formBody'
 
 export interface ApiConfigDraft {
   kind: 'api'
@@ -12,7 +12,7 @@ export interface ApiConfigDraft {
   operation: string
   method: string
   endpoint: string
-  /** 默认 query；POST/PUT/PATCH 等 JSON 接口选 jsonBody */
+  /** 默认 query；POST/PUT/PATCH 等 JSON 接口选 jsonBody；仅接受表单的接口选 formBody */
   parameterBinding: ApiParameterBinding
   responseTimestampField: string
   headersText: string
@@ -164,8 +164,8 @@ function parseJsonText(text: string, fieldName: string): unknown {
 function readParameterBinding(record: JsonRecord): ApiParameterBinding {
   const v = record.parameterBinding
   if (v === undefined || v === null || v === '') return 'query'
-  if (v === 'jsonBody' || v === 'query') return v
-  throw new Error('parameterBinding 必须是 query 或 jsonBody')
+  if (v === 'jsonBody' || v === 'query' || v === 'formBody') return v
+  throw new Error('parameterBinding 必须是 query、jsonBody 或 formBody')
 }
 
 function parseApiDraft(configuration: JsonRecord): ApiConfigDraft {
@@ -216,7 +216,7 @@ function parseSshDraft(configuration: JsonRecord): SshConfigDraft {
     preset: 'server-resource-status',
     operation: readString(configuration, 'operation', 'server-resource-status'),
     lookup: readString(configuration, 'lookup', 'server_lookup'),
-    executor: readString(configuration, 'executor', 'ssh_executor'),
+    executor: readString(configuration, 'executor', 'linux_script_executor'),
     command: readString(configuration, 'command'),
     readOnly: readOnly ?? true,
     interfaceDescription: readString(configuration, 'interfaceDescription'),
@@ -234,7 +234,7 @@ function parseLegacyMonitorDraft(configuration: JsonRecord): SshConfigDraft {
     preset: 'server-resource-status',
     operation: readString(configuration, 'operation', 'server-resource-status'),
     lookup: readString(configuration, 'lookup', 'server_lookup'),
-    executor: readString(configuration, 'executor', 'ssh_executor'),
+    executor: readString(configuration, 'executor', 'linux_script_executor'),
     command: readString(configuration, 'command'),
     readOnly: readOnly ?? true,
     interfaceDescription: '',
@@ -287,7 +287,7 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
       preset: 'server-resource-status',
       operation: 'server-resource-status',
       lookup: 'server_lookup',
-      executor: 'ssh_executor',
+      executor: 'linux_script_executor',
       command: '',
       readOnly: true,
       interfaceDescription: '',
@@ -390,7 +390,7 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
       operation: requireNonEmpty(draft.operation, '操作标识'),
       method: requireNonEmpty(draft.method, '请求方法'),
       endpoint: requireNonEmpty(draft.endpoint, '请求地址'),
-      ...(draft.parameterBinding === 'jsonBody' ? { parameterBinding: 'jsonBody' } : {}),
+      ...(draft.parameterBinding !== 'query' ? { parameterBinding: draft.parameterBinding } : {}),
       ...(draft.responseTimestampField.trim() ? { responseTimestampField: draft.responseTimestampField.trim() } : {}),
       ...(headers !== undefined ? { headers } : {}),
       ...(query !== undefined ? { query } : {}),

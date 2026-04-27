@@ -1,18 +1,18 @@
 package com.lobsterai.skillgateway.controller;
 
 /**
- * Linux 脚本执行请求。
+ * Linux 脚本执行请求：使用台账主键 {@code id}，与 {@link com.lobsterai.skillgateway.entity.ServerLedger} 对应。
  */
 public class LinuxScriptRequest {
-    private String serverId;
+    private Long id;
     private String command;
 
-    public String getServerId() {
-        return serverId;
+    public Long getId() {
+        return id;
     }
 
-    public void setServerId(String serverId) {
-        this.serverId = serverId;
+    public void setId(Long id) {
+        this.id = id;
     }
 
     public String getCommand() {

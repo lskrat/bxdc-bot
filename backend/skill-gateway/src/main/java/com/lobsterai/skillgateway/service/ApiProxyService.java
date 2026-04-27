@@ -12,6 +12,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.lang.reflect.Array;
+import java.util.Collection;
 import java.util.Map;
 
 /**
@@ -28,14 +30,14 @@ public class ApiProxyService {
         this.objectMapper = objectMapper;
     }
 
-    public Object callApi(String url, String method, Map<String, String> headers, Object body) {
+    public Object callApi(String url, String method, Map<String, ?> headers, Object body) {
         return callApi(url, method, headers, body, HttpClientAuditMode.NONE);
     }
 
     public Object callApi(
             String url,
             String method,
-            Map<String, String> headers,
+            Map<String, ?> headers,
             Object body,
             HttpClientAuditMode mode
     ) {
@@ -43,9 +45,7 @@ public class ApiProxyService {
         try {
             String outboundUrl = OutboundUrlNormalizer.normalizeForOutboundHttp(url);
             HttpHeaders httpHeaders = new HttpHeaders();
-            if (headers != null) {
-                headers.forEach(httpHeaders::add);
-            }
+            applyOutboundHeaders(httpHeaders, headers);
             HttpEntity<Object> entity = new HttpEntity<>(body, httpHeaders);
             ResponseEntity<String> response = gatewayRestTemplate.exchange(
                     outboundUrl,
@@ -56,6 +56,48 @@ public class ApiProxyService {
             return parseResponseBody(response);
         } finally {
             HttpClientAuditContext.clear();
+        }
+    }
+
+    /**
+     * {@link SkillController.ApiRequest#getHeaders()} may use string values or JSON arrays (single or multi),
+     * matching OpenAPI / exported configs; each becomes one or more {@code HttpHeaders#add} calls.
+     */
+    static void applyOutboundHeaders(HttpHeaders target, Map<String, ?> headers) {
+        if (headers == null || target == null) {
+            return;
+        }
+        for (Map.Entry<String, ?> e : headers.entrySet()) {
+            if (e.getKey() == null) {
+                continue;
+            }
+            String name = e.getKey();
+            addHeaderValue(target, name, e.getValue());
+        }
+    }
+
+    private static void addHeaderValue(HttpHeaders target, String name, Object value) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof String s) {
+            target.add(name, s);
+        } else if (value instanceof Collection<?> c) {
+            for (Object o : c) {
+                if (o != null) {
+                    target.add(name, o.toString());
+                }
+            }
+        } else if (value.getClass().isArray()) {
+            int n = Array.getLength(value);
+            for (int i = 0; i < n; i++) {
+                Object o = Array.get(value, i);
+                if (o != null) {
+                    target.add(name, o.toString());
+                }
+            }
+        } else {
+            target.add(name, value.toString());
         }
     }
 

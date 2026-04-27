@@ -1,49 +1,76 @@
 package com.lobsterai.skillgateway.service;
 
+import com.lobsterai.skillgateway.entity.ServerLedger;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 
 /**
- * Linux 脚本执行服务。
+ * Linux 脚本执行服务：从台账行解凭据并执行；不再使用环境配置 {@code skill.linux-script.servers}。
  */
 @Service
 public class LinuxScriptExecutionService {
 
-    private final LinuxScriptServerRegistryService serverRegistryService;
     private final SSHExecutorService sshExecutorService;
     private final SecurityFilterService securityFilterService;
 
     public LinuxScriptExecutionService(
-            LinuxScriptServerRegistryService serverRegistryService,
             SSHExecutorService sshExecutorService,
             SecurityFilterService securityFilterService
     ) {
-        this.serverRegistryService = serverRegistryService;
         this.sshExecutorService = sshExecutorService;
         this.securityFilterService = securityFilterService;
     }
 
-    public String execute(String serverId, String command) throws IOException {
-        if (serverId == null || serverId.isBlank()) {
-            throw new IllegalArgumentException("serverId is required");
-        }
+    /**
+     * 使用服务器台账中的连接信息执行远程命令（含安全过滤）。
+     * 认证：若配置了 {@code privateKeyPath} 则优先用私钥文件；否则使用 {@code password}。
+     */
+    public String executeFromLedger(ServerLedger ledger, String command) throws IOException {
         if (command == null || command.isBlank()) {
             throw new IllegalArgumentException("command is required");
         }
-        if (!securityFilterService.isCommandSafe(command)) {
+        String trimmed = command.trim();
+        if (!securityFilterService.isCommandSafe(trimmed)) {
             throw new IllegalArgumentException("Command blocked by security policy");
         }
 
-        LinuxScriptServerRegistryService.LinuxServerConfig server =
-                serverRegistryService.resolveServer(serverId);
+        validateLedgerConnection(ledger);
 
-        return sshExecutorService.executeCommand(
-                server.host(),
-                server.port(),
-                server.username(),
-                server.privateKeyPath(),
-                command.trim()
-        );
+        String host = ledger.getHost().trim();
+        int port = ledger.getPort() != null && ledger.getPort() > 0 ? ledger.getPort() : 22;
+        String user = ledger.getUsername().trim();
+
+        boolean hasKey = ledger.getPrivateKeyPath() != null && !ledger.getPrivateKeyPath().isBlank();
+        boolean hasPw = ledger.getPassword() != null && !ledger.getPassword().isBlank();
+
+        if (hasKey) {
+            return sshExecutorService.executeCommand(
+                    host,
+                    port,
+                    user,
+                    ledger.getPrivateKeyPath().trim(),
+                    trimmed
+            );
+        }
+        return sshExecutorService.executeCommandWithPassword(host, port, user, ledger.getPassword(), trimmed);
+    }
+
+    /**
+     * 校验台账行是否具备执行所需最小字段；异常信息不得包含密码内容。
+     */
+    public void validateLedgerConnection(ServerLedger ledger) {
+        if (ledger.getHost() == null || ledger.getHost().isBlank()) {
+            throw new IllegalArgumentException("Server ledger is missing host");
+        }
+        if (ledger.getUsername() == null || ledger.getUsername().isBlank()) {
+            throw new IllegalArgumentException("Server ledger is missing username");
+        }
+        boolean hasKey = ledger.getPrivateKeyPath() != null && !ledger.getPrivateKeyPath().isBlank();
+        boolean hasPw = ledger.getPassword() != null && !ledger.getPassword().isBlank();
+        if (!hasKey && !hasPw) {
+            throw new IllegalArgumentException(
+                    "Server ledger has no authentication: set password or private key path");
+        }
     }
 }

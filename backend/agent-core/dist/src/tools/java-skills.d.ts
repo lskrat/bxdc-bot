@@ -13,21 +13,21 @@ export declare const computeToolInputSchema: z.ZodObject<{
     operands?: (string | number)[];
 }>;
 declare const serverLookupToolInputSchema: z.ZodObject<{
-    name: z.ZodString;
+    serverName: z.ZodString;
 }, "strip", z.ZodTypeAny, {
-    name?: string;
+    serverName?: string;
 }, {
-    name?: string;
+    serverName?: string;
 }>;
 declare const linuxScriptToolInputSchema: z.ZodObject<{
-    serverId: z.ZodString;
+    id: z.ZodNumber;
     command: z.ZodString;
 }, "strip", z.ZodTypeAny, {
-    serverId?: string;
     command?: string;
+    id?: number;
 }, {
-    serverId?: string;
     command?: string;
+    id?: number;
 }>;
 export declare const apiCallerToolInputSchema: z.ZodObject<{
     url: z.ZodString;
@@ -53,18 +53,18 @@ export declare const sshExecutorToolInputSchema: z.ZodObject<{
     password: z.ZodOptional<z.ZodString>;
     confirmed: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
-    password?: string;
-    command?: string;
     host?: string;
     username?: string;
+    command?: string;
     privateKey?: string;
+    password?: string;
     confirmed?: boolean;
 }, {
-    password?: string;
-    command?: string;
     host?: string;
     username?: string;
+    command?: string;
     privateKey?: string;
+    password?: string;
     confirmed?: boolean;
 }>;
 declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType", [z.ZodObject<{
@@ -84,12 +84,12 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     requiresConfirmation: z.ZodEffects<z.ZodOptional<z.ZodBoolean>, boolean, unknown>;
     allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
 }, "strip", z.ZodTypeAny, {
-    name?: string;
     method?: string;
     headers?: Record<string, string>;
     body?: any;
     targetType?: "api";
     rawDescription?: string;
+    name?: string;
     description?: string;
     endpoint?: string;
     query?: Record<string, string | number | boolean>;
@@ -100,12 +100,12 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     requiresConfirmation?: boolean;
     allowOverwrite?: boolean;
 }, {
-    name?: string;
     method?: string;
     headers?: unknown;
     body?: any;
     targetType?: "api";
     rawDescription?: string;
+    name?: string;
     description?: string;
     endpoint?: string;
     query?: unknown;
@@ -123,17 +123,17 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     command: z.ZodOptional<z.ZodString>;
     allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
 }, "strip", z.ZodTypeAny, {
-    name?: string;
     command?: string;
     targetType?: "ssh";
     rawDescription?: string;
+    name?: string;
     description?: string;
     allowOverwrite?: boolean;
 }, {
-    name?: string;
     command?: string;
     targetType?: "ssh";
     rawDescription?: string;
+    name?: string;
     description?: string;
     allowOverwrite?: unknown;
 }>, z.ZodObject<{
@@ -145,17 +145,17 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     allowedTools: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
     allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
 }, "strip", z.ZodTypeAny, {
-    name?: string;
     targetType?: "openclaw";
     rawDescription?: string;
+    name?: string;
     description?: string;
     allowOverwrite?: boolean;
     systemPrompt?: string;
     allowedTools?: string[];
 }, {
-    name?: string;
     targetType?: "openclaw";
     rawDescription?: string;
+    name?: string;
     description?: string;
     allowOverwrite?: unknown;
     systemPrompt?: string;
@@ -168,16 +168,16 @@ declare const skillGeneratorToolInputSchema: z.ZodDiscriminatedUnion<"targetType
     prompt: z.ZodOptional<z.ZodString>;
     allowOverwrite: z.ZodEffects<z.ZodDefault<z.ZodOptional<z.ZodBoolean>>, boolean, unknown>;
 }, "strip", z.ZodTypeAny, {
-    name?: string;
     targetType?: "template";
     rawDescription?: string;
+    name?: string;
     description?: string;
     allowOverwrite?: boolean;
     prompt?: string;
 }, {
-    name?: string;
     targetType?: "template";
     rawDescription?: string;
+    name?: string;
     description?: string;
     allowOverwrite?: unknown;
     prompt?: string;
@@ -216,7 +216,7 @@ export declare class JavaComputeTool extends DynamicStructuredTool<typeof comput
     });
 }
 export declare class JavaLinuxScriptTool extends DynamicStructuredTool<typeof linuxScriptToolInputSchema> {
-    constructor(gatewayUrl: string, apiToken: string);
+    constructor(gatewayUrl: string, apiToken: string, userId?: string);
 }
 export declare class JavaServerLookupTool extends DynamicStructuredTool<typeof serverLookupToolInputSchema> {
     constructor(gatewayUrl: string, apiToken: string, userId?: string);

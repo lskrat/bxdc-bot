@@ -27,8 +27,11 @@ import java.util.UUID;
 public class SkillIngressCaptureFilter extends OncePerRequestFilter {
 
     public static final String HEADER_CORRELATION_ID = "X-Correlation-Id";
+    /** Inbound: extension {@code skills} row id (agent-core) for audit correlation. */
+    public static final String HEADER_SKILL_ID = "X-Skill-Id";
     public static final String MDC_CORRELATION_ID = "correlationId";
     public static final String MDC_USER_ID = "skillGatewayUserId";
+    public static final String MDC_SKILL_ID = "skillGatewaySkillId";
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -44,15 +47,20 @@ public class SkillIngressCaptureFilter extends OncePerRequestFilter {
         }
         response.setHeader(HEADER_CORRELATION_ID, cid);
         String userHeader = request.getHeader("X-User-Id");
+        String skillHeader = request.getHeader(HEADER_SKILL_ID);
         MDC.put(MDC_CORRELATION_ID, cid);
         if (userHeader != null && !userHeader.isBlank()) {
             MDC.put(MDC_USER_ID, userHeader.trim());
+        }
+        if (skillHeader != null && !skillHeader.isBlank()) {
+            MDC.put(MDC_SKILL_ID, skillHeader.trim());
         }
         try {
             filterChain.doFilter(wrapped, response);
         } finally {
             MDC.remove(MDC_CORRELATION_ID);
             MDC.remove(MDC_USER_ID);
+            MDC.remove(MDC_SKILL_ID);
         }
     }
 

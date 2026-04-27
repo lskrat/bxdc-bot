@@ -45,16 +45,17 @@ exports.computeToolInputSchema = zod_1.z.object({
         .describe("add: [3,5]. subtract|multiply|divide: [a,b]. factorial|square|sqrt: [n]. timestamp_to_date: [unixTs]. date_diff_days: [\"2026-03-08\",\"2026-03-12\"]."),
 });
 const serverLookupToolInputSchema = zod_1.z.object({
-    name: zod_1.z
+    serverName: zod_1.z
         .string()
         .min(1)
-        .describe("Server alias name (e.g. 'prod-db', 'web-01') to look up connection details (ip, username, etc)."),
+        .describe("User-visible server name to search; returns up to 5 candidate serverId values (no credentials)."),
 });
 const linuxScriptToolInputSchema = zod_1.z.object({
-    serverId: zod_1.z
-        .string()
-        .min(1)
-        .describe("Preconfigured server identifier (e.g. 'prod-01', 'test-db')"),
+    id: zod_1.z.coerce
+        .number()
+        .int()
+        .positive()
+        .describe("Server ledger id from server_lookup.candidates[].id"),
     command: zod_1.z
         .string()
         .min(1)
@@ -237,10 +238,11 @@ function isServerMonitorSkillConfig(config) {
         || operation === "server-resource-status");
 }
 const extendedSshSkillToolSchema = zod_1.z.object({
-    name: zod_1.z
-        .string()
-        .min(1)
-        .describe("Server alias in the user's Servers ledger (same as server_lookup)."),
+    id: zod_1.z.coerce
+        .number()
+        .int()
+        .positive()
+        .describe("Server ledger id from server_lookup.candidates[].id after disambiguation when needed."),
 });
 const extendedTemplateSkillToolSchema = zod_1.z.object({
     input: zod_1.z.string().optional().describe("User message or parameters for this template skill."),
@@ -359,7 +361,7 @@ function describeGatewayExtendedTool(toolName) {
     };
 }
 function normalizeParameterBindingValue(raw) {
-    if (raw === "jsonBody" || raw === "query")
+    if (raw === "jsonBody" || raw === "query" || raw === "formBody")
         return raw;
     return undefined;
 }
@@ -714,10 +716,10 @@ function buildGeneratedSkill(input) {
             preset: "server-resource-status",
             operation: "server-resource-status",
             lookup: "server_lookup",
-            executor: "ssh_executor",
+            executor: "linux_script_executor",
             command: input.command?.trim(),
-            interfaceDescription: "Structured invocation: pass top-level `name` (server alias from the Servers ledger, same as server_lookup). "
-                + "The shell command is stored in this skill configuration and is not a tool parameter.",
+            interfaceDescription: "Two-step: (1) server_lookup with `serverName` to get up to 5 candidates (`id` + `name`); if one, use its `id`; if several, ask the user, then (2) call this tool with top-level `id` only. "
+                + "The shell command is fixed in this skill configuration and is not a tool parameter.",
         };
     }
     else if (targetType === "openclaw") {
@@ -773,7 +775,7 @@ function buildUrlWithQuery(endpoint, query) {
     }
     return url.toString();
 }
-async function executeCurrentTimeSkill(gatewayUrl, apiToken, config) {
+async function executeCurrentTimeSkill(gatewayUrl, apiToken, userId, config, skillId) {
     const endpoint = config.endpoint || "https://vv.video.qq.com/checktime?otype=json";
     const method = (config.method || "GET").toUpperCase();
     const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, {
@@ -782,10 +784,7 @@ async function executeCurrentTimeSkill(gatewayUrl, apiToken, config) {
         headers: {},
         body: "",
     }, {
-        headers: {
-            "X-Agent-Token": apiToken,
-            "Content-Type": "application/json",
-        },
+        headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
     });
     const parsed = parseCheckTimePayload(response.data);
     if (!parsed) {
@@ -811,47 +810,48 @@ function parseSshSkillPayload(input) {
             const parsed = JSON.parse(t);
             return parsed && typeof parsed === "object" && !Array.isArray(parsed)
                 ? parsed
-                : { name: t };
+                : { id: t };
         }
         catch {
-            return { name: t };
+            return { id: t };
         }
     }
     return {};
 }
-async function executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, input, config) {
+async function executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, input, config, skillId) {
     const payload = parseSshSkillPayload(input);
-    const ledgerAlias = (payload.name || payload.serverName || payload.server);
+    const rawId = payload.id ?? payload.serverId;
+    const idNum = typeof rawId === "number" && Number.isFinite(rawId)
+        ? Math.trunc(rawId)
+        : typeof rawId === "string" && rawId.trim() !== ""
+            ? Number.parseInt(rawId.trim(), 10)
+            : Number.NaN;
     const command = typeof config.command === "string" ? config.command.trim() : "";
     if (!command) {
         return JSON.stringify({ error: "No command configured for server-resource-status skill" });
     }
+    if (!Number.isFinite(idNum) || idNum < 1) {
+        return JSON.stringify({
+            error: "Missing id. Use server_lookup with serverName, then pass the chosen server ledger id.",
+        });
+    }
+    if (!userId?.trim()) {
+        return JSON.stringify({ error: "X-User-Id is required to run server-resource-status skill." });
+    }
     const headers = {
         "X-Agent-Token": apiToken,
         "Content-Type": "application/json",
+        "X-User-Id": userId,
+        ...optionalSkillIdHeader(skillId),
     };
-    if (userId) {
-        headers["X-User-Id"] = userId;
+    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/linux-script`, { id: idNum, command }, { headers });
+    if (typeof response.data === "string") {
+        return response.data;
     }
-    let host = payload.host;
-    if (!host && ledgerAlias && userId) {
-        const lookupResponse = await axios_1.default.get(`${gatewayUrl}/api/skills/server-lookup`, {
-            headers,
-            params: { name: ledgerAlias },
-        });
-        host = lookupResponse.data.ip;
+    if (response.data && typeof response.data.result === "string") {
+        return response.data.result;
     }
-    if (!host) {
-        return JSON.stringify({
-            error: "Missing server host. Provide `name` (Servers ledger alias) with authenticated user context.",
-        });
-    }
-    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/ssh`, {
-        host,
-        command,
-        confirmed: true,
-    }, { headers });
-    return typeof response.data === "string" ? response.data : JSON.stringify(response.data);
+    return JSON.stringify(response.data);
 }
 function collectMergedScalarFields(merged) {
     const out = {};
@@ -886,20 +886,44 @@ function mergeJsonBodyForProxy(merged, flatScalars) {
     }
     return bodyObj;
 }
-function mergeHeadersForApiProxy(configHeaders, method, useJsonBody) {
+function isFormUrlEncodableScalar(v) {
+    return typeof v === "string" || typeof v === "number" || typeof v === "boolean";
+}
+function formUrlEncodeFlatBodyObject(bodyObj) {
+    for (const [key, v] of Object.entries(bodyObj)) {
+        if (!isFormUrlEncodableScalar(v)) {
+            return {
+                ok: false,
+                error: "Parameter value not allowed for formBody binding: only flat string, number, or boolean values are supported. "
+                    + (key ? `Key '${key}' has an unsupported value type or nested shape.` : ""),
+            };
+        }
+    }
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(bodyObj)) {
+        params.set(k, String(v));
+    }
+    return { ok: true, body: params.toString() };
+}
+function mergeHeadersForApiProxy(configHeaders, method, outboundBody) {
     const out = { ...(configHeaders || {}) };
-    if (!useJsonBody)
+    if (outboundBody === "none")
         return out;
     const m = method.toUpperCase();
     if (!["POST", "PUT", "PATCH", "DELETE"].includes(m))
         return out;
     const hasContentType = Object.keys(out).some((k) => k.toLowerCase() === "content-type");
     if (!hasContentType) {
-        out["Content-Type"] = "application/json";
+        if (outboundBody === "json") {
+            out["Content-Type"] = "application/json";
+        }
+        else {
+            out["Content-Type"] = "application/x-www-form-urlencoded; charset=utf-8";
+        }
     }
     return out;
 }
-async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
+async function executeConfiguredApiSkill(gatewayUrl, apiToken, userId, input, config, skillId) {
     const method = (config.method || "GET").toUpperCase();
     let payload;
     if (typeof input === "string") {
@@ -936,12 +960,14 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
     }
     const binding = normalizeParameterBindingValue(config.parameterBinding) ?? "query";
     const flatScalars = collectMergedScalarFields(merged);
-    const useJsonBody = binding === "jsonBody" && isMethodAllowingJsonBodyBinding(method);
+    const canBindScalarsToRequestBody = isMethodAllowingJsonBodyBinding(method);
+    const useJsonBody = binding === "jsonBody" && canBindScalarsToRequestBody;
+    const useFormBody = binding === "formBody" && canBindScalarsToRequestBody;
     const query = {
         ...toQueryRecord(config.query),
         ...toQueryRecord(merged.query),
     };
-    if (!useJsonBody) {
+    if (!useJsonBody && !useFormBody) {
         for (const [key, value] of Object.entries(merged)) {
             if (["query", "headers", "body"].includes(key))
                 continue;
@@ -954,10 +980,27 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
     if (!endpoint) {
         return JSON.stringify({ error: "No endpoint configured for API skill" });
     }
-    const headersOut = mergeHeadersForApiProxy(config.headers, method, useJsonBody);
-    const requestBody = useJsonBody
-        ? mergeJsonBodyForProxy(merged, flatScalars)
-        : (merged.body ?? "");
+    let outboundBody = "none";
+    let requestBody = merged.body ?? "";
+    if (useFormBody) {
+        const mergedForBody = mergeJsonBodyForProxy(merged, flatScalars);
+        const enc = formUrlEncodeFlatBodyObject(mergedForBody);
+        if (enc.ok === false) {
+            return JSON.stringify({
+                error: "Form body parameter merge failed",
+                details: [enc.error],
+                hint: "With parameterBinding formBody, only flat string, number, or boolean fields are allowed; nested values are not supported. "
+                    + "Adjust the parameter contract and arguments, then try again.",
+            });
+        }
+        requestBody = enc.body;
+        outboundBody = "form";
+    }
+    else if (useJsonBody) {
+        requestBody = mergeJsonBodyForProxy(merged, flatScalars);
+        outboundBody = "json";
+    }
+    const headersOut = mergeHeadersForApiProxy(config.headers, method, outboundBody);
     try {
         const response = await axios_1.default.post(`${gatewayUrl}/api/skills/api`, {
             url: endpoint,
@@ -965,10 +1008,7 @@ async function executeConfiguredApiSkill(gatewayUrl, apiToken, input, config) {
             headers: headersOut,
             body: requestBody,
         }, {
-            headers: {
-                "X-Agent-Token": apiToken,
-                "Content-Type": "application/json",
-            },
+            headers: gatewayApiProxyInboundHeaders(apiToken, userId, skillId),
         });
         return typeof response.data === "string" ? response.data : JSON.stringify(response.data);
     }
@@ -1201,6 +1241,19 @@ function gatewaySkillReadHeaders(apiToken, userId) {
     }
     return headers;
 }
+function optionalSkillIdHeader(skillId) {
+    if (skillId !== undefined && Number.isFinite(skillId) && skillId > 0) {
+        return { "X-Skill-Id": String(Math.trunc(skillId)) };
+    }
+    return {};
+}
+function gatewayApiProxyInboundHeaders(apiToken, userId, skillId) {
+    return {
+        ...gatewaySkillReadHeaders(apiToken, userId),
+        "Content-Type": "application/json",
+        ...optionalSkillIdHeader(skillId),
+    };
+}
 function previewExtendedSkillToolInput(rawInput) {
     if (rawInput === undefined || rawInput === null)
         return {};
@@ -1382,10 +1435,10 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                         }
                         execInput = gate.payload;
                         if (isCurrentTimeSkillConfig(currentConfig)) {
-                            return await executeCurrentTimeSkill(gatewayUrl, apiToken, currentConfig);
+                            return await executeCurrentTimeSkill(gatewayUrl, apiToken, userId, currentConfig, currentSkill.id);
                         }
                         if (isServerMonitorSkillConfig(currentConfig)) {
-                            return await executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, execInput, currentConfig);
+                            return await executeServerResourceStatusSkill(gatewayUrl, apiToken, userId, execInput, currentConfig, currentSkill.id);
                         }
                         if (executionMode === "OPENCLAW" || currentConfig.kind === "openclaw") {
                             const openClawInput = typeof execInput === "string"
@@ -1411,7 +1464,7 @@ async function loadGatewayExtendedTools(gatewayUrl, apiToken, userId, options) {
                             });
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "api" || currentConfig.operation === "api-request" || currentConfig.operation === "juhe-joke-list") {
-                            return await executeConfiguredApiSkill(gatewayUrl, apiToken, execInput, currentConfig);
+                            return await executeConfiguredApiSkill(gatewayUrl, apiToken, userId, execInput, currentConfig, currentSkill.id);
                         }
                         if ((currentConfig.kind || "").toLowerCase() === "ssh") {
                             return JSON.stringify({
@@ -1495,7 +1548,7 @@ class JavaSkillGeneratorTool extends tools_1.DynamicStructuredTool {
             description: "Creates a NEW extension skill on SkillGateway—use ONLY after you have confirmed no existing tool (built-in, gateway extensions, or loadable filesystem skills) can fulfill the request, OR the user explicitly asked to add/create a new skill. " +
                 "Provide targetType and the corresponding fields for that type (api, ssh, openclaw, or template) as structured tool arguments. " +
                 "For API skills, headers, query, testInput, and parameterContract may be sent either as objects or as JSON strings; booleans may be true/false strings. " +
-                "Generated POST/PUT/PATCH/DELETE API skills default `parameterBinding` to jsonBody so flat contract fields map to the JSON request body; use query in configuration for URL-only APIs. " +
+                "Generated POST/PUT/PATCH/DELETE API skills default `parameterBinding` to jsonBody so flat contract fields map to the JSON request body; use `formBody` in configuration for `application/x-www-form-urlencoded` POST APIs, and `query` for URL-only APIs. " +
                 "After save, API and SSH extension skills are invoked with structured top-level parameters (not a single input envelope string). " +
                 "On success, API-type skills return status VALIDATION_SKIPPED (no automatic HTTP probe); verify by invoking the new skill.",
             schema: skillGeneratorToolInputSchema,
@@ -1661,18 +1714,23 @@ class JavaComputeTool extends tools_1.DynamicStructuredTool {
 }
 exports.JavaComputeTool = JavaComputeTool;
 class JavaLinuxScriptTool extends tools_1.DynamicStructuredTool {
-    constructor(gatewayUrl, apiToken) {
+    constructor(gatewayUrl, apiToken, userId) {
         super({
             name: "linux_script_executor",
-            description: "Executes a shell command on a preconfigured Linux server. " +
-                "Provide serverId and command as separate fields (do NOT wrap in a JSON string under 'input').",
+            description: "Executes a shell command on a server using credentials stored in the user server ledger in Skill Gateway (host, user, password or key path). " +
+                "Provide the ledger `id` from server_lookup and `command` (do NOT wrap in a JSON string under 'input'). " +
+                "Requires a logged-in user context (X-User-Id) for the gateway.",
             schema: linuxScriptToolInputSchema,
             func: async (args) => {
                 try {
-                    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/linux-script`, args, {
+                    if (!userId?.trim()) {
+                        return JSON.stringify({ error: "linux_script_executor requires a logged-in user (X-User-Id)." });
+                    }
+                    const response = await axios_1.default.post(`${gatewayUrl}/api/skills/linux-script`, { id: args.id, command: args.command }, {
                         headers: {
                             "X-Agent-Token": apiToken,
                             "Content-Type": "application/json",
+                            "X-User-Id": userId,
                         },
                     });
                     if (typeof response.data === "string") {
@@ -1695,8 +1753,9 @@ class JavaServerLookupTool extends tools_1.DynamicStructuredTool {
     constructor(gatewayUrl, apiToken, userId) {
         super({
             name: "server_lookup",
-            description: "Looks up server connection details (ip, username, etc) by the server's alias name. " +
-                "Provide the 'name' field directly (do NOT wrap in a JSON string under 'input').",
+            description: "Finds up to 5 server candidates (`id` + `name`) for a user-entered serverName (relevance-ordered; connection secrets stay in Gateway DB only, not returned). " +
+                "If exactly one row, use its `id` for linux_script_executor next; if several, ask the user to pick an `id`. " +
+                "Provide `serverName` (do NOT wrap in a single input string).",
             schema: serverLookupToolInputSchema,
             func: async (args) => {
                 try {
@@ -1709,7 +1768,7 @@ class JavaServerLookupTool extends tools_1.DynamicStructuredTool {
                     }
                     const response = await axios_1.default.get(`${gatewayUrl}/api/skills/server-lookup`, {
                         headers,
-                        params: { name: args.name },
+                        params: { serverName: args.serverName },
                     });
                     return JSON.stringify(response.data);
                 }

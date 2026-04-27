@@ -44,8 +44,11 @@ public class ServerLedgerController {
                 Map<String, Object> map = new java.util.HashMap<>();
                 map.put("id", l.getId());
                 map.put("name", l.getName());
-                map.put("ip", l.getIp());
-                map.put("username", l.getUsername());
+                map.put("host", l.getHost() != null ? l.getHost() : "");
+                map.put("port", l.getPort() != null ? l.getPort() : 22);
+                map.put("username", l.getUsername() != null ? l.getUsername() : "");
+                map.put("hasPassword", l.getPassword() != null && !l.getPassword().isEmpty());
+                map.put("hasPrivateKeyPath", l.getPrivateKeyPath() != null && !l.getPrivateKeyPath().isBlank());
                 map.put("createdAt", l.getCreatedAt() != null ? l.getCreatedAt().toString() : "");
                 map.put("updatedAt", l.getUpdatedAt() != null ? l.getUpdatedAt().toString() : "");
                 return map;

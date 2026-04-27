@@ -9,14 +9,14 @@
  * 
  * 核心流程：
  * 1. 根据配置创建 ChatOpenAI 实例
- * 2. 收集所有可用工具（SSH、API、计算、Linux脚本、服务器查询等）
+ * 2. 收集所有可用工具（条件暴露的 SSH、计算、Linux 脚本、服务器查询等；**默认不挂载** built-in `api_caller`）
  * 3. 加载 Gateway 扩展工具（动态技能）
  * 4. 使用 createReactAgent 创建 ReAct 架构 Agent
  * 5. 配置共享的 MemorySaver 用于状态持久化
  * 
  * 工具说明：
  * - JavaSshTool: SSH 远程执行工具
- * - JavaApiTool: HTTP API 调用工具
+ * - （暂停默认注册）`JavaApiTool` / `api_caller`：见 createAgent 内块注释；类仍保留在 `java-skills.ts`
  * - JavaSkillGeneratorTool: 技能生成工具
  * - JavaComputeTool: 数学计算工具
  * - JavaLinuxScriptTool: Linux 脚本执行工具
@@ -40,7 +40,6 @@ import type { ClientOptions } from "openai";
 import { composeOpenAiCompatibleFetch } from "../utils/llm-request-role-normalize";
 import {
   JavaSshTool,
-  JavaApiTool,
   JavaSkillGeneratorTool,
   JavaComputeTool,
   JavaLinuxScriptTool,
@@ -156,10 +155,15 @@ export class AgentFactory {
       ...(exposeSshExecutor
         ? [new JavaSshTool(gatewayUrl, apiToken, userId, { dispatch: builtinDispatch })]
         : []),
-      new JavaApiTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
+      /* 暂停默认注册（2026-04）：built-in `api_caller`（`JavaApiTool`）暂不挂入本列表。
+       * 扩展类 API Skill 在 `loadGatewayExtendedTools` 中注册，执行时走
+       * `executeConfiguredApiSkill` → `POST {gateway}/api/skills/api`，**不是** 在 ReAct
+       * 里再调用名为 `api_caller` 的内置工具。`AGENT_BUILTIN_SKILL_DISPATCH` 只影响**已注册**的
+       * 内置 `JavaApiTool`/`JavaSshTool`/`JavaComputeTool` 的出站端点，与扩展 API 无嵌套关系。
+       * `JavaApiTool` 类仍保留在 `../tools/java-skills.ts`，供单测、调试或将来按配置恢复。 */
       new JavaSkillGeneratorTool(gatewayUrl, apiToken, userId),
       new JavaComputeTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
-      new JavaLinuxScriptTool(gatewayUrl, apiToken),
+      new JavaLinuxScriptTool(gatewayUrl, apiToken, userId),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),
     ];
     

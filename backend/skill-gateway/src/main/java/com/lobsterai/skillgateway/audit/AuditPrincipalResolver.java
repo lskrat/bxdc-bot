@@ -28,4 +28,19 @@ public final class AuditPrincipalResolver {
         }
         return null;
     }
+
+    /**
+     * Extension skill id from {@code X-Skill-Id} (see {@link SkillIngressCaptureFilter#MDC_SKILL_ID}).
+     */
+    public static Long currentSkillId() {
+        String s = MDC.get(SkillIngressCaptureFilter.MDC_SKILL_ID);
+        if (s == null || s.isBlank()) {
+            return null;
+        }
+        try {
+            return Long.parseLong(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
 }

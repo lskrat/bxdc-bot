@@ -378,9 +378,12 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
             <t-radio-group v-model="apiDraft.parameterBinding">
               <t-radio-button value="query">URL Query（默认）</t-radio-button>
               <t-radio-button value="jsonBody">JSON Body</t-radio-button>
+              <t-radio-button value="formBody">Form Body</t-radio-button>
             </t-radio-group>
             <p class="skill-param-binding-hint">
-              扁平契约字段写入 URL 查询参数，或作为 JSON 请求体（POST/PUT/PATCH 等；GET 仍走 Query）。注册类 POST JSON 接口请选「JSON Body」。
+              扁平契约字段可写入 URL 查询参数、JSON 请求体，或
+              <code>application/x-www-form-urlencoded</code> 表单（POST/PUT/PATCH/DELETE 等；GET/HEAD
+              仍走 Query）。注册类 JSON 接口选「JSON Body」；只接受表单的旧接口选「Form Body」。
             </p>
           </t-form-item>
           <t-form-item label="时间戳字段" name="apiResponseTimestampField">
@@ -414,7 +417,7 @@ async function handleEnabledChange(skill: Skill, value: boolean) {
             <t-input v-model="sshDraft.lookup" placeholder="例如：server_lookup" />
           </t-form-item>
           <t-form-item label="执行器" name="sshExecutor">
-            <t-input v-model="sshDraft.executor" placeholder="例如：ssh_executor" />
+            <t-input v-model="sshDraft.executor" placeholder="例如：linux_script_executor" />
           </t-form-item>
           <t-form-item label="调用说明（可选，面向模型）" name="sshInterfaceDescription">
             <t-textarea

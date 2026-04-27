@@ -116,6 +116,40 @@ PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
+-- Hibernate 常把 @Lob byte[] 建成 BLOB(64KB)；app.gateway-audit.max-payload-bytes 默认可到 1MB，需 LONGBLOB。
+SET @c_ob_resp = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = @db AND table_name = 'gateway_outbound_audit_logs' AND column_name = 'outbound_response_body'
+);
+SET @sql = IF(@c_ob_resp > 0,
+  'ALTER TABLE gateway_outbound_audit_logs MODIFY COLUMN outbound_response_body LONGBLOB NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @c_origin = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = @db AND table_name = 'gateway_outbound_audit_logs' AND column_name = 'origin_body'
+);
+SET @sql = IF(@c_origin > 0,
+  'ALTER TABLE gateway_outbound_audit_logs MODIFY COLUMN origin_body LONGBLOB NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @c_ob = (
+  SELECT COUNT(*) FROM information_schema.columns
+  WHERE table_schema = @db AND table_name = 'gateway_outbound_audit_logs' AND column_name = 'outbound_body'
+);
+SET @sql = IF(@c_ob > 0,
+  'ALTER TABLE gateway_outbound_audit_logs MODIFY COLUMN outbound_body LONGBLOB NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 -- 已废弃表：若库中仍存在则删除（agent_core_invocation_audit_logs、user_skill_invocation_logs）
 DROP TABLE IF EXISTS user_skill_invocation_logs;
 DROP TABLE IF EXISTS agent_core_invocation_audit_logs;

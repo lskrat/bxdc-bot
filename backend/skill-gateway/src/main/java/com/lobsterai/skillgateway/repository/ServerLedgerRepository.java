@@ -10,7 +10,12 @@ import java.util.Optional;
 @Repository
 public interface ServerLedgerRepository extends JpaRepository<ServerLedger, Long> {
     List<ServerLedger> findByUserId(String userId);
-    Optional<ServerLedger> findByUserIdAndIp(String userId, String ip);
+
     Optional<ServerLedger> findByUserIdAndName(String userId, String name);
+
     Optional<ServerLedger> findByUserIdAndId(String userId, Long id);
+
+    Optional<ServerLedger> findByUserIdAndHost(String userId, String host);
+
+    Optional<ServerLedger> findByUserIdAndHostAndIdNot(String userId, String host, Long id);
 }

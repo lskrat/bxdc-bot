@@ -6,6 +6,10 @@
 - **平台内置** `api_caller`、`compute`、`ssh_executor` 的定义在 Gateway **`system_skills` 表**（与用户扩展 **分表**），发现接口：**`GET /api/system-skills/agent`**；统一执行：**`POST /api/system-skills/execute`**（body：`toolName` + `arguments`），内部复用与 `/api/skills/api`、`/compute`、`/ssh` 相同的 Java 逻辑（见 `BuiltinToolExecutionService`）。
 - **agent-core** 环境变量 **`AGENT_BUILTIN_SKILL_DISPATCH`**：`legacy`（默认）直连旧路径；`gateway` 对上述三内置改为只调 `/api/system-skills/execute`。**`skill_generator`、linux_script、server_lookup 等本阶段仍走原逻辑**，不受该开关约束（与 OpenSpec `unified-skill-db-agent-thin` 一致）。
 
+**agent-core 默认不注册 `api_caller`：**`AgentFactory` 的 `baseTools` **不包含** `JavaApiTool`（`name: api_caller`）；类仍保留在 `java-skills.ts` 以便单测/将来恢复。扩展 **API** 类 Skill 的出站 **仅** 经 `executeConfiguredApiSkill` → `POST {gateway}/api/skills/api`，**不是** 在对话里再调用一次 `api_caller` 工具；与 Gateway `system_skills` 中 `api_caller` 元数据行（`GET /api/system-skills/agent` 可见）**正交**——该元数据服务的是「若某处显式走 built-in 执行 `api_caller`」的契约，不表示扩展 Skill「内部调用」该工具名。
+
+- **审计用户维度**：`executeConfiguredApiSkill` 与 `executeCurrentTimeSkill` 在调用 `POST {gateway}/api/skills/api` 时，若 `loadGatewayExtendedTools` 传入非空 **`userId`**，入站请求会带与 `GET /api/skills` 一致的 **`X-User-Id`**，供 Gateway 将 `gateway_outbound_audit_logs.user_id` 记为**终端用户**（非仅服务身份 `agent-core`）。扩展技能还会带 **`X-Skill-Id`**（`skills.id`），写入同表的 **`skill_id`**、脱敏后的 **`proxy_request_json`**，以及 HTTP 外呼响应相关 **`outbound_response_*` 列**；SSH / linux-script 类调用还会写 **`skill_ssh_invocation_audit_logs`**（与旧 `gateway_outbound_audit_logs` SSH 行短期双写；见 `GatewayOutboundAuditService#recordSsh`）。
+
 ---
 
 本文说明 **agent-core** 在单次对话任务中如何装配工具、如何从 Skill Gateway 加载 **EXTENSION** skill，以及内置 **`skill_generator`**、扩展 **API / SSH / template / OPENCLAW** 等路径上的数据如何流动。叙述以当前实现为准，主要代码位于：

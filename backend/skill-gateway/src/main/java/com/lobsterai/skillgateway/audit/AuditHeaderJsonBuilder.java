@@ -2,6 +2,7 @@ package com.lobsterai.skillgateway.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpRequest;
 
 import java.util.*;
@@ -43,6 +44,39 @@ public final class AuditHeaderJsonBuilder {
             List<String> list = new ArrayList<>();
             while (vals != null && vals.hasMoreElements()) {
                 String v = vals.nextElement();
+                if (redact.contains(key)) {
+                    list.add("[REDACTED]");
+                } else {
+                    list.add(v);
+                }
+            }
+            out.put(name, list);
+        }
+        return write(mapper, out);
+    }
+
+    /** For outbound/response {@link HttpHeaders} (e.g. from {@link org.springframework.http.client.ClientHttpResponse}). */
+    public static String toJson(HttpHeaders headers, Collection<String> extraRedact, ObjectMapper mapper) {
+        if (headers == null) {
+            return null;
+        }
+        Set<String> redact = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        redact.addAll(DEFAULT_REDACT);
+        if (extraRedact != null) {
+            for (String h : extraRedact) {
+                if (h != null && !h.isBlank()) {
+                    redact.add(h.trim().toLowerCase(Locale.ROOT));
+                }
+            }
+        }
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        for (String name : headers.keySet()) {
+            if (name == null) {
+                continue;
+            }
+            String key = name.toLowerCase(Locale.ROOT);
+            List<String> list = new ArrayList<>();
+            for (String v : headers.getOrEmpty(name)) {
                 if (redact.contains(key)) {
                     list.add("[REDACTED]");
                 } else {

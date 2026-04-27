@@ -15,7 +15,8 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -33,31 +34,29 @@ class ServerLedgerControllerTest {
     void getAllServerLedgers_success() throws Exception {
         ServerLedger ledger = new ServerLedger();
         ledger.setId(1L);
-        ledger.setIp("192.168.1.1");
-        ledger.setUsername("root");
-        ledger.setPassword("secret");
+        ledger.setName("web-01");
 
         when(serverLedgerService.getServerLedgers("123456")).thenReturn(List.of(ledger));
 
         mockMvc.perform(get("/api/server-ledgers")
                         .header("X-User-Id", "123456"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].ip").value("192.168.1.1"))
-                .andExpect(jsonPath("$[0].password").doesNotExist()); // Password should be masked/removed
+                .andExpect(jsonPath("$[0].id").value(1))
+                .andExpect(jsonPath("$[0].name").value("web-01"));
     }
 
     @Test
     void createServerLedger_success() throws Exception {
         ServerLedger ledger = new ServerLedger();
         ledger.setId(1L);
-        ledger.setIp("192.168.1.1");
+        ledger.setName("web-01");
 
         when(serverLedgerService.createServerLedger(eq("123456"), any(ServerLedger.class))).thenReturn(ledger);
 
         mockMvc.perform(post("/api/server-ledgers")
                         .header("X-User-Id", "123456")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"ip\":\"192.168.1.1\",\"username\":\"root\",\"password\":\"pass\"}"))
+                        .content("{\"name\":\"web-01\",\"host\":\"10.0.0.1\",\"port\":22,\"username\":\"u\",\"password\":\"p\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(1));
     }

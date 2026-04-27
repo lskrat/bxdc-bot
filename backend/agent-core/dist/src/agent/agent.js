@@ -36,10 +36,9 @@ class AgentFactory {
             ...(exposeSshExecutor
                 ? [new java_skills_1.JavaSshTool(gatewayUrl, apiToken, userId, { dispatch: builtinDispatch })]
                 : []),
-            new java_skills_1.JavaApiTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
             new java_skills_1.JavaSkillGeneratorTool(gatewayUrl, apiToken, userId),
             new java_skills_1.JavaComputeTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
-            new java_skills_1.JavaLinuxScriptTool(gatewayUrl, apiToken),
+            new java_skills_1.JavaLinuxScriptTool(gatewayUrl, apiToken, userId),
             new java_skills_1.JavaServerLookupTool(gatewayUrl, apiToken, userId),
         ];
         const gatewayExtendedTools = await (0, java_skills_1.loadGatewayExtendedTools)(gatewayUrl, apiToken, userId, {

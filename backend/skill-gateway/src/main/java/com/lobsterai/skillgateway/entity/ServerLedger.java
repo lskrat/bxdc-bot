@@ -1,12 +1,16 @@
 package com.lobsterai.skillgateway.entity;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
+/**
+ * 用户服务器台账：主键、展示/检索名与 SSH 连接字段（ip 或 host 名、凭据等）同表持久化。
+ */
 @Entity
 @Table(name = "server_ledgers", uniqueConstraints = {
-    @UniqueConstraint(columnNames = {"userId", "ip"}),
-    @UniqueConstraint(columnNames = {"userId", "name"})
+    @UniqueConstraint(name = "uk_server_ledgers_user_name", columnNames = {"userId", "name"}),
+    @UniqueConstraint(name = "uk_server_ledgers_user_host", columnNames = {"userId", "host"})
 })
 public class ServerLedger {
     @Id
@@ -19,14 +23,24 @@ public class ServerLedger {
     @Column(nullable = false)
     private String name;
 
-    @Column(nullable = false)
-    private String ip;
+    /**
+     * 连接目标：IPv4/IPv6 或可解析主机名。
+     */
+    @Column
+    private String host;
 
-    @Column(nullable = false)
+    @Column
+    private Integer port;
+
+    @Column
     private String username;
 
-    @Column(nullable = false)
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    @Column
     private String password;
+
+    @Column(name = "private_key_path")
+    private String privateKeyPath;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
@@ -66,12 +80,20 @@ public class ServerLedger {
         this.name = name;
     }
 
-    public String getIp() {
-        return ip;
+    public String getHost() {
+        return host;
     }
 
-    public void setIp(String ip) {
-        this.ip = ip;
+    public void setHost(String host) {
+        this.host = host;
+    }
+
+    public Integer getPort() {
+        return port;
+    }
+
+    public void setPort(Integer port) {
+        this.port = port;
     }
 
     public String getUsername() {
@@ -88,6 +110,14 @@ public class ServerLedger {
 
     public void setPassword(String password) {
         this.password = password;
+    }
+
+    public String getPrivateKeyPath() {
+        return privateKeyPath;
+    }
+
+    public void setPrivateKeyPath(String privateKeyPath) {
+        this.privateKeyPath = privateKeyPath;
     }
 
     public LocalDateTime getCreatedAt() {

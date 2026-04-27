@@ -47,7 +47,7 @@ public class GatewayOutboundAuditLog {
     private String originHeadersJson;
 
     @Lob
-    @Column(name = "origin_body")
+    @Column(name = "origin_body", columnDefinition = "LONGBLOB")
     private byte[] originBody;
 
     @Column(name = "origin_truncated", nullable = false)
@@ -60,7 +60,7 @@ public class GatewayOutboundAuditLog {
     private String outboundHeadersJson;
 
     @Lob
-    @Column(name = "outbound_body")
+    @Column(name = "outbound_body", columnDefinition = "LONGBLOB")
     private byte[] outboundBody;
 
     @Column(name = "outbound_truncated", nullable = false)
@@ -74,6 +74,32 @@ public class GatewayOutboundAuditLog {
 
     @Column(name = "skill_context", length = 256)
     private String skillContext;
+
+    /** {@code skills.id} when {@code X-Skill-Id} present (extension skill). */
+    @Column(name = "skill_id")
+    private Long skillId;
+
+    /**
+     * Sanitized JSON of agent's proxy intent ({@code ApiRequest} body) for {@code POST /api/skills/api}.
+     */
+    @Column(name = "proxy_request_json", columnDefinition = "LONGTEXT")
+    private String proxyRequestJson;
+
+    @Column(name = "outbound_response_status")
+    private Integer outboundResponseStatus;
+
+    @Column(name = "outbound_response_headers_json", columnDefinition = "LONGTEXT")
+    private String outboundResponseHeadersJson;
+
+    @Lob
+    @Column(name = "outbound_response_body", columnDefinition = "LONGBLOB")
+    private byte[] outboundResponseBody;
+
+    @Column(name = "outbound_response_truncated", nullable = false)
+    private boolean outboundResponseTruncated;
+
+    @Column(name = "outbound_response_sha256", length = 64)
+    private String outboundResponseSha256;
 
     public Long getId() {
         return id;
@@ -233,5 +259,61 @@ public class GatewayOutboundAuditLog {
 
     public void setSkillContext(String skillContext) {
         this.skillContext = skillContext;
+    }
+
+    public Long getSkillId() {
+        return skillId;
+    }
+
+    public void setSkillId(Long skillId) {
+        this.skillId = skillId;
+    }
+
+    public String getProxyRequestJson() {
+        return proxyRequestJson;
+    }
+
+    public void setProxyRequestJson(String proxyRequestJson) {
+        this.proxyRequestJson = proxyRequestJson;
+    }
+
+    public Integer getOutboundResponseStatus() {
+        return outboundResponseStatus;
+    }
+
+    public void setOutboundResponseStatus(Integer outboundResponseStatus) {
+        this.outboundResponseStatus = outboundResponseStatus;
+    }
+
+    public String getOutboundResponseHeadersJson() {
+        return outboundResponseHeadersJson;
+    }
+
+    public void setOutboundResponseHeadersJson(String outboundResponseHeadersJson) {
+        this.outboundResponseHeadersJson = outboundResponseHeadersJson;
+    }
+
+    public byte[] getOutboundResponseBody() {
+        return outboundResponseBody;
+    }
+
+    public void setOutboundResponseBody(byte[] outboundResponseBody) {
+        this.outboundResponseBody = outboundResponseBody;
+    }
+
+    public boolean isOutboundResponseTruncated() {
+        return outboundResponseTruncated;
+    }
+
+    public void setOutboundResponseTruncated(boolean outboundResponseTruncated) {
+        this.outboundResponseTruncated = outboundResponseTruncated;
+    }
+
+    public String getOutboundResponseSha256() {
+        return outboundResponseSha256;
+    }
+
+    public void setOutboundResponseSha256(String outboundResponseSha256) {
+        this.outboundResponseSha256 = outboundResponseSha256;
     }
 }

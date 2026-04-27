@@ -2,14 +2,21 @@ import { ref } from 'vue';
 import { useUser } from './useUser';
 import { apiUrl } from '../services/config';
 
+/** User server ledger row: connection fields stored on the server; password never returned in list. */
 export interface ServerLedger {
   id?: number;
   name: string;
-  ip: string;
-  username: string;
-  password?: string;
+  host?: string;
+  port?: number;
+  username?: string;
+  /** Present only in list response; not sent on create. */
+  hasPassword?: boolean;
+  hasPrivateKeyPath?: boolean;
   createdAt?: string;
   updatedAt?: string;
+  /** Set only on create / update request body. */
+  password?: string;
+  privateKeyPath?: string;
 }
 
 const isServerLedgerVisible = ref(false);
@@ -97,7 +104,10 @@ export function useServerLedger() {
           'X-User-Id': currentUser.value.id
         }
       });
-      if (!res.ok) throw new Error('Failed to delete ledger');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to delete ledger');
+      }
       await fetchLedgers();
     } catch (e) {
       throw e;

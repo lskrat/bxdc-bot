@@ -11,9 +11,11 @@ const isEditMode = ref(false);
 const formTitle = ref('Add Server');
 const formData = reactive<ServerLedger>({
   name: '',
-  ip: '',
+  host: '',
+  port: 22,
   username: '',
-  password: ''
+  password: '',
+  privateKeyPath: ''
 });
 const currentId = ref<number | undefined>(undefined);
 
@@ -21,9 +23,11 @@ function openAddForm() {
   isEditMode.value = false;
   formTitle.value = 'Add Server';
   formData.name = '';
-  formData.ip = '';
+  formData.host = '';
+  formData.port = 22;
   formData.username = '';
   formData.password = '';
+  formData.privateKeyPath = '';
   currentId.value = undefined;
   isFormVisible.value = true;
 }
@@ -32,9 +36,11 @@ function openEditForm(ledger: ServerLedger) {
   isEditMode.value = true;
   formTitle.value = 'Edit Server';
   formData.name = ledger.name;
-  formData.ip = ledger.ip;
-  formData.username = ledger.username;
-  formData.password = ''; // Don't show password
+  formData.host = ledger.host ?? '';
+  formData.port = ledger.port ?? 22;
+  formData.username = ledger.username ?? '';
+  formData.password = '';
+  formData.privateKeyPath = '';
   currentId.value = ledger.id;
   isFormVisible.value = true;
 }
@@ -90,7 +96,10 @@ async function handleDelete(id: number) {
       </div>
       <t-list v-else :split="true">
         <t-list-item v-for="ledger in ledgers" :key="ledger.id">
-          <t-list-item-meta :title="ledger.name" :description="`${ledger.ip} (${ledger.username})`">
+          <t-list-item-meta
+            :title="ledger.name"
+            :description="`${ledger.host ?? ''} · id: ${ledger.id} · user: ${ledger.username ?? ''}`"
+          >
             <template #image>
               <div class="server-icon">
                 <ServerIcon />
@@ -119,17 +128,26 @@ async function handleDelete(id: number) {
       @confirm="handleSubmit"
     >
       <t-form :data="formData" label-align="top">
-        <t-form-item label="Server Name" name="name">
+        <t-form-item label="Display name" name="name">
           <t-input v-model="formData.name" placeholder="e.g. web-prod-1" />
         </t-form-item>
-        <t-form-item label="IP Address" name="ip">
-          <t-input v-model="formData.ip" placeholder="e.g. 192.168.1.1" />
+        <t-form-item label="Host" name="host">
+          <t-input v-model="formData.host" placeholder="IP or hostname" />
+        </t-form-item>
+        <t-form-item label="SSH port" name="port">
+          <t-input-number v-model="formData.port" :min="1" :max="65535" />
         </t-form-item>
         <t-form-item label="Username" name="username">
-          <t-input v-model="formData.username" placeholder="e.g. root" />
+          <t-input v-model="formData.username" />
         </t-form-item>
-        <t-form-item label="Password" name="password">
-          <t-input v-model="formData.password" type="password" placeholder="Leave empty to keep unchanged" />
+        <t-form-item :label="isEditMode ? 'Password (leave empty to keep)' : 'Password'" name="password">
+          <t-input v-model="formData.password" type="password" :placeholder="isEditMode ? 'unchanged if empty' : 'required if no private key path'" />
+        </t-form-item>
+        <t-form-item label="Private key file path (optional)" name="privateKeyPath">
+          <t-input
+            v-model="formData.privateKeyPath"
+            placeholder="On gateway host; if set, used instead of password"
+          />
         </t-form-item>
       </t-form>
     </t-dialog>

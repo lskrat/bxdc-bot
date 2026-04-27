@@ -26,6 +26,7 @@ public class BuiltinToolExecutionService {
     private final ApiProxyService apiProxyService;
     private final SecurityFilterService securityFilterService;
     private final ServerLedgerService serverLedgerService;
+    private final LinuxScriptExecutionService linuxScriptExecutionService;
     private final GatewayOutboundAuditService gatewayOutboundAuditService;
 
     public BuiltinToolExecutionService(
@@ -33,12 +34,14 @@ public class BuiltinToolExecutionService {
             ApiProxyService apiProxyService,
             SecurityFilterService securityFilterService,
             ServerLedgerService serverLedgerService,
+            LinuxScriptExecutionService linuxScriptExecutionService,
             GatewayOutboundAuditService gatewayOutboundAuditService
     ) {
         this.sshExecutorService = sshExecutorService;
         this.apiProxyService = apiProxyService;
         this.securityFilterService = securityFilterService;
         this.serverLedgerService = serverLedgerService;
+        this.linuxScriptExecutionService = linuxScriptExecutionService;
         this.gatewayOutboundAuditService = gatewayOutboundAuditService;
     }
 
@@ -70,40 +73,58 @@ public class BuiltinToolExecutionService {
                     request.getCommand(),
                     false,
                     "Command blocked by security policy",
-                    "skill.ssh"
+                    "skill.ssh",
+                    null,
+                    null
             );
             return ResponseEntity.badRequest().body("Command blocked by security policy");
         }
         if (userId != null && !userId.isBlank()) {
-            return serverLedgerService.getServerLedgerByIp(userId, request.getHost())
+            return serverLedgerService.getServerLedgerByName(userId, request.getHost().trim())
                     .map(ledger -> {
+                        int auditPort = ledger.getPort() != null && ledger.getPort() > 0 ? ledger.getPort() : 22;
+                        String auditHost = request.getHost().trim();
+                        if (ledger.getHost() != null && !ledger.getHost().isBlank()) {
+                            auditHost = ledger.getHost().trim();
+                        }
                         try {
-                            String output = sshExecutorService.executeCommandWithPassword(
-                                    ledger.getIp(),
-                                    request.getPort(),
-                                    ledger.getUsername(),
-                                    ledger.getPassword(),
-                                    request.getCommand()
-                            );
+                            String output = linuxScriptExecutionService.executeFromLedger(ledger, request.getCommand());
                             gatewayOutboundAuditService.recordSsh(
                                     userId,
-                                    ledger.getIp(),
-                                    request.getPort(),
+                                    auditHost,
+                                    auditPort,
                                     request.getCommand(),
                                     true,
                                     null,
-                                    "skill.ssh"
+                                    "skill.ssh",
+                                    output,
+                                    ledger.getId()
                             );
                             return ResponseEntity.ok(output);
-                        } catch (IOException e) {
+                        } catch (IllegalArgumentException e) {
                             gatewayOutboundAuditService.recordSsh(
                                     userId,
-                                    ledger.getIp(),
+                                    auditHost,
                                     request.getPort(),
                                     request.getCommand(),
                                     false,
                                     e.getMessage(),
-                                    "skill.ssh"
+                                    "skill.ssh",
+                                    null,
+                                    ledger.getId()
+                            );
+                            return ResponseEntity.badRequest().body(e.getMessage());
+                        } catch (IOException e) {
+                            gatewayOutboundAuditService.recordSsh(
+                                    userId,
+                                    auditHost,
+                                    request.getPort(),
+                                    request.getCommand(),
+                                    false,
+                                    e.getMessage(),
+                                    "skill.ssh",
+                                    null,
+                                    ledger.getId()
                             );
                             return ResponseEntity.internalServerError().body("SSH execution failed: " + e.getMessage());
                         }
@@ -116,7 +137,9 @@ public class BuiltinToolExecutionService {
                                 request.getCommand(),
                                 false,
                                 "Server not found in user ledger: " + request.getHost(),
-                                "skill.ssh"
+                                "skill.ssh",
+                                null,
+                                null
                         );
                         return ResponseEntity.badRequest().body("Server not found in user ledger: " + request.getHost());
                     });
@@ -129,7 +152,9 @@ public class BuiltinToolExecutionService {
                     request.getCommand(),
                     false,
                     "Missing username/privateKey for legacy SSH execution",
-                    "skill.ssh"
+                    "skill.ssh",
+                    null,
+                    null
             );
             return ResponseEntity.badRequest().body("Missing username/privateKey for legacy SSH execution");
         }
@@ -148,7 +173,9 @@ public class BuiltinToolExecutionService {
                     request.getCommand(),
                     true,
                     null,
-                    "skill.ssh"
+                    "skill.ssh",
+                    output,
+                    null
             );
             return ResponseEntity.ok(output);
         } catch (IOException e) {
@@ -159,7 +186,9 @@ public class BuiltinToolExecutionService {
                     request.getCommand(),
                     false,
                     e.getMessage(),
-                    "skill.ssh"
+                    "skill.ssh",
+                    null,
+                    null
             );
             return ResponseEntity.internalServerError().body("SSH execution failed: " + e.getMessage());
         }

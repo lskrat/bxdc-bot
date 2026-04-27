@@ -33,13 +33,17 @@ test("loadGatewayExtendedTools loads enabled EXTENSION tools", async () => {
     ],
   });
 
-  axios.post = async () => ({
-    data: 'QZOutputJson={"t":"1773013121"};',
-  });
+  let timeProxyHeaders = null;
+  axios.post = async (_url, _body, config) => {
+    timeProxyHeaders = config?.headers;
+    return {
+      data: 'QZOutputJson={"t":"1773013121"};',
+    };
+  };
 
   try {
     const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
-    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token");
+    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token", "ledger-user-7");
 
     assert.equal(tools.length, 1);
     assert.equal(tools[0].name, "extended_huo_qu_shi_jian");
@@ -47,6 +51,8 @@ test("loadGatewayExtendedTools loads enabled EXTENSION tools", async () => {
     const parsed = JSON.parse(result);
     assert.equal(parsed.timestamp, 1773013121);
     assert.ok(typeof parsed.readableTime === "string");
+    assert.equal(timeProxyHeaders && timeProxyHeaders["X-User-Id"], "ledger-user-7");
+    assert.equal(timeProxyHeaders && timeProxyHeaders["X-Skill-Id"], "1");
   } finally {
     axios.get = originalGet;
     axios.post = originalPost;
@@ -82,8 +88,10 @@ test("configured API extended skill builds query and proxies request", async () 
   });
 
   let capturedRequest = null;
-  axios.post = async (_url, body) => {
+  let proxyInboundHeaders = null;
+  axios.post = async (_url, body, config) => {
     capturedRequest = body;
+    proxyInboundHeaders = config?.headers;
     return {
       data: {
         error_code: 0,
@@ -115,6 +123,54 @@ test("configured API extended skill builds query and proxies request", async () 
     assert.equal(requestUrl.searchParams.get("sort"), "desc");
     assert.equal(requestUrl.searchParams.get("page"), "2");
     assert.equal(requestUrl.searchParams.get("pagesize"), "3");
+    assert.equal(proxyInboundHeaders && proxyInboundHeaders["X-User-Id"], undefined);
+    assert.equal(proxyInboundHeaders && proxyInboundHeaders["X-Skill-Id"], "3");
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
+test("POST /api/skills/api includes X-User-Id when loadGatewayExtendedTools is given userId", async () => {
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+  let proxyInboundHeaders = null;
+
+  axios.get = async () => ({
+    data: [
+      {
+        id: 501,
+        name: "AuditUserPing",
+        description: "ping",
+        type: "EXTENSION",
+        executionMode: "CONFIG",
+        enabled: true,
+        configuration: JSON.stringify({
+          kind: "api",
+          operation: "ping",
+          method: "GET",
+          endpoint: "https://example.com/ping",
+        }),
+      },
+    ],
+  });
+
+  axios.post = async (url, _body, config) => {
+    if (String(url).endsWith("/api/skills/api")) {
+      proxyInboundHeaders = config?.headers;
+      return { data: { status: "ok" } };
+    }
+    throw new Error(`Unexpected POST ${url}`);
+  };
+
+  try {
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
+    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token", "end-user-99", {});
+    assert.equal(tools.length, 1);
+    await tools[0].func({});
+    assert.ok(proxyInboundHeaders);
+    assert.equal(proxyInboundHeaders["X-User-Id"], "end-user-99");
+    assert.equal(proxyInboundHeaders["X-Skill-Id"], "501");
   } finally {
     axios.get = originalGet;
     axios.post = originalPost;
@@ -460,6 +516,183 @@ test("api skill parameterBinding jsonBody on GET falls back to query mapping", a
     const u = new URL(capturedApiPayload.url);
     assert.equal(u.searchParams.get("page"), "2");
     assert.equal(capturedApiPayload.body, "");
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
+test("api skill parameterBinding formBody sends URL-encoded string and form content-type", async () => {
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+  let capturedApiPayload = null;
+
+  axios.get = async () => ({
+    data: [
+      {
+        id: 101,
+        name: "Form API",
+        description: "oauth style",
+        type: "EXTENSION",
+        executionMode: "CONFIG",
+        enabled: true,
+        configuration: JSON.stringify({
+          kind: "api",
+          operation: "token",
+          method: "POST",
+          endpoint: "http://localhost:18080/oauth/token",
+          parameterBinding: "formBody",
+          parameterContract: {
+            type: "object",
+            properties: {
+              client_id: { type: "string" },
+              client_secret: { type: "string" },
+            },
+            required: ["client_id", "client_secret"],
+          },
+        }),
+      },
+    ],
+  });
+
+  axios.post = async (url, body) => {
+    if (url.endsWith("/api/skills/api")) {
+      capturedApiPayload = body;
+      return { data: { ok: true } };
+    }
+    throw new Error(`Unexpected POST ${url}`);
+  };
+
+  try {
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
+    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token", undefined, {});
+    assert.equal(tools.length, 1);
+    const result = await tools[0].func({
+      client_id: "a",
+      client_secret: "b",
+    });
+    const parsed = JSON.parse(result);
+    assert.equal(parsed.ok, true);
+    assert.ok(capturedApiPayload);
+    assert.equal(capturedApiPayload.url, "http://localhost:18080/oauth/token");
+    assert.equal(capturedApiPayload.method, "POST");
+    assert.equal(
+      new URLSearchParams(capturedApiPayload.body).get("client_id"),
+      "a"
+    );
+    assert.equal(
+      new URLSearchParams(capturedApiPayload.body).get("client_secret"),
+      "b"
+    );
+    const ct = capturedApiPayload.headers["Content-Type"];
+    assert.ok(
+      typeof ct === "string" && ct.toLowerCase().includes("application/x-www-form-urlencoded")
+    );
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
+test("api skill parameterBinding formBody on GET falls back to query mapping", async () => {
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+  let capturedApiPayload = null;
+
+  axios.get = async () => ({
+    data: [
+      {
+        id: 102,
+        name: "Form Query",
+        type: "EXTENSION",
+        executionMode: "CONFIG",
+        enabled: true,
+        configuration: JSON.stringify({
+          kind: "api",
+          operation: "q",
+          method: "GET",
+          endpoint: "https://example.com/api/items",
+          parameterBinding: "formBody",
+          parameterContract: {
+            type: "object",
+            properties: {
+              page: { type: "number" },
+            },
+            required: ["page"],
+          },
+        }),
+      },
+    ],
+  });
+
+  axios.post = async (url, body) => {
+    if (url.endsWith("/api/skills/api")) {
+      capturedApiPayload = body;
+      return { data: { items: [] } };
+    }
+    throw new Error(`Unexpected POST ${url}`);
+  };
+
+  try {
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
+    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token", undefined, {});
+    assert.equal(tools.length, 1);
+    await tools[0].func({ page: 2 });
+    assert.ok(capturedApiPayload);
+    const u = new URL(capturedApiPayload.url);
+    assert.equal(u.searchParams.get("page"), "2");
+    assert.equal(capturedApiPayload.body, "");
+  } finally {
+    axios.get = originalGet;
+    axios.post = originalPost;
+  }
+});
+
+test("api skill parameterBinding formBody rejects non-flat merge", async () => {
+  const originalGet = axios.get;
+  const originalPost = axios.post;
+
+  axios.get = async () => ({
+    data: [
+      {
+        id: 103,
+        name: "Form Nested",
+        type: "EXTENSION",
+        executionMode: "CONFIG",
+        enabled: true,
+        configuration: JSON.stringify({
+          kind: "api",
+          method: "POST",
+          endpoint: "http://localhost:18080/api/x",
+          parameterBinding: "formBody",
+          parameterContract: {
+            type: "object",
+            properties: {
+              body: { type: "object" },
+            },
+          },
+        }),
+      },
+    ],
+  });
+
+  axios.post = async (url) => {
+    if (url.endsWith("/api/skills/api")) {
+      return { data: { ok: true } };
+    }
+    throw new Error(`Unexpected POST ${url}`);
+  };
+
+  try {
+    const { loadGatewayExtendedTools } = require("../dist/src/tools/java-skills");
+    const tools = await loadGatewayExtendedTools("http://localhost:18080", "test-token", undefined, {});
+    assert.equal(tools.length, 1);
+    const out = await tools[0].func(
+      JSON.stringify({ body: { outer: { deep: 1 } } })
+    );
+    const parsed = JSON.parse(out);
+    assert.equal(parsed.error, "Form body parameter merge failed");
+    assert.ok(Array.isArray(parsed.details) && parsed.details.length > 0);
   } finally {
     axios.get = originalGet;
     axios.post = originalPost;
@@ -818,7 +1051,7 @@ test("skill generator creates an SSH skill", async () => {
     assert.equal(parsed.skill.configuration.preset, "server-resource-status");
     assert.equal(parsed.skill.configuration.operation, "server-resource-status");
     assert.equal(parsed.skill.configuration.lookup, "server_lookup");
-    assert.equal(parsed.skill.configuration.executor, "ssh_executor");
+    assert.equal(parsed.skill.configuration.executor, "linux_script_executor");
     assert.equal(parsed.skill.configuration.command, "systemctl restart nginx");
     assert.equal(postCalls.length, 1);
     assert.equal(postCalls[0].url, "http://localhost:18080/api/skills");

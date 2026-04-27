@@ -26,7 +26,7 @@ describe('skillEditor', () => {
   it('parses canonical ssh preset draft', () => {
     const result = parseSkillDraft(
       'CONFIG',
-      '{"kind":"ssh","preset":"server-resource-status","operation":"server-resource-status","lookup":"server_lookup","executor":"ssh_executor","command":"uptime","readOnly":true}',
+      '{"kind":"ssh","preset":"server-resource-status","operation":"server-resource-status","lookup":"server_lookup","executor":"linux_script_executor","command":"uptime","readOnly":true}',
     )
 
     expect(result.error).toBeNull()
@@ -35,7 +35,7 @@ describe('skillEditor', () => {
       preset: 'server-resource-status',
       operation: 'server-resource-status',
       lookup: 'server_lookup',
-      executor: 'ssh_executor',
+      executor: 'linux_script_executor',
       command: 'uptime',
       readOnly: true,
       interfaceDescription: '',
@@ -45,7 +45,7 @@ describe('skillEditor', () => {
   it('parses ssh draft with interfaceDescription from generator', () => {
     const result = parseSkillDraft(
       'CONFIG',
-      '{"kind":"ssh","preset":"server-resource-status","operation":"server-resource-status","lookup":"server_lookup","executor":"ssh_executor","command":"uptime","readOnly":true,"interfaceDescription":"Pass top-level name."}',
+      '{"kind":"ssh","preset":"server-resource-status","operation":"server-resource-status","lookup":"server_lookup","executor":"linux_script_executor","command":"uptime","readOnly":true,"interfaceDescription":"Pass top-level name."}',
     )
 
     expect(result.error).toBeNull()
@@ -139,6 +139,28 @@ describe('skillEditor', () => {
     expect(parsed.parameterBinding).toBe('jsonBody')
   })
 
+  it('parses and serializes api parameterBinding formBody', () => {
+    const result = parseSkillDraft(
+      'CONFIG',
+      JSON.stringify({
+        kind: 'api',
+        operation: 'token',
+        method: 'POST',
+        endpoint: 'https://example.com/oauth/token',
+        parameterBinding: 'formBody',
+        parameterContract: { type: 'object', properties: { client_id: { type: 'string' } } },
+      }),
+    )
+    expect(result.error).toBeNull()
+    expect(result.draft?.kind).toBe('api')
+    if (result.draft?.kind !== 'api') throw new Error('expected api')
+    expect(result.draft.parameterBinding).toBe('formBody')
+
+    const raw = serializeSkillDraft('CONFIG', result.draft)
+    const parsed = JSON.parse(raw)
+    expect(parsed.parameterBinding).toBe('formBody')
+  })
+
   it('serializes api draft with nested JSON fields and new contract fields', () => {
     const draft = createDefaultSkillDraft('CONFIG', 'api')
     if (draft.kind !== 'api') {
@@ -186,7 +208,7 @@ describe('skillEditor', () => {
       preset: 'server-resource-status',
       operation: 'server-resource-status',
       lookup: 'server_lookup',
-      executor: 'ssh_executor',
+      executor: 'linux_script_executor',
       command: 'netstat -tlnp | grep LISTEN',
       readOnly: true,
     })

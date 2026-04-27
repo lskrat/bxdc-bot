@@ -9,6 +9,8 @@ frontend/dist 2.zip
 
 # IDE & OS
 .DS_Store
+# Accidental nested checkout (do not commit)
+backend/agent-core/go-cursor-help/
 .cursor/
 .vscode/
 .idea/

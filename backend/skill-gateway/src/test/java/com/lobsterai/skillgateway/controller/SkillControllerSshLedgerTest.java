@@ -1,6 +1,7 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.ServerLedger;
+import com.lobsterai.skillgateway.service.LinuxScriptExecutionService;
 import com.lobsterai.skillgateway.service.SSHExecutorService;
 import com.lobsterai.skillgateway.service.ServerLedgerService;
 import org.junit.jupiter.api.Test;
@@ -13,9 +14,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.Optional;
 
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -34,37 +34,42 @@ class SkillControllerSshLedgerTest {
     private ServerLedgerService serverLedgerService;
 
     @MockBean
+    private LinuxScriptExecutionService linuxScriptExecutionService;
+
+    @MockBean
     private SSHExecutorService sshExecutorService;
 
     @Test
     void executeSshWithLedger_success() throws Exception {
         ServerLedger ledger = new ServerLedger();
-        ledger.setIp("192.168.1.1");
+        ledger.setName("myserver");
+        ledger.setHost("192.168.1.1");
         ledger.setUsername("root");
-        ledger.setPassword("secret");
+        ledger.setPassword("p");
+        ledger.setPort(22);
 
-        when(serverLedgerService.getServerLedgerByIp("123456", "192.168.1.1")).thenReturn(Optional.of(ledger));
-        when(sshExecutorService.executeCommandWithPassword(eq("192.168.1.1"), eq(22), eq("root"), eq("secret"), eq("ls")))
+        when(serverLedgerService.getServerLedgerByName("123456", "myserver")).thenReturn(Optional.of(ledger));
+        when(linuxScriptExecutionService.executeFromLedger(any(ServerLedger.class), eq("ls")))
                 .thenReturn("file1.txt");
 
         mockMvc.perform(post("/api/skills/ssh")
                         .header("X-Agent-Token", TOKEN)
                         .header("X-User-Id", "123456")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"host\":\"192.168.1.1\",\"command\":\"ls\"}"))
+                        .content("{\"host\":\"myserver\",\"command\":\"ls\"}"))
                 .andExpect(status().isOk())
                 .andExpect(content().string("file1.txt"));
     }
 
     @Test
     void executeSshWithLedger_notFound_returns400() throws Exception {
-        when(serverLedgerService.getServerLedgerByIp("123456", "192.168.1.1")).thenReturn(Optional.empty());
+        when(serverLedgerService.getServerLedgerByName("123456", "myserver")).thenReturn(Optional.empty());
 
         mockMvc.perform(post("/api/skills/ssh")
                         .header("X-Agent-Token", TOKEN)
                         .header("X-User-Id", "123456")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"host\":\"192.168.1.1\",\"command\":\"ls\"}"))
+                        .content("{\"host\":\"myserver\",\"command\":\"ls\"}"))
                 .andExpect(status().isBadRequest());
     }
 
@@ -75,7 +80,6 @@ class SkillControllerSshLedgerTest {
 
         mockMvc.perform(post("/api/skills/ssh")
                         .header("X-Agent-Token", TOKEN)
-                        // No X-User-Id
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"host\":\"192.168.1.1\",\"username\":\"user\",\"privateKey\":\"key\",\"command\":\"ls\"}"))
                 .andExpect(status().isOk())
