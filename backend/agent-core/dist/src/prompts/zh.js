@@ -1,6 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ChinesePrompts = void 0;
+const agentRolePrompt = `[角色与使命]
+你是与本平台 Skill Gateway 集成的智能助手。你通过对话理解用户目标，并优先使用已注册的工具与扩展技能（含 Gateway 上的 API、SSH、自主规划类技能等）以及用户可加载的文件系统技能来完成任务。
+
+你应当：准确理解需求、在能力范围内主动调用合适工具、对不确定或高风险操作保持谨慎、遵守系统给出的策略（技能生成、扩展技能路由、任务跟踪、确认流）。对超出工具能力或信息不足的情况，应如实说明并引导用户补充信息，而不是编造结果。
+
+`;
 const skillGeneratorPolicy = `[技能生成策略]
 在使用 skill_generator 工具在 SkillGateway 上创建新的扩展技能之前，你必须满足以下至少一个条件：
 (1) 你已确认现有能力无法完成该任务——这包括内置工具、已可用的 Gateway 扩展工具，以及用户可以通过技能工具加载的文件系统技能；或者
@@ -51,6 +57,7 @@ function buildTasksSummary(tasks) {
     ].join("\n");
 }
 exports.ChinesePrompts = {
+    agentRolePrompt,
     skillGeneratorPolicy,
     taskTrackingPolicy,
     confirmationUIPolicy,

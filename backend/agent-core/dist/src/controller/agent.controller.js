@@ -358,7 +358,8 @@ let AgentController = class AgentController {
                 const memoryContext = memories.length > 0
                     ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
                     : '';
-                const fullInstruction = `${skillContext}${prompts_1.Prompts.skillGeneratorPolicy}${prompts_1.Prompts.extendedSkillRoutingPolicy}${prompts_1.Prompts.taskTrackingPolicy}${prompts_1.Prompts.confirmationUIPolicy}${memoryContext}User Instruction:\n${instruction}`;
+                const staticSystemPrompt = (0, prompts_1.buildStaticSystemPrompt)();
+                const userTurnContent = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
                 const allowedHistoryRoles = new Set(['user', 'assistant', 'system']);
                 const validHistory = sanitizedHistory
                     .map((m) => {
@@ -372,8 +373,9 @@ let AgentController = class AgentController {
                 })
                     .filter((m) => m != null);
                 const messages = [
+                    { role: 'system', content: staticSystemPrompt },
                     ...validHistory,
-                    { role: 'user', content: fullInstruction }
+                    { role: 'user', content: userTurnContent },
                 ];
                 const graphConfig = { configurable: { thread_id: sessionId } };
                 let stream = await agent.stream({ messages }, graphConfig);

@@ -6,6 +6,7 @@ export interface TaskState {
 }
 export type TasksStatusMap = Record<string, TaskState>;
 export interface SystemPrompts {
+    agentRolePrompt: string;
     skillGeneratorPolicy: string;
     taskTrackingPolicy: string;
     confirmationUIPolicy: string;

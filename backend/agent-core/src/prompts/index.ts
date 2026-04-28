@@ -52,4 +52,17 @@ export const Prompts = new Proxy({} as SystemPrompts, {
   },
 });
 
+/**
+ * 拼接 `runTask` 注入的静态 `system` 内容：角色与使命 + 四条策略（顺序与历史行为一致）。
+ */
+export function buildStaticSystemPrompt(): string {
+  return (
+    Prompts.agentRolePrompt
+    + Prompts.skillGeneratorPolicy
+    + Prompts.extendedSkillRoutingPolicy
+    + Prompts.taskTrackingPolicy
+    + Prompts.confirmationUIPolicy
+  );
+}
+
 export type { SystemPrompts, TasksStatusMap, TaskState, TaskStatusValue } from "./types";

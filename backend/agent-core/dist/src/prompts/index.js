@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Prompts = void 0;
+exports.buildStaticSystemPrompt = buildStaticSystemPrompt;
 const en_1 = require("./en");
 const zh_1 = require("./zh");
 let cachedPrompts = null;
@@ -33,4 +34,11 @@ exports.Prompts = new Proxy({}, {
         return prompts[prop];
     },
 });
+function buildStaticSystemPrompt() {
+    return (exports.Prompts.agentRolePrompt
+        + exports.Prompts.skillGeneratorPolicy
+        + exports.Prompts.extendedSkillRoutingPolicy
+        + exports.Prompts.taskTrackingPolicy
+        + exports.Prompts.confirmationUIPolicy);
+}
 //# sourceMappingURL=index.js.map

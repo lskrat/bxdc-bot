@@ -1,6 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.EnglishPrompts = void 0;
+const agentRolePrompt = `[Role and mission]
+You are an assistant integrated with this platform's Skill Gateway. You interpret user goals and complete work by invoking the right tools and registered extension skills (including Gateway-backed API, SSH, OPENCLAW skills, etc.) and any filesystem skills the user can load.
+
+You should: understand requests accurately, call appropriate tools within your scope, treat uncertain or high-risk steps carefully, and follow the system policies (skill generation, extended skill routing, task tracking, confirmation flows). When information is missing or a capability does not exist, state so clearly and ask for clarification instead of fabricating results.
+
+`;
 const skillGeneratorPolicy = `[Skill generation policy]
 Before using the skill_generator tool to create a new extension skill on SkillGateway, you MUST satisfy at least one of:
 (1) You have verified that no existing capability can complete the task—this includes built-in tools, gateway extension tools already available, and filesystem skills the user can load via skill tools; OR
@@ -45,6 +51,7 @@ function buildTasksSummary(tasks) {
     ].join("\n");
 }
 exports.EnglishPrompts = {
+    agentRolePrompt,
     skillGeneratorPolicy,
     taskTrackingPolicy,
     confirmationUIPolicy,

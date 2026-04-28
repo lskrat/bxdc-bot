@@ -61,7 +61,7 @@ import { pickMergedLlm } from '../utils/llm-merge';
 import { logAgentRunRawIfEnabled } from '../utils/agent-run-raw-log';
 import { sanitizeHistoryForAgent } from '../utils/history-sanitize';
 import { Command, INTERRUPT } from '@langchain/langgraph';
-import { Prompts } from '../prompts';
+import { buildStaticSystemPrompt, Prompts } from '../prompts';
 
 /** Payload from {@link interrupt} in extended skills / SSH tools (see java-skills). */
 type SkillInterruptPayload = {
@@ -530,10 +530,13 @@ export class AgentController {
           ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n` 
           : '';
         
-        const fullInstruction = `${skillContext}${Prompts.skillGeneratorPolicy}${Prompts.extendedSkillRoutingPolicy}${Prompts.taskTrackingPolicy}${Prompts.confirmationUIPolicy}${memoryContext}User Instruction:\n${instruction}`;
+        const staticSystemPrompt = buildStaticSystemPrompt();
+        const userTurnContent = `${skillContext}${memoryContext}User Instruction:\n${instruction}`;
 
-        // Combine history (short-term memory) with current instruction
+        // Combine history (short-term memory) with current instruction.
         // OpenAI-style roles only; drop unknown roles. Assistant turns stay `assistant`.
+        // `system` in history is allowed (e.g. client-persisted turns); this turn prepends one
+        // static system block for role + policies so the thread may contain multiple system messages.
         const allowedHistoryRoles = new Set(['user', 'assistant', 'system']);
         const validHistory = sanitizedHistory
           .map((m) => {
@@ -546,8 +549,9 @@ export class AgentController {
           .filter((m): m is NonNullable<typeof m> => m != null);
 
         const messages = [
+          { role: 'system' as const, content: staticSystemPrompt },
           ...validHistory,
-          { role: 'user', content: fullInstruction }
+          { role: 'user' as const, content: userTurnContent },
         ];
 
         const graphConfig = { configurable: { thread_id: sessionId } };

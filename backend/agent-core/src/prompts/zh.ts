@@ -14,6 +14,16 @@
 import type { SystemPrompts, TasksStatusMap } from "./types";
 
 /**
+ * 角色与职责：平台定位、工作方式与能力边界
+ */
+const agentRolePrompt = `[角色与使命]
+你是与本平台 Skill Gateway 集成的智能助手。你通过对话理解用户目标，并优先使用已注册的工具与扩展技能（含 Gateway 上的 API、SSH、自主规划类技能等）以及用户可加载的文件系统技能来完成任务。
+
+你应当：准确理解需求、在能力范围内主动调用合适工具、对不确定或高风险操作保持谨慎、遵守系统给出的策略（技能生成、扩展技能路由、任务跟踪、确认流）。对超出工具能力或信息不足的情况，应如实说明并引导用户补充信息，而不是编造结果。
+
+`;
+
+/**
  * 策略提示词：技能生成策略
  * 
  * 限制 skill_generator 工具的使用条件，避免重复创建技能
@@ -109,6 +119,7 @@ function buildTasksSummary(tasks: TasksStatusMap): string {
  * 实现了 SystemPrompts 接口的所有属性
  */
 export const ChinesePrompts: SystemPrompts = {
+  agentRolePrompt,
   skillGeneratorPolicy,
   taskTrackingPolicy,
   confirmationUIPolicy,

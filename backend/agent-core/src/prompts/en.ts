@@ -14,6 +14,16 @@
 import type { SystemPrompts, TasksStatusMap } from "./types";
 
 /**
+ * 角色与职责：平台定位、工作方式与能力边界
+ */
+const agentRolePrompt = `[Role and mission]
+You are an assistant integrated with this platform's Skill Gateway. You interpret user goals and complete work by invoking the right tools and registered extension skills (including Gateway-backed API, SSH, OPENCLAW skills, etc.) and any filesystem skills the user can load.
+
+You should: understand requests accurately, call appropriate tools within your scope, treat uncertain or high-risk steps carefully, and follow the system policies (skill generation, extended skill routing, task tracking, confirmation flows). When information is missing or a capability does not exist, state so clearly and ask for clarification instead of fabricating results.
+
+`;
+
+/**
  * 策略提示词：技能生成策略
  * 
  * 限制 skill_generator 工具的使用条件，避免重复创建技能
@@ -99,6 +109,7 @@ function buildTasksSummary(tasks: TasksStatusMap): string {
  * 实现了 SystemPrompts 接口的所有属性
  */
 export const EnglishPrompts: SystemPrompts = {
+  agentRolePrompt,
   skillGeneratorPolicy,
   taskTrackingPolicy,
   confirmationUIPolicy,
