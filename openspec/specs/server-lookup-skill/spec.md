@@ -1,4 +1,10 @@
-## ADDED Requirements
+# server-lookup-skill
+
+## Purpose
+
+提供 Agent 通过名称查找服务器的 built-in skill，返回台账主键 ID 供下游执行工具使用，不向模型泄露明文凭据。
+
+## Requirements
 
 ### Requirement: Server Lookup Skill
 The system SHALL provide a built-in skill `server-lookup` that allows the Agent to retrieve server connection details by name.
