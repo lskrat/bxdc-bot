@@ -923,7 +923,16 @@ const chatItems = computed(() =>
 }
 
 :deep(.t-chat) {
-  height: 100%;
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+:deep(.t-chat__list) {
+  flex: 1 !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
 }
 
 :deep(.t-chat__inner) {

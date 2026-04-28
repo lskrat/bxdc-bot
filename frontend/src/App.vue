@@ -20,9 +20,24 @@ const globalConfig = {
 </template>
 
 <style>
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
 #app {
-  height: 100vh;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+#app > * {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 </style>

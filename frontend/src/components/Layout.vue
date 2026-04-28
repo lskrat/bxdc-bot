@@ -65,11 +65,15 @@ const { toggleServerLedger } = useServerLedger();
 
 <style scoped>
 .app-layout {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   background-color: var(--td-bg-color-page);
 }
 
 .layout-header {
+  flex-shrink: 0;
   background: transparent;
   padding: 16px 16px 12px;
 }
@@ -124,13 +128,25 @@ const { toggleServerLedger } = useServerLedger();
 
 .layout-content {
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
   padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.layout-content :deep(.t-content) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
 .layout-content-inner {
   flex: 1;
+  min-height: 0;
+  overflow: hidden;
   max-width: 960px;
   width: 100%;
   margin: 0 auto;

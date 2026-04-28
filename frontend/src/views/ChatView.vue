@@ -61,6 +61,13 @@ onMounted(() => {
   min-height: 0;
 }
 
+.chat-shell :deep(.t-card__body) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .input-box {
   flex-shrink: 0;
   padding: 12px 16px 16px;
@@ -80,13 +87,15 @@ onMounted(() => {
   height: 100%;
   width: 100%;
   min-height: 0;
+  overflow: hidden;
   gap: 12px;
 }
 
 .chat-main {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-error {

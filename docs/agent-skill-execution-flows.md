@@ -10,6 +10,8 @@
 
 - **审计用户维度**：`executeConfiguredApiSkill` 与 `executeCurrentTimeSkill` 在调用 `POST {gateway}/api/skills/api` 时，若 `loadGatewayExtendedTools` 传入非空 **`userId`**，入站请求会带与 `GET /api/skills` 一致的 **`X-User-Id`**，供 Gateway 将 `gateway_outbound_audit_logs.user_id` 记为**终端用户**（非仅服务身份 `agent-core`）。扩展技能还会带 **`X-Skill-Id`**（`skills.id`），写入同表的 **`skill_id`**、脱敏后的 **`proxy_request_json`**，以及 HTTP 外呼响应相关 **`outbound_response_*` 列**；SSH / linux-script 类调用还会写 **`skill_ssh_invocation_audit_logs`**（与旧 `gateway_outbound_audit_logs` SSH 行短期双写；见 `GatewayOutboundAuditService#recordSsh`）。
 
+- **主对话提示分层**（`POST /agent/run`，`agent.controller` `runTask`）：**`system`** 消息承载 `agentRolePrompt` 与四条策略（`buildStaticSystemPrompt()`，语言由 **`AGENT_PROMPTS_LANGUAGE`** 取 `zh` / `en`）；**`user`** 消息承载 **`skillContext`**、记忆块与 **`User Instruction:`** + 用户文本。若存在未完成任务状态，`preModelHook` 还会将任务摘要再注入为 **最前的** `SystemMessage`（可与本轮静态 system、历史中的 `system` 角色消息共存）。
+
 ---
 
 本文说明 **agent-core** 在单次对话任务中如何装配工具、如何从 Skill Gateway 加载 **EXTENSION** skill，以及内置 **`skill_generator`**、扩展 **API / SSH / template / OPENCLAW** 等路径上的数据如何流动。叙述以当前实现为准，主要代码位于：
@@ -17,8 +19,9 @@
 | 模块 | 路径 |
 |------|------|
 | Agent 与工具列表 | `backend/agent-core/src/agent/agent.ts` |
+| 系统提示词（角色、策略、`buildStaticSystemPrompt`） | `backend/agent-core/src/prompts/` |
 | 内置工具、扩展加载、OPENCLAW、API 代理、SSH | `backend/agent-core/src/tools/java-skills.ts` |
-| 扩展 Skill 路由提示（影响模型选型，非独立代码分支） | `backend/agent-core/src/controller/agent.controller.ts`（`AGENT_EXTENDED_SKILL_ROUTING_POLICY`） |
+| 扩展 Skill 路由提示（影响模型选型，非独立代码分支） | `backend/agent-core/src/controller/agent.controller.ts`（`Prompts.extendedSkillRoutingPolicy` 等） |
 
 ### 图例（流程图中的职责边界）
 
