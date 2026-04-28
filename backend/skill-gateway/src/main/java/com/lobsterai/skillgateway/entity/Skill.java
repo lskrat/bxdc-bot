@@ -1,76 +1,56 @@
 package com.lobsterai.skillgateway.entity;
 
-import jakarta.persistence.*;
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import java.time.LocalDateTime;
 
-@Entity
-@Table(name = "skills")
+@TableName("skills")
 public class Skill {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @TableId(type = IdType.AUTO)
     private Long id;
 
-    @Column(nullable = false, unique = true)
+    @TableField("name")
     private String name;
 
+    @TableField("description")
     private String description;
 
-    @Column(nullable = false)
+    @TableField("type")
     private String type; // SSH, API, COMPUTE
 
-    @Column(columnDefinition = "TEXT")
+    @TableField("configuration")
     private String configuration; // JSON string for configuration
 
-    @Column
+    @TableField("execution_mode")
     private String executionMode = "CONFIG";
 
+    @TableField("enabled")
     private boolean enabled = true;
 
-    @Column(nullable = false)
+    @TableField("requires_confirmation")
     private boolean requiresConfirmation = false;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 16)
-    private SkillVisibility visibility = SkillVisibility.PUBLIC;
+    @TableField("visibility")
+    private SkillVisibility visibility = SkillVisibility.PRIVATE;
 
     /** 展示用 emoji（与 User.avatar 一致为短字符串）；可选 */
-    @Column(length = 32)
+    @TableField("avatar")
     private String avatar;
 
     /** 创建者用户 ID；平台种子/Built-in 对应行使用字面量 {@code public} */
-    @Column(length = 128)
+    @TableField("created_by")
     private String createdBy;
 
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
+
+    @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
 
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
-
     public Skill() {}
-
-    public Skill(Long id, String name, String description, String type, String executionMode, boolean enabled, boolean requiresConfirmation, SkillVisibility visibility, String avatar, String createdBy, LocalDateTime createdAt, LocalDateTime updatedAt) {
-        this.id = id;
-        this.name = name;
-        this.description = description;
-        this.type = type;
-        this.executionMode = executionMode;
-        this.enabled = enabled;
-        this.requiresConfirmation = requiresConfirmation;
-        this.visibility = visibility != null ? visibility : SkillVisibility.PUBLIC;
-        this.avatar = avatar;
-        this.createdBy = createdBy;
-        this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
-    }
 
     public Long getId() {
         return id;

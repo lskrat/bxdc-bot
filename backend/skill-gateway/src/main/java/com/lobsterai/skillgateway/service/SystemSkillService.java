@@ -3,7 +3,7 @@ package com.lobsterai.skillgateway.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.controller.SkillController;
 import com.lobsterai.skillgateway.entity.SystemSkill;
-import com.lobsterai.skillgateway.repository.SystemSkillRepository;
+import com.lobsterai.skillgateway.mapper.SystemSkillMapper;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
@@ -17,49 +17,50 @@ public class SystemSkillService {
     public static final String KIND_COMPUTE = "COMPUTE";
     public static final String KIND_SSH_EXECUTOR = "SSH_EXECUTOR";
 
-    private final SystemSkillRepository systemSkillRepository;
+    private final SystemSkillMapper systemSkillMapper;
     private final BuiltinToolExecutionService builtinToolExecutionService;
     private final ObjectMapper objectMapper;
 
     public SystemSkillService(
-            SystemSkillRepository systemSkillRepository,
+            SystemSkillMapper systemSkillMapper,
             BuiltinToolExecutionService builtinToolExecutionService,
             ObjectMapper objectMapper
     ) {
-        this.systemSkillRepository = systemSkillRepository;
+        this.systemSkillMapper = systemSkillMapper;
         this.builtinToolExecutionService = builtinToolExecutionService;
         this.objectMapper = objectMapper;
     }
 
     public List<SystemSkill> listAgentSkills() {
-        return systemSkillRepository.findByEnabledIsTrueOrderByToolNameAsc();
+        return systemSkillMapper.findByEnabledIsTrueOrderByToolNameAsc();
     }
 
     /**
      * 按 toolName 执行内置工具；arguments 形状与同路径直连 /api/skills/* 一致。
      */
     public Object execute(String toolName, Map<String, Object> arguments, String userId) throws Exception {
-        SystemSkill skill = systemSkillRepository.findByToolNameAndEnabledIsTrue(toolName)
+        SystemSkill skill = systemSkillMapper.findByToolNameAndEnabledIsTrue(toolName)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown or disabled system skill: " + toolName));
         Map<String, Object> args = arguments != null ? arguments : Map.of();
-        return switch (skill.getKind()) {
-            case KIND_API_PROXY -> {
+        switch (skill.getKind()) {
+            case KIND_API_PROXY: {
                 SkillController.ApiRequest req = objectMapper.convertValue(args, SkillController.ApiRequest.class);
-                yield builtinToolExecutionService.callExternalApi(req);
+                return builtinToolExecutionService.callExternalApi(req);
             }
-            case KIND_COMPUTE -> {
+            case KIND_COMPUTE: {
                 SkillController.ComputeRequest req = objectMapper.convertValue(args, SkillController.ComputeRequest.class);
-                yield builtinToolExecutionService.compute(req);
+                return builtinToolExecutionService.compute(req);
             }
-            case KIND_SSH_EXECUTOR -> {
+            case KIND_SSH_EXECUTOR: {
                 SkillController.SshRequest req = objectMapper.convertValue(args, SkillController.SshRequest.class);
                 ResponseEntity<String> res = builtinToolExecutionService.executeSsh(req, userId);
                 if (!res.getStatusCode().is2xxSuccessful()) {
-                    yield res.getBody() != null ? res.getBody() : "SSH execution failed";
+                    return res.getBody() != null ? res.getBody() : "SSH execution failed";
                 }
-                yield res.getBody();
+                return res.getBody();
             }
-            default -> throw new IllegalArgumentException("Unsupported system skill kind: " + skill.getKind());
-        };
+            default:
+                throw new IllegalArgumentException("Unsupported system skill kind: " + skill.getKind());
+        }
     }
 }

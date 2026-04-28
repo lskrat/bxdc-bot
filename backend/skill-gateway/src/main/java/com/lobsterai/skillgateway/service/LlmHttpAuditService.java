@@ -2,7 +2,7 @@ package com.lobsterai.skillgateway.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.lobsterai.skillgateway.entity.LlmHttpAuditLog;
-import com.lobsterai.skillgateway.repository.LlmHttpAuditLogRepository;
+import com.lobsterai.skillgateway.mapper.LlmHttpAuditLogMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,13 +13,13 @@ import java.time.Instant;
 @Service
 public class LlmHttpAuditService {
 
-    private final LlmHttpAuditLogRepository repository;
+    private final LlmHttpAuditLogMapper llmHttpAuditLogMapper;
 
     @Value("${app.llm-http-audit.max-payload-bytes:1048576}")
     private int maxPayloadBytes;
 
-    public LlmHttpAuditService(LlmHttpAuditLogRepository repository) {
-        this.repository = repository;
+    public LlmHttpAuditService(LlmHttpAuditLogMapper llmHttpAuditLogMapper) {
+        this.llmHttpAuditLogMapper = llmHttpAuditLogMapper;
     }
 
     @Transactional
@@ -50,7 +50,7 @@ public class LlmHttpAuditService {
         row.setDirection(direction);
         row.setRecordedAt(Instant.now());
         row.setPayloadJson(raw);
-        repository.save(row);
+        llmHttpAuditLogMapper.insert(row);
     }
 
     private static String textOrEmpty(JsonNode n, String field) {

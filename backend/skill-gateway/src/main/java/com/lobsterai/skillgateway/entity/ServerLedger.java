@@ -1,60 +1,51 @@
 package com.lobsterai.skillgateway.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 /**
  * 用户服务器台账：主键、展示/检索名与 SSH 连接字段（ip 或 host 名、凭据等）同表持久化。
  */
-@Entity
-@Table(name = "server_ledgers", uniqueConstraints = {
-    @UniqueConstraint(name = "uk_server_ledgers_user_name", columnNames = {"userId", "name"}),
-    @UniqueConstraint(name = "uk_server_ledgers_user_host", columnNames = {"userId", "host"})
-})
+@TableName("server_ledgers")
 public class ServerLedger {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @TableId(type = IdType.AUTO)
     private Long id;
 
-    @Column(nullable = false)
+    @TableField("user_id")
     private String userId;
 
-    @Column(nullable = false)
+    @TableField("name")
     private String name;
 
     /**
      * 连接目标：IPv4/IPv6 或可解析主机名。
      */
-    @Column
+    @TableField("host")
     private String host;
 
-    @Column
+    @TableField("port")
     private Integer port;
 
-    @Column
+    @TableField("username")
     private String username;
 
     @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
-    @Column
+    @TableField("password")
     private String password;
 
-    @Column(name = "private_key_path")
+    @TableField("private_key_path")
     private String privateKeyPath;
 
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
+
+    @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
 
     public Long getId() {
         return id;

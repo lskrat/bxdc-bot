@@ -1,8 +1,8 @@
 package com.lobsterai.skillgateway.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.servlet.ServletRequestWrapper;
-import jakarta.servlet.http.HttpServletRequest;
+import javax.servlet.ServletRequestWrapper;
+import javax.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestAttributes;
@@ -43,9 +43,10 @@ public class IngressSnapshotReader {
 
     public IngressCapture readCurrentRequest() {
         RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
-        if (!(attrs instanceof ServletRequestAttributes sra)) {
+        if (!(attrs instanceof ServletRequestAttributes)) {
             return IngressCapture.missing();
         }
+        ServletRequestAttributes sra = (ServletRequestAttributes) attrs;
         HttpServletRequest request = sra.getRequest();
         ContentCachingRequestWrapper wrapped = resolveContentCachingWrapper(request);
         if (wrapped == null) {
@@ -62,12 +63,13 @@ public class IngressSnapshotReader {
      */
     private static ContentCachingRequestWrapper resolveContentCachingWrapper(HttpServletRequest request) {
         HttpServletRequest current = request;
-        while (current instanceof ServletRequestWrapper wrapper) {
-            if (current instanceof ContentCachingRequestWrapper ccw) {
-                return ccw;
+        while (current instanceof ServletRequestWrapper) {
+            ServletRequestWrapper wrapper = (ServletRequestWrapper) current;
+            if (current instanceof ContentCachingRequestWrapper) {
+                return (ContentCachingRequestWrapper) current;
             }
             current = (HttpServletRequest) wrapper.getRequest();
         }
-        return current instanceof ContentCachingRequestWrapper ccw ? ccw : null;
+        return current instanceof ContentCachingRequestWrapper ? (ContentCachingRequestWrapper) current : null;
     }
 }

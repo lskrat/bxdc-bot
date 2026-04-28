@@ -18,10 +18,10 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.Arrays;
 import java.util.List;
 
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
+import javax.servlet.FilterChain;
+import javax.servlet.ServletException;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 /**
@@ -50,12 +50,12 @@ public class SecurityConfig {
         http
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf.disable())
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/skills", "/api/skills/*").permitAll()
-                .requestMatchers(HttpMethod.GET, "/api/system-skills/**").permitAll()
-                .requestMatchers("/api/skills/**").authenticated()
-                .requestMatchers("/api/system-skills/**").authenticated()
+            .authorizeRequests(auth -> auth
+                .antMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                .antMatchers(HttpMethod.GET, "/api/skills", "/api/skills/*").permitAll()
+                .antMatchers(HttpMethod.GET, "/api/system-skills/**").permitAll()
+                .antMatchers("/api/skills/**").authenticated()
+                .antMatchers("/api/system-skills/**").authenticated()
                 .anyRequest().permitAll()
             )
             .addFilterBefore(new ApiTokenFilter(), UsernamePasswordAuthenticationFilter.class);

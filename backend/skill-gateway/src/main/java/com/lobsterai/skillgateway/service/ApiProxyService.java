@@ -80,9 +80,11 @@ public class ApiProxyService {
         if (value == null) {
             return;
         }
-        if (value instanceof String s) {
-            target.add(name, s);
-        } else if (value instanceof Collection<?> c) {
+        if (value instanceof String) {
+            target.add(name, (String) value);
+        } else if (value instanceof Collection) {
+            @SuppressWarnings("unchecked")
+            Collection<Object> c = (Collection<Object>) value;
             for (Object o : c) {
                 if (o != null) {
                     target.add(name, o.toString());

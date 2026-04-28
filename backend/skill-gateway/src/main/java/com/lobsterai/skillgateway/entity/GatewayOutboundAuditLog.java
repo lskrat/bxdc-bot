@@ -1,104 +1,99 @@
 package com.lobsterai.skillgateway.entity;
 
-import jakarta.persistence.*;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 
 import java.time.Instant;
 
-@Entity
-@Table(name = "gateway_outbound_audit_logs", indexes = {
-        @Index(name = "idx_gw_out_audit_corr", columnList = "correlation_id"),
-        @Index(name = "idx_gw_out_audit_user_time", columnList = "user_id,recorded_at")
-})
+@TableName("gateway_outbound_audit_logs")
 public class GatewayOutboundAuditLog {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @TableId(type = IdType.AUTO)
     private Long id;
 
-    @Column(name = "correlation_id", nullable = false, length = 64)
+    @TableField("correlation_id")
     private String correlationId;
 
-    @Column(name = "user_id", length = 128)
+    @TableField("user_id")
     private String userId;
 
-    @Column(name = "recorded_at", nullable = false)
+    @TableField("recorded_at")
     private Instant recordedAt;
 
     /** HTTP or SSH */
-    @Column(name = "outbound_kind", nullable = false, length = 16)
+    @TableField("outbound_kind")
     private String outboundKind;
 
-    @Column(nullable = false, length = 32)
+    @TableField("status")
     private String status;
 
-    @Column(name = "error_message", columnDefinition = "TEXT")
+    @TableField("error_message")
     private String errorMessage;
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @TableField("destination")
     private String destination;
 
-    @Column(name = "http_method", length = 16)
+    @TableField("http_method")
     private String httpMethod;
 
-    @Column(name = "origin_incomplete", nullable = false)
+    @TableField("origin_incomplete")
     private boolean originIncomplete;
 
-    @Column(name = "origin_headers_json", columnDefinition = "LONGTEXT")
+    @TableField("origin_headers_json")
     private String originHeadersJson;
 
-    @Lob
-    @Column(name = "origin_body", columnDefinition = "LONGBLOB")
+    @TableField("origin_body")
     private byte[] originBody;
 
-    @Column(name = "origin_truncated", nullable = false)
+    @TableField("origin_truncated")
     private boolean originTruncated;
 
-    @Column(name = "origin_sha256", length = 64)
+    @TableField("origin_sha256")
     private String originSha256;
 
-    @Column(name = "outbound_headers_json", columnDefinition = "LONGTEXT")
+    @TableField("outbound_headers_json")
     private String outboundHeadersJson;
 
-    @Lob
-    @Column(name = "outbound_body", columnDefinition = "LONGBLOB")
+    @TableField("outbound_body")
     private byte[] outboundBody;
 
-    @Column(name = "outbound_truncated", nullable = false)
+    @TableField("outbound_truncated")
     private boolean outboundTruncated;
 
-    @Column(name = "outbound_sha256", length = 64)
+    @TableField("outbound_sha256")
     private String outboundSha256;
 
-    @Column(name = "ssh_command", columnDefinition = "TEXT")
+    @TableField("ssh_command")
     private String sshCommand;
 
-    @Column(name = "skill_context", length = 256)
+    @TableField("skill_context")
     private String skillContext;
 
     /** {@code skills.id} when {@code X-Skill-Id} present (extension skill). */
-    @Column(name = "skill_id")
+    @TableField("skill_id")
     private Long skillId;
 
     /**
      * Sanitized JSON of agent's proxy intent ({@code ApiRequest} body) for {@code POST /api/skills/api}.
      */
-    @Column(name = "proxy_request_json", columnDefinition = "LONGTEXT")
+    @TableField("proxy_request_json")
     private String proxyRequestJson;
 
-    @Column(name = "outbound_response_status")
+    @TableField("outbound_response_status")
     private Integer outboundResponseStatus;
 
-    @Column(name = "outbound_response_headers_json", columnDefinition = "LONGTEXT")
+    @TableField("outbound_response_headers_json")
     private String outboundResponseHeadersJson;
 
-    @Lob
-    @Column(name = "outbound_response_body", columnDefinition = "LONGBLOB")
+    @TableField("outbound_response_body")
     private byte[] outboundResponseBody;
 
-    @Column(name = "outbound_response_truncated", nullable = false)
+    @TableField("outbound_response_truncated")
     private boolean outboundResponseTruncated;
 
-    @Column(name = "outbound_response_sha256", length = 64)
+    @TableField("outbound_response_sha256")
     private String outboundResponseSha256;
 
     public Long getId() {

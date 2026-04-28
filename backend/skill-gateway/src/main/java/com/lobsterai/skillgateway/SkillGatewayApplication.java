@@ -1,9 +1,8 @@
 package com.lobsterai.skillgateway;
 
+import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.domain.EntityScan;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 /**
  * Skill Gateway 应用程序入口类。
@@ -13,8 +12,7 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  * </p>
  */
 @SpringBootApplication
-@EntityScan("com.lobsterai.skillgateway.entity")
-@EnableJpaRepositories("com.lobsterai.skillgateway.repository")
+@MapperScan("com.lobsterai.skillgateway.mapper")
 public class SkillGatewayApplication {
 
     /**

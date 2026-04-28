@@ -4,7 +4,7 @@ import com.lobsterai.skillgateway.dto.LlmSettingsResponse;
 import com.lobsterai.skillgateway.dto.LlmSettingsUpdateRequest;
 import com.lobsterai.skillgateway.exception.RegistrationNotAllowedException;
 import com.lobsterai.skillgateway.entity.User;
-import com.lobsterai.skillgateway.repository.UserRepository;
+import com.lobsterai.skillgateway.mapper.UserMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -18,7 +18,7 @@ import java.util.Map;
 @Service
 public class UserService {
 
-    private final UserRepository userRepository;
+    private final UserMapper userMapper;
     private final ApiProxyService apiProxyService;
 
     @Value("${agent.core.url:http://localhost:3000}")
@@ -28,8 +28,8 @@ public class UserService {
     @Value("${app.registration.admin-password:Bxdc1357}")
     private String registrationAdminPassword;
 
-    public UserService(UserRepository userRepository, ApiProxyService apiProxyService) {
-        this.userRepository = userRepository;
+    public UserService(UserMapper userMapper, ApiProxyService apiProxyService) {
+        this.userMapper = userMapper;
         this.apiProxyService = apiProxyService;
     }
 
@@ -70,7 +70,7 @@ public class UserService {
     }
 
     public LlmSettingsResponse getLlmSettingsForApi(String userId) {
-        User user = userRepository.findById(userId).orElse(null);
+        User user = userMapper.selectById(userId);
         if (user == null) {
             return null;
         }
@@ -85,7 +85,8 @@ public class UserService {
     }
 
     public User updateLlmSettings(String userId, LlmSettingsUpdateRequest req) {
-        User user = userRepository.findById(userId).orElseThrow(() -> new IllegalArgumentException("User not found"));
+        User user = userMapper.selectById(userId);
+        if (user == null) throw new IllegalArgumentException("User not found");
         if (req.apiBase != null) {
             user.setLlmApiBase(trimOrNull(req.apiBase));
         }
@@ -99,7 +100,8 @@ public class UserService {
                 user.setLlmApiKey(trimOrNull(req.apiKey));
             }
         }
-        return userRepository.save(user);
+        userMapper.updateById(user);
+        return user;
     }
 
     /**
@@ -151,7 +153,7 @@ public class UserService {
         if (nickname == null || nickname.length() > 10) {
             throw new IllegalArgumentException("Nickname must be no longer than 10 characters.");
         }
-        if (userRepository.existsById(id)) {
+        if (userMapper.selectById(id) != null) {
             throw new IllegalArgumentException("User ID already exists.");
         }
 
@@ -164,7 +166,7 @@ public class UserService {
         user.setAvatar(avatar);
         user.setCreatedAt(LocalDateTime.now());
         
-        userRepository.save(user);
+        userMapper.insert(user);
 
         // Inject initial memory (Call Agent Core)
         try {
@@ -223,7 +225,7 @@ public class UserService {
         if (!hasNickname && !hasAvatar) {
             throw new IllegalArgumentException("At least one of nickname or avatar is required.");
         }
-        User user = userRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("User not found"));
+        User user = userMapper.selectById(id); if (user == null) throw new IllegalArgumentException("User not found");
         if (hasNickname) {
             validateNickname(nickname);
             user.setNickname(nickname);
@@ -232,23 +234,25 @@ public class UserService {
             validateAvatar(avatar);
             user.setAvatar(avatar.trim());
         }
-        return userRepository.save(user);
+        userMapper.updateById(user);
+        return user;
     }
 
     public User updateAvatar(String id, String avatar) {
         validateAvatar(avatar);
-        User user = userRepository.findById(id).orElseThrow(() -> new IllegalArgumentException("User not found"));
+        User user = userMapper.selectById(id); if (user == null) throw new IllegalArgumentException("User not found");
         user.setAvatar(avatar.trim());
-        return userRepository.save(user);
+        userMapper.updateById(user);
+        return user;
     }
 
     public User login(String id) {
         if (id == null) return null;
-        return userRepository.findById(id).orElse(null);
+        return userMapper.selectById(id);
     }
 
     public User getUser(String id) {
         if (id == null) return null;
-        return userRepository.findById(id).orElse(null);
+        return userMapper.selectById(id);
     }
 }

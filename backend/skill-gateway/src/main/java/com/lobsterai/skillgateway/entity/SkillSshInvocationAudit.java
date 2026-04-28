@@ -1,64 +1,62 @@
 package com.lobsterai.skillgateway.entity;
 
-import jakarta.persistence.*;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 
 import java.time.Instant;
 
 /**
  * Dedicated audit for SSH / linux-script style skill invocations (dual-written with legacy {@code gateway_outbound_audit_logs} SSH rows during transition).
  */
-@Entity
-@Table(name = "skill_ssh_invocation_audit_logs", indexes = {
-        @Index(name = "idx_ssh_inv_audit_user_time", columnList = "user_id,recorded_at"),
-        @Index(name = "idx_ssh_inv_audit_skill", columnList = "skill_id")
-})
+@TableName("skill_ssh_invocation_audit_logs")
 public class SkillSshInvocationAudit {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @TableId(type = IdType.AUTO)
     private Long id;
 
-    @Column(name = "correlation_id", nullable = false, length = 64)
+    @TableField("correlation_id")
     private String correlationId;
 
-    @Column(name = "user_id", length = 128)
+    @TableField("user_id")
     private String userId;
 
-    @Column(name = "skill_id")
+    @TableField("skill_id")
     private Long skillId;
 
-    @Column(name = "recorded_at", nullable = false)
+    @TableField("recorded_at")
     private Instant recordedAt;
 
-    @Column(name = "skill_context", length = 256)
+    @TableField("skill_context")
     private String skillContext;
 
     /** Raw agent request body JSON (sanitized: no private key/password plaintext). */
-    @Column(name = "agent_request_json", columnDefinition = "LONGTEXT")
+    @TableField("agent_request_json")
     private String agentRequestJson;
 
-    @Column(name = "resolved_host", columnDefinition = "TEXT")
+    @TableField("resolved_host")
     private String resolvedHost;
 
-    @Column(name = "resolved_port")
+    @TableField("resolved_port")
     private Integer resolvedPort;
 
-    @Column(name = "executed_command", columnDefinition = "TEXT")
+    @TableField("executed_command")
     private String executedCommand;
 
-    @Column(name = "server_ledger_id")
+    @TableField("server_ledger_id")
     private Long serverLedgerId;
 
-    @Column(name = "status", nullable = false, length = 32)
+    @TableField("status")
     private String status;
 
-    @Column(name = "error_message", columnDefinition = "TEXT")
+    @TableField("error_message")
     private String errorMessage;
 
-    @Column(name = "result_body", columnDefinition = "LONGTEXT")
+    @TableField("result_body")
     private String resultBody;
 
-    @Column(name = "result_truncated", nullable = false)
+    @TableField("result_truncated")
     private boolean resultTruncated;
 
     public Long getId() {

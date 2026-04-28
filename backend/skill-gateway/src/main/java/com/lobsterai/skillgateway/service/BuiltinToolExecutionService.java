@@ -201,63 +201,64 @@ public class BuiltinToolExecutionService {
         if (operands == null) {
             throw new IllegalArgumentException("operands is required");
         }
-        return switch (operation) {
-            case "add" -> {
+        switch (operation) {
+            case "add": {
                 requireOperands(operands, 2);
                 double a = toDouble(operands.get(0)), b = toDouble(operands.get(1));
-                yield a + b;
+                return a + b;
             }
-            case "subtract" -> {
+            case "subtract": {
                 requireOperands(operands, 2);
                 double a = toDouble(operands.get(0)), b = toDouble(operands.get(1));
-                yield a - b;
+                return a - b;
             }
-            case "multiply" -> {
+            case "multiply": {
                 requireOperands(operands, 2);
                 double a = toDouble(operands.get(0)), b = toDouble(operands.get(1));
-                yield a * b;
+                return a * b;
             }
-            case "divide" -> {
+            case "divide": {
                 requireOperands(operands, 2);
                 double a = toDouble(operands.get(0)), b = toDouble(operands.get(1));
                 if (b == 0) throw new IllegalArgumentException("division by zero");
-                yield a / b;
+                return a / b;
             }
-            case "factorial" -> {
+            case "factorial": {
                 requireOperands(operands, 1);
                 int n = toInt(operands.get(0));
                 if (n < 0) throw new IllegalArgumentException("factorial requires non-negative integer");
                 if (n > 170) throw new IllegalArgumentException("factorial overflow: n must be <= 170");
-                yield factorial(n).toString();
+                return factorial(n).toString();
             }
-            case "square" -> {
+            case "square": {
                 requireOperands(operands, 1);
                 double x = toDouble(operands.get(0));
-                yield x * x;
+                return x * x;
             }
-            case "sqrt" -> {
+            case "sqrt": {
                 requireOperands(operands, 1);
                 double x = toDouble(operands.get(0));
                 if (x < 0) throw new IllegalArgumentException("sqrt requires non-negative number");
-                yield Math.sqrt(x);
+                return Math.sqrt(x);
             }
-            case "timestamp_to_date" -> {
+            case "timestamp_to_date": {
                 requireOperands(operands, 1);
                 long ts = toLong(operands.get(0));
-                if (ts > 0 && ts < 10_000_000_000_000L) {
+                if (ts > 0 && ts < 10000000000000L) {
                     ts = ts * 1000;
                 }
                 LocalDate date = Instant.ofEpochMilli(ts).atZone(ZoneId.systemDefault()).toLocalDate();
-                yield date.format(DateTimeFormatter.ISO_LOCAL_DATE);
+                return date.format(DateTimeFormatter.ISO_LOCAL_DATE);
             }
-            case "date_diff_days" -> {
+            case "date_diff_days": {
                 requireOperands(operands, 2);
                 LocalDate start = toLocalDate(operands.get(0));
                 LocalDate end = toLocalDate(operands.get(1));
-                yield ChronoUnit.DAYS.between(start, end);
+                return ChronoUnit.DAYS.between(start, end);
             }
-            default -> throw new IllegalArgumentException("unknown operation: " + operation);
-        };
+            default:
+                throw new IllegalArgumentException("unknown operation: " + operation);
+        }
     }
 
     private static void requireOperands(List<?> operands, int expected) {
@@ -267,14 +268,17 @@ public class BuiltinToolExecutionService {
     }
 
     private static double toDouble(Object n) {
-        if (n instanceof Number number) {
-            return number.doubleValue();
+        if (n instanceof Number) {
+            return ((Number) n).doubleValue();
         }
-        if (n instanceof String value && !value.isBlank()) {
-            try {
-                return Double.parseDouble(value);
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("invalid numeric operand: " + value);
+        if (n instanceof String) {
+            String value = (String) n;
+            if (!value.trim().isEmpty()) {
+                try {
+                    return Double.parseDouble(value);
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("invalid numeric operand: " + value);
+                }
             }
         }
         throw new IllegalArgumentException("numeric operand is required");
@@ -285,21 +289,28 @@ public class BuiltinToolExecutionService {
     }
 
     private static long toLong(Object n) {
-        if (n instanceof Number number) {
-            return number.longValue();
+        if (n instanceof Number) {
+            return ((Number) n).longValue();
         }
-        if (n instanceof String value && !value.isBlank()) {
-            try {
-                return Long.parseLong(value);
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("invalid numeric operand: " + value);
+        if (n instanceof String) {
+            String value = (String) n;
+            if (!value.trim().isEmpty()) {
+                try {
+                    return Long.parseLong(value);
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("invalid numeric operand: " + value);
+                }
             }
         }
         throw new IllegalArgumentException("numeric operand is required");
     }
 
     private static LocalDate toLocalDate(Object value) {
-        if (!(value instanceof String text) || text.isBlank()) {
+        if (!(value instanceof String)) {
+            throw new IllegalArgumentException("date_diff_days requires YYYY-MM-DD date strings");
+        }
+        String text = (String) value;
+        if (text.trim().isEmpty()) {
             throw new IllegalArgumentException("date_diff_days requires YYYY-MM-DD date strings");
         }
         try {

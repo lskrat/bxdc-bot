@@ -37,7 +37,7 @@ public class UserController {
         if (v == null) {
             return null;
         }
-        return v instanceof String s ? s : String.valueOf(v);
+        return v instanceof String ? (String) v : String.valueOf(v);
     }
 
     @GetMapping("/{id}")

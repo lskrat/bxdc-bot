@@ -44,9 +44,9 @@ public final class JsonAuditSanitizer {
         }
         if (node.isObject()) {
             ObjectNode obj = (ObjectNode) node;
-            var it = obj.fields();
+            java.util.Iterator<java.util.Map.Entry<String, JsonNode>> it = obj.fields();
             while (it.hasNext()) {
-                var e = it.next();
+                java.util.Map.Entry<String, JsonNode> e = it.next();
                 String k = e.getKey();
                 if (k != null && SENSITIVE_KEYS.contains(k.toLowerCase(java.util.Locale.ROOT))) {
                     obj.set(k, TextNode.valueOf("[REDACTED]"));

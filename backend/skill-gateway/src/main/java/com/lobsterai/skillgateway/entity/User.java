@@ -1,16 +1,15 @@
 package com.lobsterai.skillgateway.entity;
 
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonIgnore;
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 
-@Entity
-@Table(name = "users")
+@TableName("users")
 public class User {
-    @Id
+    @TableId(type = IdType.INPUT)
     private String id; // 6-digit ID
 
     private String nickname;
@@ -18,15 +17,15 @@ public class User {
     private LocalDateTime createdAt;
 
     /** OpenAI-compatible API base URL; optional per-user override. */
-    @Column(length = 512)
+    @TableField("llm_api_base")
     private String llmApiBase;
 
-    @Column(length = 128)
+    @TableField("llm_model_name")
     private String llmModelName;
 
     /** Stored in plaintext (v1); never serialized to JSON for clients. */
     @JsonIgnore
-    @Column(length = 2048)
+    @TableField("llm_api_key")
     private String llmApiKey;
 
     public String getId() {

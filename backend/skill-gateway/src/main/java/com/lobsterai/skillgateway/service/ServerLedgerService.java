@@ -1,7 +1,7 @@
 package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.entity.ServerLedger;
-import com.lobsterai.skillgateway.repository.ServerLedgerRepository;
+import com.lobsterai.skillgateway.mapper.ServerLedgerMapper;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -12,23 +12,23 @@ import java.util.Optional;
 @Service
 public class ServerLedgerService {
 
-    private final ServerLedgerRepository serverLedgerRepository;
+    private final ServerLedgerMapper serverLedgerMapper;
 
-    public ServerLedgerService(ServerLedgerRepository serverLedgerRepository) {
-        this.serverLedgerRepository = serverLedgerRepository;
+    public ServerLedgerService(ServerLedgerMapper serverLedgerMapper) {
+        this.serverLedgerMapper = serverLedgerMapper;
     }
 
     public List<ServerLedger> getServerLedgers(String userId) {
-        return serverLedgerRepository.findByUserId(userId);
+        return serverLedgerMapper.findByUserId(userId);
     }
 
     public ServerLedger createServerLedger(String userId, ServerLedger ledger) {
         requireWellFormed(ledger, true);
-        if (serverLedgerRepository.findByUserIdAndName(userId, ledger.getName().trim()).isPresent()) {
+        if (serverLedgerMapper.findByUserIdAndName(userId, ledger.getName().trim()).isPresent()) {
             throw new IllegalArgumentException("Server with that display name already exists for this user.");
         }
         String host = ledger.getHost().trim();
-        if (serverLedgerRepository.findByUserIdAndHost(userId, host).isPresent()) {
+        if (serverLedgerMapper.findByUserIdAndHost(userId, host).isPresent()) {
             throw new IllegalArgumentException("Server with that host already exists for this user.");
         }
         ledger.setUserId(userId);
@@ -41,11 +41,12 @@ public class ServerLedgerService {
             String p = ledger.getPrivateKeyPath().trim();
             ledger.setPrivateKeyPath(p.isEmpty() ? null : p);
         }
-        return serverLedgerRepository.save(ledger);
+        serverLedgerMapper.insert(ledger);
+        return ledger;
     }
 
     public ServerLedger updateServerLedger(String userId, Long id, ServerLedger ledgerDetails) {
-        ServerLedger ledger = serverLedgerRepository.findByUserIdAndId(userId, id)
+        ServerLedger ledger = serverLedgerMapper.findByUserIdAndId(userId, id)
                 .orElseThrow(() -> new IllegalArgumentException("Server ledger not found or access denied"));
 
         if (ledgerDetails.getName() != null) {
@@ -53,7 +54,7 @@ public class ServerLedgerService {
                 throw new IllegalArgumentException("name is required");
             }
             if (!ledger.getName().equals(ledgerDetails.getName().trim()) &&
-                serverLedgerRepository.findByUserIdAndName(userId, ledgerDetails.getName().trim()).isPresent()) {
+                serverLedgerMapper.findByUserIdAndName(userId, ledgerDetails.getName().trim()).isPresent()) {
                 throw new IllegalArgumentException("Server with that display name already exists for this user.");
             }
             ledger.setName(ledgerDetails.getName().trim());
@@ -65,7 +66,7 @@ public class ServerLedgerService {
             }
             String newHost = ledgerDetails.getHost().trim();
             if (!newHost.equals(ledger.getHost() != null ? ledger.getHost().trim() : "")
-                && serverLedgerRepository.findByUserIdAndHostAndIdNot(userId, newHost, id).isPresent()) {
+                && serverLedgerMapper.findByUserIdAndHostAndIdNot(userId, newHost, id).isPresent()) {
                 throw new IllegalArgumentException("Server with that host already exists for this user.");
             }
             ledger.setHost(newHost);
@@ -97,21 +98,22 @@ public class ServerLedgerService {
         if (!hasKey && !hasPw) {
             throw new IllegalArgumentException("Set password or private key path to authenticate");
         }
-        return serverLedgerRepository.save(ledger);
+        serverLedgerMapper.updateById(ledger);
+        return ledger;
     }
 
     public void deleteServerLedger(String userId, Long id) {
-        ServerLedger ledger = serverLedgerRepository.findByUserIdAndId(userId, id)
+        ServerLedger ledger = serverLedgerMapper.findByUserIdAndId(userId, id)
                 .orElseThrow(() -> new IllegalArgumentException("Server ledger not found or access denied"));
-        serverLedgerRepository.delete(ledger);
+        serverLedgerMapper.deleteById(id);
     }
 
     public Optional<ServerLedger> getServerLedgerByName(String userId, String name) {
-        return serverLedgerRepository.findByUserIdAndName(userId, name);
+        return serverLedgerMapper.findByUserIdAndName(userId, name);
     }
 
     public Optional<ServerLedger> getServerLedgerByUserIdAndId(String userId, long id) {
-        return serverLedgerRepository.findByUserIdAndId(userId, id);
+        return serverLedgerMapper.findByUserIdAndId(userId, id);
     }
 
     /**
@@ -123,7 +125,7 @@ public class ServerLedgerService {
         }
         String q = serverName.trim();
         String qLower = q.toLowerCase();
-        List<ServerLedger> all = serverLedgerRepository.findByUserId(userId);
+        List<ServerLedger> all = serverLedgerMapper.findByUserId(userId);
         List<Scored> scored = new ArrayList<>();
         for (ServerLedger l : all) {
             int s1 = scoreNameMatch(l.getName(), q, qLower);
@@ -182,9 +184,26 @@ public class ServerLedgerService {
         return 0;
     }
 
-    private record Scored(ServerLedger ledger, int score) {
+    private static final class Scored {
+        final ServerLedger ledger;
+        final int score;
+
+        Scored(ServerLedger ledger, int score) {
+            this.ledger = ledger;
+            this.score = score;
+        }
     }
 
-    public record ServerNameCandidate(long id, String name) {
+    public static final class ServerNameCandidate {
+        private final long id;
+        private final String name;
+
+        public ServerNameCandidate(long id, String name) {
+            this.id = id;
+            this.name = name;
+        }
+
+        public long id() { return id; }
+        public String name() { return name; }
     }
 }

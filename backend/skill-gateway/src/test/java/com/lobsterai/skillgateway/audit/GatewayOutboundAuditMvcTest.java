@@ -1,9 +1,10 @@
 package com.lobsterai.skillgateway.audit;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.lobsterai.skillgateway.entity.GatewayOutboundAuditLog;
 import com.lobsterai.skillgateway.entity.SkillSshInvocationAudit;
-import com.lobsterai.skillgateway.repository.GatewayOutboundAuditLogRepository;
-import com.lobsterai.skillgateway.repository.SkillSshInvocationAuditRepository;
+import com.lobsterai.skillgateway.mapper.GatewayOutboundAuditLogMapper;
+import com.lobsterai.skillgateway.mapper.SkillSshInvocationAuditMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,9 +27,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.driverClassName=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=password",
-        "spring.jpa.hibernate.ddl-auto=create-drop",
-        "spring.sql.init.mode=never",
-        "spring.jpa.defer-datasource-initialization=false"
+        "spring.sql.init.mode=always",
+        "spring.sql.init.schema-locations=classpath:schema-h2.sql"
 })
 @AutoConfigureMockMvc
 class GatewayOutboundAuditMvcTest {
@@ -39,22 +39,20 @@ class GatewayOutboundAuditMvcTest {
     private MockMvc mockMvc;
 
     @Autowired
-    private GatewayOutboundAuditLogRepository outboundAuditLogRepository;
+    private GatewayOutboundAuditLogMapper outboundAuditLogMapper;
 
     @Autowired
-    private SkillSshInvocationAuditRepository skillSshInvocationAuditRepository;
+    private SkillSshInvocationAuditMapper skillSshInvocationAuditMapper;
 
     @BeforeEach
     void clean() {
-        skillSshInvocationAuditRepository.deleteAll();
-        outboundAuditLogRepository.deleteAll();
+        skillSshInvocationAuditMapper.delete(new LambdaQueryWrapper<>());
+        outboundAuditLogMapper.delete(new LambdaQueryWrapper<>());
     }
 
     @Test
     void postSkillApi_persistsOutboundAuditWithRawOriginBody() throws Exception {
-        String requestJson = """
-                {"url":"http://127.0.0.1:1/nope","method":"GET","headers":{}}
-                """;
+        String requestJson = "                {\"url\":\"http://127.0.0.1:1/nope\",\"method\":\"GET\",\"headers\":{}}";
         mockMvc.perform(post("/api/skills/api")
                         .header("X-Agent-Token", TOKEN)
                         .header("X-User-Id", "audit-user-1")
@@ -65,7 +63,7 @@ class GatewayOutboundAuditMvcTest {
                 .andExpect(status().is5xxServerError())
                 .andExpect(header().string(SkillIngressCaptureFilter.HEADER_CORRELATION_ID, "corr-it-1"));
 
-        List<GatewayOutboundAuditLog> rows = outboundAuditLogRepository.findAll();
+        List<GatewayOutboundAuditLog> rows = outboundAuditLogMapper.selectList(null);
         assertEquals(1, rows.size());
         GatewayOutboundAuditLog row = rows.get(0);
         assertEquals("corr-it-1", row.getCorrelationId());
@@ -82,9 +80,7 @@ class GatewayOutboundAuditMvcTest {
 
     @Test
     void postSkillApi_acceptsHeadersAsJsonArrays() throws Exception {
-        String requestJson = """
-                {"url":"http://127.0.0.1:1/nope","method":"GET","headers":{"Origin":["http://brdp.cs.iicbc"]},"body":""}
-                """;
+        String requestJson = "                {\"url\":\"http://127.0.0.1:1/nope\",\"method\":\"GET\",\"headers\":{\"Origin\":[\"http://brdp.cs.iicbc\"]},\"body\":\"\"}";
         mockMvc.perform(post("/api/skills/api")
                         .header("X-Agent-Token", TOKEN)
                         .header(SkillIngressCaptureFilter.HEADER_CORRELATION_ID, "corr-array-1")
@@ -103,7 +99,7 @@ class GatewayOutboundAuditMvcTest {
                         .content("{\"id\":999999,\"command\":\"ls\"}"))
                 .andExpect(status().isNotFound());
 
-        List<GatewayOutboundAuditLog> outRows = outboundAuditLogRepository.findAll();
+        List<GatewayOutboundAuditLog> outRows = outboundAuditLogMapper.selectList(null);
         assertEquals(1, outRows.size());
         GatewayOutboundAuditLog row = outRows.get(0);
         assertEquals("SSH", row.getOutboundKind());
@@ -111,7 +107,7 @@ class GatewayOutboundAuditMvcTest {
         assertEquals(99L, row.getSkillId());
         assertEquals("skill.linux-script", row.getSkillContext());
 
-        List<SkillSshInvocationAudit> sshRows = skillSshInvocationAuditRepository.findAll();
+        List<SkillSshInvocationAudit> sshRows = skillSshInvocationAuditMapper.selectList(null);
         assertEquals(1, sshRows.size());
         assertEquals(99L, sshRows.get(0).getSkillId());
         assertEquals("ssh-audit-user", sshRows.get(0).getUserId());

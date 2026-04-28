@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.audit.*;
 import com.lobsterai.skillgateway.entity.GatewayOutboundAuditLog;
 import com.lobsterai.skillgateway.entity.SkillSshInvocationAudit;
-import com.lobsterai.skillgateway.repository.GatewayOutboundAuditLogRepository;
-import com.lobsterai.skillgateway.repository.SkillSshInvocationAuditRepository;
+import com.lobsterai.skillgateway.mapper.GatewayOutboundAuditLogMapper;
+import com.lobsterai.skillgateway.mapper.SkillSshInvocationAuditMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,23 +25,23 @@ public class GatewayOutboundAuditService {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayOutboundAuditService.class);
 
-    private final GatewayOutboundAuditLogRepository repository;
-    private final SkillSshInvocationAuditRepository skillSshInvocationAuditRepository;
+    private final GatewayOutboundAuditLogMapper gatewayOutboundAuditLogMapper;
+    private final SkillSshInvocationAuditMapper skillSshInvocationAuditMapper;
     private final IngressSnapshotReader ingressSnapshotReader;
     private final ObjectMapper objectMapper;
     private final int maxPayloadBytes;
     private final java.util.List<String> extraRedactedHeaders;
 
     public GatewayOutboundAuditService(
-            GatewayOutboundAuditLogRepository repository,
-            SkillSshInvocationAuditRepository skillSshInvocationAuditRepository,
+            GatewayOutboundAuditLogMapper gatewayOutboundAuditLogMapper,
+            SkillSshInvocationAuditMapper skillSshInvocationAuditMapper,
             IngressSnapshotReader ingressSnapshotReader,
             ObjectMapper objectMapper,
             @Value("${app.gateway-audit.max-payload-bytes:1048576}") int maxPayloadBytes,
             @Value("${app.gateway-audit.redacted-headers:}") String extraRedactedHeaders
     ) {
-        this.repository = repository;
-        this.skillSshInvocationAuditRepository = skillSshInvocationAuditRepository;
+        this.gatewayOutboundAuditLogMapper = gatewayOutboundAuditLogMapper;
+        this.skillSshInvocationAuditMapper = skillSshInvocationAuditMapper;
         this.ingressSnapshotReader = ingressSnapshotReader;
         this.objectMapper = objectMapper;
         this.maxPayloadBytes = maxPayloadBytes;
@@ -65,7 +65,7 @@ public class GatewayOutboundAuditService {
             row.setStatus("SUCCESS");
             row.setErrorMessage(null);
             fillHttpResponse(row, response);
-            repository.save(row);
+            gatewayOutboundAuditLogMapper.insert(row);
         } catch (Exception e) {
             // Include cause: audit failures are swallowed (must not break RestTemplate), but ops need the SQL/constraint text.
             log.warn("gateway outbound audit (HTTP success) failed", e);
@@ -78,7 +78,8 @@ public class GatewayOutboundAuditService {
             GatewayOutboundAuditLog row = baseHttpRow(request, outboundBodyBytes, skillContext);
             row.setStatus("FAILURE");
             row.setErrorMessage(error != null && error.getMessage() != null ? error.getMessage() : "unknown error");
-            if (error instanceof HttpStatusCodeException hs) {
+            if (error instanceof HttpStatusCodeException) {
+                HttpStatusCodeException hs = (HttpStatusCodeException) error;
                 row.setOutboundResponseStatus(hs.getStatusCode().value());
                 try {
                     byte[] b = hs.getResponseBodyAsByteArray();
@@ -95,7 +96,8 @@ public class GatewayOutboundAuditService {
                 }
             } else {
                 try {
-                    if (error.getCause() instanceof HttpStatusCodeException hs) {
+                    if (error.getCause() instanceof HttpStatusCodeException) {
+                        HttpStatusCodeException hs = (HttpStatusCodeException) error.getCause();
                         row.setOutboundResponseStatus(hs.getStatusCode().value());
                         byte[] b = hs.getResponseBodyAsByteArray();
                         AuditPayloadTruncator.Result trb = AuditPayloadTruncator.truncate(b, maxPayloadBytes);
@@ -108,7 +110,7 @@ public class GatewayOutboundAuditService {
                 } catch (Exception ignored) {
                 }
             }
-            repository.save(row);
+            gatewayOutboundAuditLogMapper.insert(row);
         } catch (Exception e) {
             log.warn("gateway outbound audit (HTTP failure) failed", e);
         }
@@ -207,7 +209,7 @@ public class GatewayOutboundAuditService {
             row.setOriginTruncated(ingress.bodyTruncated());
             row.setOriginSha256(ingress.bodySha256());
 
-            repository.save(row);
+            gatewayOutboundAuditLogMapper.insert(row);
             saveSshSkillAudit(correlationId, uid, host, port, command, success, errorMessage, skillContext, executionResult, serverLedgerId);
         } catch (Exception e) {
             log.warn("gateway outbound audit (SSH) failed", e);
@@ -254,7 +256,7 @@ public class GatewayOutboundAuditService {
             } else {
                 a.setResultTruncated(false);
             }
-            skillSshInvocationAuditRepository.save(a);
+            skillSshInvocationAuditMapper.insert(a);
         } catch (Exception e) {
             log.warn("skill ssh invocation audit save failed", e);
         }

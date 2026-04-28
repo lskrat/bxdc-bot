@@ -2,7 +2,7 @@ package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.entity.SkillVisibility;
-import com.lobsterai.skillgateway.repository.SkillRepository;
+import com.lobsterai.skillgateway.mapper.SkillMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -20,34 +20,38 @@ public class SkillService {
     /** 可写 {@code createdBy=public} 平台行的固定管理员用户 ID（与 X-User-Id 字符串比较，非配置项） */
     public static final String SKILL_PLATFORM_ADMIN_USER_ID = "890728";
 
-    private final SkillRepository skillRepository;
+    private final SkillMapper skillMapper;
     private final ObjectMapper objectMapper;
 
-    public SkillService(SkillRepository skillRepository, ObjectMapper objectMapper) {
-        this.skillRepository = skillRepository;
+    public SkillService(SkillMapper skillMapper, ObjectMapper objectMapper) {
+        this.skillMapper = skillMapper;
         this.objectMapper = objectMapper;
     }
 
     public List<Skill> listSkillsForUser(String userId) {
         if (userId == null || userId.isBlank()) {
-            return skillRepository.findAllPublicSummary(SkillVisibility.PUBLIC);
+            return skillMapper.findAllPublicSummary();
         }
-        return skillRepository.findVisibleSummaryForUser(SkillVisibility.PUBLIC, SkillVisibility.PRIVATE, userId);
+        return skillMapper.findVisibleSummaryForUser(userId);
     }
 
     public Optional<Skill> getSkillByIdForUser(Long id, String userId) {
-        return skillRepository.findById(id).filter(skill -> canViewSkill(skill, userId));
+        Skill skill = skillMapper.selectById(id);
+        if (skill == null || !canViewSkill(skill, userId)) {
+            return Optional.empty();
+        }
+        return Optional.of(skill);
     }
 
     public Optional<Skill> getSkillByName(String name) {
-        return skillRepository.findByName(name);
+        return skillMapper.findByName(name);
     }
 
     public Skill createSkill(Skill skill, String userId) {
         if (userId == null || userId.isBlank()) {
             throw new IllegalArgumentException("X-User-Id is required");
         }
-        if (skillRepository.findByName(skill.getName()).isPresent()) {
+        if (skillMapper.findByName(skill.getName()).isPresent()) {
             throw new IllegalArgumentException("Skill with name " + skill.getName() + " already exists");
         }
         skill.setCreatedBy(userId);
@@ -57,12 +61,15 @@ public class SkillService {
         validateSkillAvatar(skill.getAvatar());
         skill.setExecutionMode(normalizeExecutionMode(skill.getExecutionMode()));
         skill.setConfiguration(normalizeAndValidateConfiguration(skill.getExecutionMode(), skill.getConfiguration()));
-        return skillRepository.save(skill);
+        skillMapper.insert(skill);
+        return skill;
     }
 
     public Skill updateSkill(Long id, Skill skillDetails, String userId) {
-        Skill skill = skillRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Skill not found for this id :: " + id));
+        Skill skill = skillMapper.selectById(id);
+        if (skill == null) {
+            throw new IllegalArgumentException("Skill not found for this id :: " + id);
+        }
         if (!canWriteSkill(skill, userId)) {
             throw new IllegalArgumentException("Skill not found for this id :: " + id);
         }
@@ -85,16 +92,19 @@ public class SkillService {
             skill.setAvatar(trimmed.isEmpty() ? null : trimmed);
         }
 
-        return skillRepository.save(skill);
+        skillMapper.updateById(skill);
+        return skill;
     }
 
     public void deleteSkill(Long id, String userId) {
-        Skill skill = skillRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("Skill not found for this id :: " + id));
+        Skill skill = skillMapper.selectById(id);
+        if (skill == null) {
+            throw new IllegalArgumentException("Skill not found for this id :: " + id);
+        }
         if (!canWriteSkill(skill, userId)) {
             throw new IllegalArgumentException("Skill not found for this id :: " + id);
         }
-        skillRepository.delete(skill);
+        skillMapper.deleteById(id);
     }
 
     /** Optional emoji; when set, same length bound as user avatar. */
@@ -138,10 +148,10 @@ public class SkillService {
         }
 
         String normalized = executionMode.trim().toUpperCase();
-        return switch (normalized) {
-            case "CONFIG", "OPENCLAW" -> normalized;
-            default -> throw new IllegalArgumentException("Unsupported executionMode: " + executionMode);
-        };
+        if ("CONFIG".equals(normalized) || "OPENCLAW".equals(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException("Unsupported executionMode: " + executionMode);
     }
 
     private String normalizeAndValidateConfiguration(String executionMode, String configuration) {
@@ -176,29 +186,27 @@ public class SkillService {
         String preset = readOptionalPreset(normalized);
 
         switch (kind) {
-            case "time" -> {
+            case "time":
                 normalized.put("kind", "api");
                 normalized.put("preset", "current-time");
                 return normalized;
-            }
-            case "monitor" -> {
+            case "monitor":
                 normalized.put("kind", "ssh");
                 normalized.put("preset", "server-resource-status");
                 return normalized;
-            }
-            case "api", "ssh" -> {
+            case "api":
+            case "ssh":
                 normalized.put("kind", kind);
                 if (preset != null && !preset.isBlank()) {
                     normalized.put("preset", preset);
                 }
                 normalized.remove("profile");
                 return normalized;
-            }
-            case "template" -> {
+            case "template":
                 normalized.put("kind", "template");
                 return normalized;
-            }
-            default -> throw new IllegalArgumentException("Unsupported CONFIG kind: " + kind);
+            default:
+                throw new IllegalArgumentException("Unsupported CONFIG kind: " + kind);
         }
     }
 
@@ -228,29 +236,32 @@ public class SkillService {
         }
 
         switch (kind) {
-            case "api" -> {
+            case "api":
                 requiredText(root, "operation");
                 requiredText(root, "method");
                 requiredText(root, "endpoint");
                 optionalText(root, "preset");
                 optionalText(root, "responseTimestampField");
                 optionalText(root, "interfaceDescription");
-            }
-            case "ssh" -> {
+                break;
+            case "ssh":
                 requiredText(root, "operation");
                 requiredText(root, "lookup");
                 requiredText(root, "executor");
                 requiredText(root, "command");
                 optionalText(root, "preset");
                 optionalBoolean(root, "readOnly");
-            }
-            case "template" -> {
+                break;
+            case "template":
                 requiredText(root, "prompt");
-            }
-            case "time", "monitor" -> throw new IllegalArgumentException(
-                    "Legacy CONFIG kind is no longer accepted directly. Use canonical kind api/ssh."
-            );
-            default -> throw new IllegalArgumentException("Unsupported CONFIG kind: " + kind);
+                break;
+            case "time":
+            case "monitor":
+                throw new IllegalArgumentException(
+                        "Legacy CONFIG kind is no longer accepted directly. Use canonical kind api/ssh."
+                );
+            default:
+                throw new IllegalArgumentException("Unsupported CONFIG kind: " + kind);
         }
     }
 

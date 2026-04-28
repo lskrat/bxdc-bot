@@ -42,8 +42,13 @@ public class ContentTypeNormalizingInterceptor implements ClientHttpRequestInter
         }
 
         @Override
-        public org.springframework.http.HttpStatusCode getStatusCode() throws IOException {
+        public org.springframework.http.HttpStatus getStatusCode() throws IOException {
             return delegate.getStatusCode();
+        }
+
+        @Override
+        public int getRawStatusCode() throws IOException {
+            return delegate.getRawStatusCode();
         }
 
         @Override

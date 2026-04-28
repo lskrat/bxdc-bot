@@ -12,6 +12,9 @@ import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+
+import com.lobsterai.skillgateway.entity.ServerLedger;
 
 /**
  * Skill 控制器。
@@ -118,7 +121,7 @@ public class SkillController {
         if (q == null || q.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "serverName (or legacy name) query parameter is required"));
         }
-        var candidates = serverLedgerService.findTopServerNameMatches(userId, q, 5);
+        List<ServerLedgerService.ServerNameCandidate> candidates = serverLedgerService.findTopServerNameMatches(userId, q, 5);
         List<Map<String, Object>> list = new java.util.ArrayList<>();
         for (ServerLedgerService.ServerNameCandidate c : candidates) {
             java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
@@ -183,7 +186,7 @@ public class SkillController {
         if (request.getId() == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
         }
-        var ledgerOpt = serverLedgerService.getServerLedgerByUserIdAndId(userId, request.getId());
+        Optional<ServerLedger> ledgerOpt = serverLedgerService.getServerLedgerByUserIdAndId(userId, request.getId());
         if (ledgerOpt.isEmpty()) {
             gatewayOutboundAuditService.recordSsh(
                     userId,
@@ -198,7 +201,7 @@ public class SkillController {
             );
             return ResponseEntity.status(404).body(Map.of("error", "Unknown server id: " + request.getId()));
         }
-        var ledger = ledgerOpt.get();
+        ServerLedger ledger = ledgerOpt.get();
         int defaultPort = ledger.getPort() != null && ledger.getPort() > 0 ? ledger.getPort() : 22;
         String defaultHost = ledger.getHost() != null ? ledger.getHost().trim() : "unknown";
         try {

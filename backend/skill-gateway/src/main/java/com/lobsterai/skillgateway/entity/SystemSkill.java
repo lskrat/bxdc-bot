@@ -1,59 +1,49 @@
 package com.lobsterai.skillgateway.entity;
 
-import jakarta.persistence.*;
-
+import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import java.time.LocalDateTime;
 
 /**
  * 平台系统级 Built-in Skill（与 {@code skills} 扩展表分离）。
  */
-@Entity
-@Table(name = "system_skills")
+@TableName("system_skills")
 public class SystemSkill {
 
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @TableId(type = IdType.AUTO)
     private Long id;
 
     /** 与 agent 工具名一致，如 api_caller、compute、ssh_executor */
-    @Column(name = "tool_name", nullable = false, unique = true, length = 128)
+    @TableField("tool_name")
     private String toolName;
 
-    @Column(columnDefinition = "TEXT")
+    @TableField("description")
     private String description;
 
     /**
      * 执行分类：API_PROXY、COMPUTE、SSH_EXECUTOR（与 {@link com.lobsterai.skillgateway.service.SystemSkillService} 对齐）。
      */
-    @Column(nullable = false, length = 32)
+    @TableField("kind")
     private String kind;
 
     /** 可选 JSON，预留扩展 */
-    @Column(columnDefinition = "TEXT")
+    @TableField("configuration")
     private String configuration;
 
-    @Column(nullable = false)
+    @TableField("enabled")
     private boolean enabled = true;
 
-    @Column(name = "schema_version")
+    @TableField("schema_version")
     private int schemaVersion = 1;
 
-    @Column(name = "created_at")
+    @TableField(value = "created_at", fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
 
-    @Column(name = "updated_at")
+    @TableField(value = "updated_at", fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updatedAt;
-
-    @PrePersist
-    protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
 
     public SystemSkill() {
     }
