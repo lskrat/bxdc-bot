@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.config;
 
+import com.lobsterai.skillgateway.audit.ContentTypeNormalizingInterceptor;
 import com.lobsterai.skillgateway.audit.GatewayHttpClientAuditInterceptor;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
@@ -10,13 +11,16 @@ import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestTemplate;
 
-import java.util.Collections;
+import java.util.List;
 
 @Configuration
 public class SkillGatewayHttpClientConfig {
 
     @Bean
-    public RestTemplate gatewayRestTemplate(GatewayHttpClientAuditInterceptor auditInterceptor) {
+    public RestTemplate gatewayRestTemplate(
+            GatewayHttpClientAuditInterceptor auditInterceptor,
+            ContentTypeNormalizingInterceptor contentTypeInterceptor
+    ) {
         var connectionManager = new PoolingHttpClientConnectionManager();
         connectionManager.setMaxTotal(50);
         connectionManager.setDefaultMaxPerRoute(20);
@@ -26,7 +30,7 @@ public class SkillGatewayHttpClientConfig {
         ClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory(httpClient);
         BufferingClientHttpRequestFactory buffering = new BufferingClientHttpRequestFactory(factory);
         RestTemplate restTemplate = new RestTemplate(buffering);
-        restTemplate.setInterceptors(Collections.singletonList(auditInterceptor));
+        restTemplate.setInterceptors(List.of(contentTypeInterceptor, auditInterceptor));
         return restTemplate;
     }
 }
