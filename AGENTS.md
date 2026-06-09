@@ -161,3 +161,9 @@ npx openspec archive <name> -y     # 归档（-y 跳过交互）
 - **尽量不修改 agent-core（NestJS）代码**：agent-core 作为 LLM 调度层应保持稳定，新增能力优先在 gateway（Java）侧以 Tool 形式接入
 - **新能力 = 新 Skill 类型**：参照 `api`（API 代理）、`ssh`（SSH 执行）的模式，在 `SystemSkillController.buildXxxConfigSchema()` 中定义配置 schema，在 gateway 侧实现执行逻辑
 - **Skill 编辑页用 Schema 驱动动态渲染**：`ConfigFormRenderer` 基于后端 `/api/system-skills/execution-types` 返回的 `configSchema` 动态渲染表单，新增 Skill 类型只需扩展后端 schema + ConfigFormRenderer 的 UI 类型支持（如 checkbox / radio 等），**不要**在 `SkillManagementModal.vue` 中为每种类型硬编码模板
+- **如需修改 agent-core（基础能力级别变更）**：如果需求确实无法通过 gateway Tool 接入实现（如修改 LLM 调度策略、tool-call 协议、SSE 通信机制等基础能力），必须在 OpenSpec proposal + design 中**明确说明**：
+  - 为什么不能走 Tool 接入？（技术瓶颈在哪）
+  - 对 agent-core 哪些模块有影响？（具体文件 / 类 / 函数）
+  - 对现有 Skill 类型的兼容性影响？（是否破坏已有 api / ssh / template / openclaw 的行为）
+  - 是否需要 agent-core 单独回归测试？
+  以便开发人员评估是否接受这次架构侵入
