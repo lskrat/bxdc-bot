@@ -156,3 +156,8 @@ npx openspec archive <name> -y     # 归档（-y 跳过交互）
 - schema 变更优先用 Flyway / Liquibase 或 Spring Data JPA 自动 ddl，或者 `schema-mysql.sql` 一次性初始化（Spring `spring.sql.init.mode=always` 自动跑）
 - **不要**在多个增量 commit 里改 `schema-mysql.sql` 让用户手动 `mysql -e "..."` 跑
 - 复杂 schema 变更（加索引 / 改字段类型 / 数据迁移）走 Java migration 类（参考 `StartupRecoveryRunner` 模式）
+
+### 7.4 新功能架构约束：不改 agent-core，走 Tool 接入 + Schema 动态渲染
+- **尽量不修改 agent-core（NestJS）代码**：agent-core 作为 LLM 调度层应保持稳定，新增能力优先在 gateway（Java）侧以 Tool 形式接入
+- **新能力 = 新 Skill 类型**：参照 `api`（API 代理）、`ssh`（SSH 执行）的模式，在 `SystemSkillController.buildXxxConfigSchema()` 中定义配置 schema，在 gateway 侧实现执行逻辑
+- **Skill 编辑页用 Schema 驱动动态渲染**：`ConfigFormRenderer` 基于后端 `/api/system-skills/execution-types` 返回的 `configSchema` 动态渲染表单，新增 Skill 类型只需扩展后端 schema + ConfigFormRenderer 的 UI 类型支持（如 checkbox / radio 等），**不要**在 `SkillManagementModal.vue` 中为每种类型硬编码模板
