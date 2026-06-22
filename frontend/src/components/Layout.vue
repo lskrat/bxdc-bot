@@ -11,7 +11,7 @@ import SkillHub from './SkillHub.vue';
 import ServerLedger from './ServerLedger.vue';
 import TaskNotificationBell from './TaskNotificationBell.vue';
 import ConversationSidebar from './ConversationSidebar.vue';
-import { AppIcon, ServerIcon } from 'tdesign-icons-vue-next';
+import { AppIcon, ServerIcon, ChartIcon } from 'tdesign-icons-vue-next';
 
 const router = useRouter();
 const { currentUser, logout } = useUser();
@@ -59,6 +59,10 @@ onBeforeUnmount(() => {
             </t-button>
             <t-button v-if="currentUser" theme="default" variant="text" @click="router.push('/settings')">
               大模型设置
+            </t-button>
+            <t-button v-if="currentUser" theme="default" variant="text" @click="router.push('/operations/skill-usage')">
+              <template #icon><ChartIcon /></template>
+              运营看板
             </t-button>
             <t-button v-if="currentUser" theme="default" variant="text" @click="profileEditVisible = true">
               编辑资料

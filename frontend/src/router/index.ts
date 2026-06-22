@@ -32,6 +32,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/operations/skill-usage',
+      name: 'skill-usage',
+      component: () => import('../views/SkillUsageDashboard.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/dev/file-parser',
       name: 'file-parser-test',
       component: FileParserTest,

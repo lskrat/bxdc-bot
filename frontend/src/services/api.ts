@@ -215,3 +215,67 @@ export async function updateApiDescription(
   if (!response.ok) throw new Error('Failed to update API description')
   return response.json()
 }
+
+// --- Skill Usage Dashboard ---
+
+export interface SkillUsageOverviewItem {
+  toolName: string
+  skillName: string
+  totalCalls: number
+  successCalls: number
+  failCalls: number
+  uniqueUsers: number
+  createdBy: string
+  firstCallTime: string
+  lastCallTime: string
+  avgDurationMs: number
+}
+
+export async function fetchSkillUsageOverview(
+  params: { startDate?: string; endDate?: string; keyword?: string } = {},
+): Promise<SkillUsageOverviewItem[]> {
+  const searchParams = new URLSearchParams()
+  if (params.startDate) searchParams.set('startDate', params.startDate)
+  if (params.endDate) searchParams.set('endDate', params.endDate)
+  if (params.keyword) searchParams.set('keyword', params.keyword)
+  const qs = searchParams.toString() ? `?${searchParams.toString()}` : ''
+  const response = await fetch(apiUrl(`/api/skill-usage/overview${qs}`), {
+    headers: { 'X-User-Id': localStorage.getItem('user_id') || '' },
+  })
+  if (!response.ok) throw new Error('Failed to fetch skill usage overview')
+  return response.json()
+}
+
+export interface SkillUsageDetailPage {
+  total: number
+  page: number
+  size: number
+  records: SkillUsageDetailRecord[]
+}
+
+export interface SkillUsageDetailRecord {
+  id: number
+  userId: string
+  status: string
+  startTime: string
+  endTime: string
+  durationMs: number
+  errorMessage: string | null
+}
+
+export async function fetchSkillUsageDetails(
+  skillName: string,
+  page: number = 1,
+  size: number = 20,
+  startDate?: string,
+  endDate?: string,
+): Promise<SkillUsageDetailPage> {
+  const params = new URLSearchParams({ skillName, page: String(page), size: String(size) })
+  if (startDate) params.set('startDate', startDate)
+  if (endDate) params.set('endDate', endDate)
+  const response = await fetch(apiUrl(`/api/skill-usage/details?${params}`), {
+    headers: { 'X-User-Id': localStorage.getItem('user_id') || '' },
+  })
+  if (!response.ok) throw new Error('Failed to fetch skill usage details')
+  return response.json()
+}
