@@ -315,3 +315,17 @@ CREATE TABLE IF NOT EXISTS api_call_logs (
     INDEX idx_acl_user_id (user_id),
     INDEX idx_acl_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API调用记录表';
+
+-- user_team（用户团队表）
+CREATE TABLE IF NOT EXISTS user_team (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    team_name VARCHAR(255) NOT NULL,
+    members TEXT COMMENT '团队成员用户ID，多个用英文逗号分隔',
+    creator_id VARCHAR(64) NOT NULL,
+    created_at DATETIME NOT NULL,
+    updater_id VARCHAR(64),
+    updated_at DATETIME,
+    is_deleted INT DEFAULT 0 COMMENT '0=未删除, 1=已删除',
+    INDEX idx_creator_id (creator_id),
+    INDEX idx_is_deleted (is_deleted)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户团队表';
