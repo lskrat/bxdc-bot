@@ -106,6 +106,24 @@ public class SkillController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    /**
+     * 保存skill的markdown介绍（20260626）
+     * @param userId
+     * @param skill
+     * @return
+     *
+     * http://localhost:18080/api/skills/updateIntroMd
+     * POST JSON
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     * Content-Type:application/json
+     * JSON：
+     * {
+     *   "id":40,
+     *   "introMd": "# 天气查询技能\n\n## 功能概述\n用于查询指定城市的天气信息..."
+     * }
+     */
     @PostMapping("/updateIntroMd")
     public ResponseEntity<?> updateSkillIntroMd(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
@@ -145,14 +163,20 @@ public class SkillController {
     // --- Skill Parse from Description ---
 
     /**
-     * 从自然语言描述解析生成 Skill 对象。
-     * <p>
-     * 不持久化到数据库，仅返回 Skill JSON。
-     * </p>
-     *
+     * 从自然语言描述解析生成 Skill 对象（20260626）
      * @param userId      用户 ID（从 X-User-Id header 获取）
      * @param request     包含 description 的请求体
      * @return SkillParseResponse 解析响应（包含 skill、warnings、extractedFields）
+     *
+     * 添加skill（自然语言转Skill对象）
+     * http://localhost:18080/api/skills/parse-from-description
+     * POST JSON
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     * Content-Type:application/json
+     * JSON:
+     * {"description":"新增一个skill，查询当日新闻。地址 http://v.juhe.cn/toutiao/index?key=c990e44845181032f48cc9a556e3a006&type=top。请求类型 GET。接口描述：返回头条(推荐)、国内，娱乐，体育，军事，科技，财经，时尚等新闻信息; 数据来源网络整理"}
      */
     @PostMapping("/parse-from-description")
     public ResponseEntity<?> parseFromDescription(
@@ -219,6 +243,38 @@ public class SkillController {
         }
     }
 
+    /**
+     * 根据Skill对象信息生成整体介绍（20260626）
+     * @param userId
+     * @param skill
+     * @return
+     *
+     * http://localhost:18080/api/skills/generate-intro
+     * POST JSON
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     * Content-Type:application/json
+     * JSON：
+     * {
+     * 	"id": null,
+     * 	"name": "，查询当日新闻。地址 http://v.juhe.cn/toutiao/index?key=c990e44845181032f48cc9a556e3a006&type=top。请求类型 GET。接口描述：返回头条(推荐)、国内，娱乐，体育，军事，科技，财经，时尚等新闻信息; 数据来源网络整理",
+     * 	"description": "返回头条(推荐)、国内，娱乐，体育，军事，科技，财经，时尚等新闻信息; 数据来源网络整理",
+     * 	"type": "API",
+     * 	"configuration": "{\"kind\":\"api\",\"operation\":\"查询当日新闻\",\"method\":\"GET\",\"endpoint\":\"http://v.juhe.cn/toutiao/index\",\"headers\":{},\"queryParams\":{\"type\":\"top。请求类型\",\"key\":\"c990e44845181032f48cc9a556e3a006\"}}",
+     * 	"executionMode": "CONFIG",
+     * 	"enabled": true,
+     * 	"requiresConfirmation": false,
+     * 	"visibility": "PRIVATE",
+     * 	"avatar": null,
+     * 	"createdBy": null,
+     * 	"createdAt": null,
+     * 	"updatedAt": null,
+     * 	"templatePlaceholders": [],
+     * 	"schemaPropertiesJson": null,
+     * 	"schemaProperties": {}
+     * }
+     */
     @PostMapping("/generate-intro")
     public ResponseEntity<?> generateSkillIntro(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
