@@ -20,6 +20,22 @@ public class UserTeamController {
         this.userTeamService = userTeamService;
     }
 
+
+    /**
+     * 1. 新增团队
+     * http://localhost:18080/api/user-teams
+     * POST JSON
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     * Content-Type:application/json
+     * JSON:
+     * {"teamName":"测试团队","members":"100001,100002,100003"}
+     *
+     * @param userId
+     * @param payload
+     * @return
+     */
     @PostMapping
     public ResponseEntity<?> createUserTeam(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
@@ -37,6 +53,20 @@ public class UserTeamController {
         }
     }
 
+    /**
+     * 2. 查询团队列表
+     * 查询当前用户创建的团队列表（分页）
+     * http://localhost:18080/api/user-teams?page=1&size=20
+     * GET
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     *
+     * @param userId
+     * @param page
+     * @param size
+     * @return
+     */
     @GetMapping
     public ResponseEntity<?> getUserTeams(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
@@ -53,15 +83,44 @@ public class UserTeamController {
         }
     }
 
-    @GetMapping("/{id}")
-    public ResponseEntity<?> getUserTeamById(@PathVariable Long id) {
-        UserTeam userTeam = userTeamService.getUserTeamById(id);
+    /**
+     * 3. 查询单个团队
+     * 根据团队ID查询团队详情
+     * http://localhost:18080/api/user-teams/1
+     * GET
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     *
+     * @param userId 用户id
+     * @return
+     */
+    @GetMapping("/{userId}")
+    public ResponseEntity<?> getUserTeamById(@PathVariable Long userId) {
+        UserTeam userTeam = userTeamService.getUserTeamById(userId);
         if (userTeam == null) {
             return ResponseEntity.notFound().build();
         }
         return ResponseEntity.ok(userTeam);
     }
 
+    /**
+     * 4. 更新团队
+     * 更新指定团队的名称和成员信息
+     * http://localhost:18080/api/user-teams/1
+     * PUT JSON
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     * Content-Type:application/json
+     * JSON:
+     * {"teamName":"更新后的团队名称","members":"100001,100002,100003,100004"}
+     *
+     * @param id
+     * @param userId
+     * @param payload
+     * @return
+     */
     @PutMapping("/{id}")
     public ResponseEntity<?> updateUserTeam(
             @PathVariable Long id,
@@ -83,6 +142,19 @@ public class UserTeamController {
         }
     }
 
+    /**
+     * 5. 删除团队
+     * 逻辑删除指定团队（标记为已删除状态）
+     * http://localhost:18080/api/user-teams/1
+     * DELETE
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     *
+     * @param id
+     * @param userId
+     * @return
+     */
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteUserTeam(
             @PathVariable Long id,
