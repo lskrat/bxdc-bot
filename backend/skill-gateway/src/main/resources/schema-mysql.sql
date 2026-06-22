@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS skills (
     name VARCHAR(255) NOT NULL UNIQUE,
     description TEXT,
     type VARCHAR(255) NOT NULL,
-    skill_owner_type TINYINT(1) DEFAULT 1 COMMENT '1: 用户技能, 2: 系统技能',
     configuration TEXT,
     schema_properties TEXT,
     execution_mode VARCHAR(255) DEFAULT 'CONFIG',
@@ -22,6 +21,7 @@ CREATE TABLE IF NOT EXISTS skills (
     visibility VARCHAR(16) NOT NULL DEFAULT 'PUBLIC',
     avatar VARCHAR(32),
     created_by VARCHAR(128),
+    intro_md TEXT,
     created_at DATETIME,
     updated_at DATETIME
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -252,7 +252,6 @@ CREATE TABLE IF NOT EXISTS user_files (
     parsed_summary LONGTEXT COMMENT '文件解析后的 JSON 摘要',
     upload_time DATETIME NOT NULL COMMENT '上传时间',
     source_file_id BIGINT NULL COMMENT '源文件 ID（用于临时文件关联源文件）',
-    is_tool_generated TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否由工具生成（0=用户上传, 1=写文件/修改文件tool生成）',
     -- 预留：会话/对话 ID（关联 agent-core 调工具时的 session 和 conversation）
     -- 可空，老数据不填；未来按 session / conversation 维度查询附件
     session_id VARCHAR(128) NULL COMMENT '预留：关联会话 ID',
@@ -272,7 +271,6 @@ CREATE TABLE IF NOT EXISTS conversations (
     user_id VARCHAR(64) NOT NULL COMMENT '所属用户ID',
     name VARCHAR(255) DEFAULT '' COMMENT '对话名称（默认用户输入前18字）',
     enabled_skills JSON COMMENT '该对话启用的Skill ID列表，如 [1, 3, 5]',
-    enabled_files JSON DEFAULT NULL COMMENT '该对话启用的文件ID列表，如 [1, 3, 5]；NULL=存量对话不启用过滤',
     status VARCHAR(32) DEFAULT 'active' COMMENT '状态：active/archived/deleted',
     is_published TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已发布为API: 0=未发布, 1=已发布',
     api_description TEXT NULL COMMENT 'API描述文本，发布时填写，作为LLM对话上下文的系统消息',
@@ -317,17 +315,3 @@ CREATE TABLE IF NOT EXISTS api_call_logs (
     INDEX idx_acl_user_id (user_id),
     INDEX idx_acl_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='API调用记录表';
-
--- python_sandbox（Python 沙箱配置表 - 第三方 Python 沙箱服务注册表，由 admin 维护）
-CREATE TABLE IF NOT EXISTS python_sandbox (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(64) NOT NULL UNIQUE COMMENT '沙箱引用名，Skill.configuration.sandboxName 引用此字段',
-    endpoint_url VARCHAR(1024) NOT NULL COMMENT '完整 URL（含 scheme + host + path），如 http://python-svc:9000/execute',
-    http_method VARCHAR(8) NOT NULL DEFAULT 'POST' COMMENT 'POST | PUT 等；首版建议固定 POST',
-    service_params TEXT NOT NULL COMMENT '第三方服务的 LLM 入参 JSON Schema（JSON 对象，含 type=object / properties / required）；决定 LLM 调用时传什么字段、出站 body 长什么样。MySQL TEXT 不允许 DEFAULT，缺省值由 Java 端 PythonSandboxService.toEntity 兜底为 "{}"',
-    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '状态：0=禁用 / 1=启用；禁用后 listExecutionTypes 不返回，Skill 执行时返回 400',
-    description TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_python_sandbox_enabled (enabled)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Python 沙箱注册表';
