@@ -109,7 +109,7 @@ const toggleNodeExpand = (nodeId: string) => {
 
 const getDisplayContent = (node: ThinkingNode): string | undefined => {
   if (node.type === 'llm_call') {
-    return '正在推理...'
+    return node.status === 'completed' ? '推理完成' : '正在推理...'
   }
   return node.content
 }

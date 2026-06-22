@@ -91,9 +91,21 @@ public class SkillController {
 
     @GetMapping
     public List<Skill> getAllSkills(
-            @RequestHeader(value = "X-User-Id", required = false) String userId
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestParam(value = "ownerType", required = false) Integer ownerType
     ) {
-        return skillService.listSkillsForUser(userId);
+        return skillService.listSkillsForUser(userId, ownerType);
+    }
+
+    /**
+     * 按技能所有者类型检索技能（agent-core 加载用户/系统技能时调用）。
+     * ownerType=1 用户技能，ownerType=2 系统技能；仅返回 enabled=true 的技能。
+     */
+    @GetMapping("/by-owner-type")
+    public List<Skill> getSkillsByOwnerType(
+            @RequestParam(value = "ownerType") Integer ownerType
+    ) {
+        return skillService.listSkillsByOwnerType(ownerType);
     }
 
     @GetMapping("/{id}")

@@ -105,6 +105,17 @@ export function useThinkingMode() {
   ): ThinkingNode | null => {
     if (!eventData || typeof eventData !== 'object') return null
 
+    // 辅助：完成指定类型的所有活跃节点
+    const completeActiveNodesOfType = (type: ThinkingNodeType) => {
+      const session = getSession(sessionId)
+      if (!session) return
+      session.nodes.forEach(n => {
+        if (n.type === type && n.status === 'active') {
+          n.status = 'completed'
+        }
+      })
+    }
+
     // 工具调用事件
     if (eventData.type === 'tool_status') {
       const existingNode = getSession(sessionId)?.nodes.find(
@@ -122,6 +133,8 @@ export function useThinkingMode() {
         }
         return existingNode
       } else if (eventData.status === 'running') {
+        // 工具开始调用，说明 LLM 推理已结束
+        completeActiveNodesOfType('llm_call')
         // 创建新节点
         return addNode(sessionId, {
           type: 'tool_call',
@@ -148,6 +161,9 @@ export function useThinkingMode() {
         return existingLlmNode
       }
       
+      // 新一轮 LLM 推理，完成之前的处理节点
+      completeActiveNodesOfType('processing')
+
       // 创建新的 LLM 节点
       return addNode(sessionId, {
         type: 'llm_call',
@@ -159,6 +175,9 @@ export function useThinkingMode() {
 
     // 助手回复事件
     if (eventData.role === 'assistant' && eventData.content) {
+      // 收到助手回复，说明 LLM 推理已结束
+      completeActiveNodesOfType('llm_call')
+
       const content = typeof eventData.content === 'string' 
         ? eventData.content 
         : JSON.stringify(eventData.content)

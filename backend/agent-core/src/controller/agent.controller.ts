@@ -93,6 +93,30 @@ function extractInterruptEntries(payload: unknown): Array<{ value?: unknown }> {
   return Array.isArray(arr) ? arr : [];
 }
 
+/**
+ * 从 LangGraph "messages" streamMode 事件中提取 AI token 文本。
+ * 返回空字符串表示跳过（非 AI 消息或无文本内容）。
+ */
+function extractMessageStreamToken(raw: unknown): string {
+  if (!Array.isArray(raw) || raw.length < 2 || raw[0] !== 'messages') return '';
+  const msgData = raw[1];
+  if (!Array.isArray(msgData) || msgData.length < 1) return '';
+  const chunk = msgData[0];
+  if (!chunk) return '';
+  // 仅处理 AI 消息 chunk（跳过 tool / human / system）
+  const type = chunk._getType?.() ?? chunk.type ?? '';
+  if (type !== 'ai' && type !== 'AIMessageChunk') {
+    const ctorName = chunk.constructor?.name ?? '';
+    if (!ctorName.includes('AIMessage')) return '';
+  }
+  const content = chunk.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map((p: any) => typeof p === 'string' ? p : p?.text ?? '').join('');
+  }
+  return '';
+}
+
 /** Drop interrupt-only updates so SSE does not expose internal channel data to the client. */
 function stripInterruptForClient(payload: unknown): unknown {
   if (!payload || typeof payload !== 'object') return payload;
@@ -728,13 +752,23 @@ export class AgentController {
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
           console.log('[DEBUG] Final messages count:', messages.length);
 
-          const graphConfig = { configurable: { thread_id: sessionId }, recursionLimit: 50 };
+          const graphConfig = { configurable: { thread_id: sessionId }, recursionLimit: 50, streamMode: ["updates", "messages"] as any };
           let stream: AsyncIterable<any> = await agent.stream({ messages }, graphConfig);
           let iterator = (stream as AsyncIterable<any>)[Symbol.asyncIterator]();
+          // 记录 messages 模式已流式推送的内容，用于 updates 模式去重
+          let messagesModeAccum = '';
 
           outer: while (true) {
             const { value: raw, done } = await iterator.next();
             if (done) break;
+
+            // Token 级流式：messages 模式 chunk 携带 LLM 逐 token 内容
+            const tokenText = extractMessageStreamToken(raw);
+            if (tokenText.length > 0) {
+              messagesModeAccum += tokenText;
+              subject.next({ data: JSON.stringify({ role: 'assistant', content: tokenText }) });
+              continue;
+            }
 
             const payload = unwrapLangGraphStreamPayload(raw);
             const interruptEntries = extractInterruptEntries(payload);
@@ -790,7 +824,7 @@ export class AgentController {
                   const ac = new AbortController();
                   const cancelResumeStream = await agent.stream(
                     new Command({ resume: { confirmed: false } }),
-                    { configurable: { thread_id: sessionId }, signal: ac.signal },
+                    { configurable: { thread_id: sessionId }, signal: ac.signal, streamMode: ["updates", "messages"] as any },
                   );
                   let cancelIter = cancelResumeStream[Symbol.asyncIterator]();
                   const MAX_CANCEL_CHUNKS = 24;
@@ -804,6 +838,12 @@ export class AgentController {
                       const name = e && typeof e === 'object' && 'name' in e ? (e as Error).name : '';
                       if (name === 'AbortError' || ac.signal.aborted) break;
                       throw e;
+                    }
+                    // 取消流也处理 messages 模式 token
+                    const cancelToken = extractMessageStreamToken(raw);
+                    if (cancelToken.length > 0) {
+                      subject.next({ data: JSON.stringify({ role: 'assistant', content: cancelToken }) });
+                      continue;
                     }
                     const payload = unwrapLangGraphStreamPayload(raw);
                     const forward = stripInterruptForClient(payload);
@@ -889,13 +929,20 @@ export class AgentController {
                 }
 
                 if (nextContent && nextContent.length > 0) {
-                  const newContent = fullAssistantResponse.length > 0 && nextContent.startsWith(fullAssistantResponse)
-                    ? nextContent.slice(fullAssistantResponse.length)
-                    : nextContent;
-
-                  if (newContent.length > 0) {
+                  if (messagesModeAccum.length > 0) {
+                    // messages 模式已流式推送过，仅更新 fullAssistantResponse 用于日志/记忆
                     fullAssistantResponse = nextContent;
-                    subject.next({ data: JSON.stringify({ role: 'assistant', content: newContent }) });
+                    messagesModeAccum = '';
+                  } else {
+                    // 非流式回退：messages 模式未产生内容时，沿用原有 diff 逻辑
+                    const newContent = fullAssistantResponse.length > 0 && nextContent.startsWith(fullAssistantResponse)
+                      ? nextContent.slice(fullAssistantResponse.length)
+                      : nextContent;
+
+                    if (newContent.length > 0) {
+                      fullAssistantResponse = nextContent;
+                      subject.next({ data: JSON.stringify({ role: 'assistant', content: newContent }) });
+                    }
                   }
                 }
               }
