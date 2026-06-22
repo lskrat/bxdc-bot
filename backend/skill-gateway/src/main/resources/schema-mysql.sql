@@ -21,9 +21,11 @@ CREATE TABLE IF NOT EXISTS skills (
     visibility VARCHAR(16) NOT NULL DEFAULT 'PUBLIC',
     avatar VARCHAR(32),
     created_by VARCHAR(128),
+    team_id VARCHAR(512) NULL,
     intro_md TEXT,
     created_at DATETIME,
-    updated_at DATETIME
+    updated_at DATETIME,
+    INDEX idx_skills_team_id (team_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS audit_logs (

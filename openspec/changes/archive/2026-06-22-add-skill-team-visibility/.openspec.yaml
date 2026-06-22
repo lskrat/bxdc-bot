@@ -1,0 +1,24 @@
+﻿specVersion: 1.0.0
+name: add-skill-team-visibility
+title: Skill集成团队功能
+description: 在Skill对象的可见性字段中添加"团队"选项，支持技能按团队维度进行权限管理
+type: feature
+status: proposed
+createdAt: "2026-06-22"
+artifacts:
+  - id: proposal
+    path: proposal.md
+    type: proposal
+    status: done
+  - id: design
+    path: design.md
+    type: design
+    status: done
+  - id: tasks
+    path: tasks.md
+    type: tasks
+    status: done
+applyRequires:
+  - proposal
+  - design
+  - tasks

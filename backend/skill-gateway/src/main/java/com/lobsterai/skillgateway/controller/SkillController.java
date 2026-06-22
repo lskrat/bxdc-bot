@@ -160,6 +160,24 @@ public class SkillController {
         }
     }
 
+    /**
+     * 创建skill（20260626）
+     * POST http://localhost:18080/api/skills
+     * Content-Type: application/json
+     * X-User-Id: 123456
+     * {
+     *   "name": "多团队共享技能",
+     *   "description": "多个团队成员都可见",
+     *   "type": "API",
+     *   "configuration": "{\"kind\":\"api\",\"operation\":\"公共查询\",\"method\":\"GET\",\"endpoint\":\"http://api.example.com/common\"}",
+     *   "visibility": "TEAM",
+     *   "teamId": "1, 2, 3"
+     * }
+     *
+     * @param skill
+     * @param userId
+     * @return
+     */
     @PostMapping
     public ResponseEntity<?> createSkill(
             @RequestBody Skill skill,
@@ -226,6 +244,28 @@ public class SkillController {
         }
     }
 
+    /**
+     * 更新skill（20260626）
+     *PUT http://localhost:18080/api/skills/46
+     * Content-Type: application/json
+     * X-User-Id: 123456
+     * {
+     *   "name": "多团队共享技能",
+     *   "description": "多个团队成员都可见",
+     *   "type": "API",
+     *   "configuration": "{\"kind\":\"api\",\"operation\":\"公共查询\",\"method\":\"GET\",\"endpoint\":\"http://api.example.com/common\"}",
+     *   "executionMode": "CONFIG",
+     *   "enabled": true,
+     *   "requiresConfirmation": false,
+     *   "visibility": "TEAM",
+     *   "teamId": "1"
+     * }
+     *
+     * @param id
+     * @param skillDetails
+     * @param userId
+     * @return
+     */
     @PutMapping("/{id}")
     public ResponseEntity<?> updateSkill(
             @PathVariable Long id,

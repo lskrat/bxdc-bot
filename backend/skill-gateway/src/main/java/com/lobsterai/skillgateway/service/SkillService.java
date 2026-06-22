@@ -2,7 +2,9 @@ package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.entity.SkillVisibility;
+import com.lobsterai.skillgateway.entity.UserTeam;
 import com.lobsterai.skillgateway.mapper.SkillMapper;
+import com.lobsterai.skillgateway.mapper.UserTeamMapper;
 import com.lobsterai.skillgateway.util.StringUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,10 +25,12 @@ public class SkillService {
 
     private final SkillMapper skillMapper;
     private final ObjectMapper objectMapper;
+    private final UserTeamMapper userTeamMapper;
 
-    public SkillService(SkillMapper skillMapper, ObjectMapper objectMapper) {
+    public SkillService(SkillMapper skillMapper, ObjectMapper objectMapper, UserTeamMapper userTeamMapper) {
         this.skillMapper = skillMapper;
         this.objectMapper = objectMapper;
+        this.userTeamMapper = userTeamMapper;
     }
 
     public List<Skill> listSkillsForUser(String userId) {
@@ -83,6 +87,39 @@ public class SkillService {
         if (skill.getSkillOwnerType() == null) {
             skill.setSkillOwnerType(1);
         }
+
+        if (SkillVisibility.TEAM.equals(skill.getVisibility())) {
+            if (skill.getTeamId() == null || skill.getTeamId().trim().isEmpty()) {
+                throw new IllegalArgumentException("TEAM visibility requires a team_id");
+            }
+            String[] teamIdArray = skill.getTeamId().split(",");
+            boolean validTeamFound = false;
+            for (String teamIdStr : teamIdArray) {
+                String trimmed = teamIdStr.trim();
+                if (!trimmed.isEmpty()) {
+                    try {
+                        Long teamId = Long.parseLong(trimmed);
+                        if (!userTeamMapper.exists(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<UserTeam>()
+                                .eq(UserTeam::getId, teamId)
+                                .eq(UserTeam::getIsDeleted, 0))) {
+                            throw new IllegalArgumentException("Team not found: " + teamId);
+                        }
+                        validTeamFound = true;
+                    } catch (NumberFormatException e) {
+                        throw new IllegalArgumentException("Invalid team_id format: " + trimmed);
+                    }
+                }
+            }
+            if (!validTeamFound) {
+                throw new IllegalArgumentException("TEAM visibility requires at least one valid team_id");
+            }
+            if (!isUserInTeam(userId, skill.getTeamId())) {
+                throw new IllegalArgumentException("User is not a member of any specified team");
+            }
+        } else {
+            skill.setTeamId(null);
+        }
+
         validateSkillAvatar(skill.getAvatar());
         skill.setExecutionMode(normalizeExecutionMode(skill.getExecutionMode()));
         skill.setConfiguration(normalizeAndValidateConfiguration(skill.getExecutionMode(), skill.getConfiguration()));
@@ -110,6 +147,39 @@ public class SkillService {
         skill.setRequiresConfirmation(skillDetails.isRequiresConfirmation());
         if (skillDetails.getVisibility() != null) {
             skill.setVisibility(skillDetails.getVisibility());
+
+            if (SkillVisibility.TEAM.equals(skillDetails.getVisibility())) {
+                if (skillDetails.getTeamId() == null || skillDetails.getTeamId().trim().isEmpty()) {
+                    throw new IllegalArgumentException("TEAM visibility requires a team_id");
+                }
+                String[] teamIdArray = skillDetails.getTeamId().split(",");
+                boolean validTeamFound = false;
+                for (String teamIdStr : teamIdArray) {
+                    String trimmed = teamIdStr.trim();
+                    if (!trimmed.isEmpty()) {
+                        try {
+                            Long teamId = Long.parseLong(trimmed);
+                            if (!userTeamMapper.exists(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<UserTeam>()
+                                    .eq(UserTeam::getId, teamId)
+                                    .eq(UserTeam::getIsDeleted, 0))) {
+                                throw new IllegalArgumentException("Team not found: " + teamId);
+                            }
+                            validTeamFound = true;
+                        } catch (NumberFormatException e) {
+                            throw new IllegalArgumentException("Invalid team_id format: " + trimmed);
+                        }
+                    }
+                }
+                if (!validTeamFound) {
+                    throw new IllegalArgumentException("TEAM visibility requires at least one valid team_id");
+                }
+                skill.setTeamId(skillDetails.getTeamId());
+            } else {
+                skill.setTeamId(null);
+            }
+        }
+        if (skillDetails.getVisibility() == null && SkillVisibility.TEAM.equals(skill.getVisibility()) && skillDetails.getTeamId() != null && !skillDetails.getTeamId().trim().isEmpty()) {
+            skill.setTeamId(skillDetails.getTeamId());
         }
         // Only touch avatar when the client sends a value. Omitted / null must preserve the stored emoji
         // (e.g. toggle enabled sends a partial body; JSON.stringify drops undefined → Jackson null).
@@ -168,28 +238,88 @@ public class SkillService {
         }
     }
 
-    private static boolean canViewSkill(Skill skill, String userId) {
+    private boolean canViewSkill(Skill skill, String userId) {
         if (skill.getVisibility() == SkillVisibility.PUBLIC) {
             return true;
         }
         if (userId == null || StringUtils.isBlank(userId)) {
             return false;
         }
+        if (skill.getVisibility() == SkillVisibility.PRIVATE) {
+            return userId.equals(skill.getCreatedBy());
+        }
+        if (skill.getVisibility() == SkillVisibility.TEAM && skill.getTeamId() != null) {
+            return isUserInTeam(userId, skill.getTeamId());
+        }
         return userId.equals(skill.getCreatedBy());
     }
 
-    private static boolean canWriteSkill(Skill skill, String userId) {
+    private boolean canWriteSkill(Skill skill, String userId) {
         if (userId == null || StringUtils.isBlank(userId)) {
             return false;
         }
         if (skill.getVisibility() == SkillVisibility.PRIVATE) {
             return userId.equals(skill.getCreatedBy());
         }
-        // PUBLIC: only creator, except platform rows (createdBy=public) editable by fixed admin id only
         if (PLATFORM_PUBLIC_AUTHOR.equals(skill.getCreatedBy())) {
             return SKILL_PLATFORM_ADMIN_USER_ID.equals(userId);
         }
+        if (skill.getVisibility() == SkillVisibility.TEAM) {
+            if (userId.equals(skill.getCreatedBy())) {
+                return true;
+            }
+            return isUserTeamCreator(userId, skill.getTeamId());
+        }
         return userId.equals(skill.getCreatedBy());
+    }
+
+    private boolean isUserInTeam(String userId, String teamIds) {
+        if (teamIds == null || teamIds.isEmpty()) {
+            return false;
+        }
+        String[] teamIdArray = teamIds.split(",");
+        for (String teamIdStr : teamIdArray) {
+            String trimmed = teamIdStr.trim();
+            if (!trimmed.isEmpty()) {
+                try {
+                    Long teamId = Long.parseLong(trimmed);
+                    if (userTeamMapper.findById(teamId)
+                            .map(team -> {
+                                String members = team.getMembers();
+                                return members != null && members.contains(userId);
+                            })
+                            .orElse(false)) {
+                        return true;
+                    }
+                } catch (NumberFormatException e) {
+                    // ignore invalid teamId
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean isUserTeamCreator(String userId, String teamIds) {
+        if (teamIds == null || teamIds.isEmpty()) {
+            return false;
+        }
+        String[] teamIdArray = teamIds.split(",");
+        for (String teamIdStr : teamIdArray) {
+            String trimmed = teamIdStr.trim();
+            if (!trimmed.isEmpty()) {
+                try {
+                    Long teamId = Long.parseLong(trimmed);
+                    if (userTeamMapper.findById(teamId)
+                            .map(team -> userId.equals(team.getCreatorId()))
+                            .orElse(false)) {
+                        return true;
+                    }
+                } catch (NumberFormatException e) {
+                    // ignore invalid teamId
+                }
+            }
+        }
+        return false;
     }
 
     private static String normalizeExecutionMode(String executionMode) {

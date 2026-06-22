@@ -47,6 +47,9 @@ public class Skill {
     @TableField("created_by")
     private String createdBy;
 
+    @TableField("team_id")
+    private String teamId;
+
     @TableField("intro_md")
     private String introMd;
 
@@ -149,6 +152,14 @@ public class Skill {
 
     public void setCreatedBy(String createdBy) {
         this.createdBy = createdBy;
+    }
+
+    public String getTeamId() {
+        return teamId;
+    }
+
+    public void setTeamId(String teamId) {
+        this.teamId = teamId;
     }
 
     public String getIntroMd() {

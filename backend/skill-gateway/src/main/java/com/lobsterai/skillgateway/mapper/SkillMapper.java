@@ -30,10 +30,12 @@ public interface SkillMapper extends BaseMapper<Skill> {
     }
 
     default List<Skill> findVisibleSummaryForUser(String userId) {
-        return selectList(new LambdaQueryWrapper<Skill>()
-                .eq(Skill::getVisibility, SkillVisibility.PUBLIC)
-                .or(w -> w.eq(Skill::getVisibility, SkillVisibility.PRIVATE)
-                        .eq(Skill::getCreatedBy, userId)));
+        return selectList(new QueryWrapper<Skill>()
+                .eq("visibility", SkillVisibility.PUBLIC)
+                .or(w -> w.eq("visibility", SkillVisibility.PRIVATE)
+                        .eq("created_by", userId))
+                .or(w -> w.eq("visibility", SkillVisibility.TEAM)
+                        .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', ?, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId)));
     }
 
     default List<Skill> findVisibleSummaryForUserByOwnerType(String userId, Integer ownerType) {
@@ -41,7 +43,9 @@ public interface SkillMapper extends BaseMapper<Skill> {
                 .eq("skill_owner_type", ownerType)
                 .and(w -> w.eq("visibility", SkillVisibility.PUBLIC)
                         .or(w2 -> w2.eq("visibility", SkillVisibility.PRIVATE)
-                                .eq("created_by", userId))));
+                                .eq("created_by", userId))
+                        .or(w2 -> w2.eq("visibility", SkillVisibility.TEAM)
+                                .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', ?, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId))));
     }
 
     default List<Skill> findBySkillOwnerTypeAndEnabledIsTrue(Integer ownerType) {
