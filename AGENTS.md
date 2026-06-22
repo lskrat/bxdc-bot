@@ -163,7 +163,7 @@ mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
 
 ### 5.1 尽量不新增第三方包
 - 新增第三方包意味着 supply chain 风险 + 依赖升级成本 + 团队学习成本
-- 优先用 JDK 17 / NestJS 11 / Vue 3 / Spring Boot 2.7 自带的标准库
+- 优先用 JDK 1.8 / NestJS 11 / Vue 3 / Spring Boot 2.7 自带的标准库
 - 必须新增时需要评审：能不能用现有工具实现？有没有轻量级替代？
 
 ### 5.2 尽量不要新增环境变量配置
