@@ -79,6 +79,10 @@ public class SkillService {
         if (skill.getVisibility() == null) {
             skill.setVisibility(SkillVisibility.PRIVATE);
         }
+        // 用户创建的技能默认归为「用户技能」（skill_owner_type=1），把隐式 DB DEFAULT 显式化为代码契约。
+        if (skill.getSkillOwnerType() == null) {
+            skill.setSkillOwnerType(1);
+        }
         validateSkillAvatar(skill.getAvatar());
         skill.setExecutionMode(normalizeExecutionMode(skill.getExecutionMode()));
         skill.setConfiguration(normalizeAndValidateConfiguration(skill.getExecutionMode(), skill.getConfiguration()));
