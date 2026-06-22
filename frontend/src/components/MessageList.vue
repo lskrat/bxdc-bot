@@ -84,6 +84,11 @@ function formatToolStatus(status: 'running' | 'completed' | 'failed') {
   return '调用中'
 }
 
+function formatToolSummary(summary?: string) {
+  if (!summary) return ''
+  return summary.length > 60 ? summary.substring(0, 60) + '...' : summary
+}
+
 function formatPollingStatus(ps: PollingStatus): string {
   if (ps.status === 'COMPLETED') return '轮询结束'
   if (ps.status === 'FAILED' || ps.status === 'TIMEOUT') return '轮询错误'
@@ -128,7 +133,7 @@ function parseDownloadInfo(result?: string): DownloadInfo | null {
     if (!m) return null
     const fileNameMatch = raw.match(/"originalFileName"\s*:\s*"([^"]+)"/)
       || raw.match(/"newFileName"\s*:\s*"([^"]+)"/)
-    return { url: m[1], fileName: fileNameMatch ? fileNameMatch[1] : 'download' }
+    return { url: m[1]!, fileName: fileNameMatch ? fileNameMatch[1]! : 'download' }
   }
   // 解包 { success, output: {...} } 或 { output: "..." }
   if (payload && typeof payload === 'object') {
