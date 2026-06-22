@@ -1,0 +1,7 @@
+﻿kind: change
+name: skill-intro-md-update-api
+title: Skill Intro MD Update API
+description: 修改 SkillController 中的更新 intro_md 字段的接口，将路径从 /{id}/intro-md 改为 /updateIntroMd，id 从请求体中获取
+author: AI Assistant
+created: 2026-06-17
+status: implemented

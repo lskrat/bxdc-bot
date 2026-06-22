@@ -371,4 +371,35 @@ public class SkillService {
             throw new IllegalArgumentException(fieldName + " must be a boolean when provided");
         }
     }
+
+    public Skill updateSkillIntroMd(Long id, String introMd, String userId) {
+        Skill skill = skillMapper.selectById(id);
+        if (skill == null) {
+            throw new IllegalArgumentException("Skill not found for this id :: " + id);
+        }
+        if (!canWriteSkill(skill, userId)) {
+            throw new IllegalArgumentException("Skill not found for this id :: " + id);
+        }
+        skill.setIntroMd(introMd);
+        skillMapper.updateById(skill);
+        return skill;
+    }
+
+    public Skill generateIntro(String userId, Skill skill) {
+        if (userId == null || StringUtils.isBlank(userId)) {
+            throw new IllegalArgumentException("X-User-Id is required");
+        }
+        if (skill.getId() != null) {
+            Skill existing = skillMapper.selectById(skill.getId());
+            if (existing != null && !canWriteSkill(existing, userId)) {
+                throw new IllegalArgumentException("Skill not found or not authorized");
+            }
+        }
+        String generatedIntro = "Generated intro for skill: " + skill.getName();
+        skill.setIntroMd(generatedIntro);
+        if (skill.getId() != null) {
+            skillMapper.updateById(skill);
+        }
+        return skill;
+    }
 }
