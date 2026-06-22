@@ -9,6 +9,9 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Collections;
 import java.util.Map;
 
+/**
+ * 团队功能
+ */
 @RestController
 @RequestMapping("/api/user-teams")
 @CrossOrigin(origins = "*")
@@ -22,7 +25,7 @@ public class UserTeamController {
 
 
     /**
-     * 1. 新增团队
+     * 1. 新增团队（20260626）
      * http://localhost:18080/api/user-teams
      * POST JSON
      * 参数：
@@ -54,7 +57,7 @@ public class UserTeamController {
     }
 
     /**
-     * 2. 查询团队列表
+     * 2. 查询团队列表（20260626）
      * 查询当前用户创建的团队列表（分页）
      * http://localhost:18080/api/user-teams?page=1&size=20
      * GET
@@ -84,7 +87,7 @@ public class UserTeamController {
     }
 
     /**
-     * 3. 查询单个团队
+     * 3. 查询单个团队（20260626）
      * 根据团队ID查询团队详情
      * http://localhost:18080/api/user-teams/1
      * GET
@@ -105,7 +108,7 @@ public class UserTeamController {
     }
 
     /**
-     * 4. 更新团队
+     * 4. 更新团队（20260626）
      * 更新指定团队的名称和成员信息
      * http://localhost:18080/api/user-teams/1
      * PUT JSON
@@ -143,7 +146,7 @@ public class UserTeamController {
     }
 
     /**
-     * 5. 删除团队
+     * 5. 删除团队（20260626）
      * 逻辑删除指定团队（标记为已删除状态）
      * http://localhost:18080/api/user-teams/1
      * DELETE
