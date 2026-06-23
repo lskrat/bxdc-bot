@@ -160,12 +160,16 @@ export class AgentFactory {
     ];
 
     // 加载用户自定义技能（skill_owner_type=1）
+    // 优先按当前会话勾选的技能加载：有 conversationId 时调 /api/skills/by-conversation，
+    // 由 gateway 查会话表 enabled_skills 并按用户可见性过滤返回；
+    // 无 conversationId（如直连调用）时回退到 by-owner-type=1 全量加载。
     const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
       plannerModel: model,
       availableTools: baseTools,
       sessionId: config?.sessionId,
       conversationId: config?.conversationId,
-      skillOwnerType: 1, // 用户技能
+      loadFromConversation: true,
+      skillOwnerType: 1, // 用户技能（无 conversationId 时的兜底）
     });
 
     // 合并工具

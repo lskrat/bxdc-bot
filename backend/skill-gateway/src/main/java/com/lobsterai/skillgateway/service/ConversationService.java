@@ -1,6 +1,7 @@
 package com.lobsterai.skillgateway.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lobsterai.skillgateway.entity.Conversation;
 import com.lobsterai.skillgateway.entity.ConversationMessage;
@@ -91,6 +92,27 @@ public class ConversationService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found");
         }
         return conv;
+    }
+
+    /**
+     * 查询会话启用的技能 ID 列表（解析 enabled_skills JSON 数组，如 [1,3,5]）。
+     * 会校验会话归属（非本人会话抛 404）。
+     * @param conversationId 会话 ID
+     * @param userId 当前用户 ID
+     * @return 启用的 skillId 列表；为空或解析失败时返回空列表
+     */
+    public List<Long> getEnabledSkillIds(String conversationId, String userId) {
+        Conversation conv = getById(conversationId, userId);
+        String json = conv.getEnabledSkills();
+        if (json == null || json.isEmpty()) {
+            return Collections.emptyList();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<Long>>() {});
+        } catch (Exception e) {
+            log.warn("Failed to parse enabled_skills for conversation {}: {}", conversationId, json, e);
+            return Collections.emptyList();
+        }
     }
 
     @Transactional
