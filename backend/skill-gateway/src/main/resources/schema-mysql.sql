@@ -331,3 +331,21 @@ CREATE TABLE IF NOT EXISTS user_team (
     INDEX idx_creator_id (creator_id),
     INDEX idx_is_deleted (is_deleted)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户团队表';
+
+-- python_sandbox（Python 沙箱配置表 - 第三方 Python 沙箱服务注册表，由 admin 维护）
+CREATE TABLE IF NOT EXISTS python_sandbox  (
+  id bigint(0) NOT NULL AUTO_INCREMENT,
+  name varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  endpoint_url varchar(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  http_method varchar(8) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'POST',
+  service_params text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  enabled tinyint(1) NOT NULL DEFAULT 1,
+  description text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
+  created_at datetime(0) NULL DEFAULT CURRENT_TIMESTAMP(0),
+  updated_at datetime(0) NULL DEFAULT CURRENT_TIMESTAMP(0) ON UPDATE CURRENT_TIMESTAMP(0),
+  PRIMARY KEY (id) USING BTREE,
+  UNIQUE INDEX name(name) USING BTREE,
+  INDEX idx_python_sandbox_enabled(enabled) USING BTREE
+) ENGINE = InnoDB AUTO_INCREMENT = 2 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'Python ' ROW_FORMAT = Dynamic;
+
+SET FOREIGN_KEY_CHECKS = 1;
