@@ -44,7 +44,12 @@ const executeSkillInputSchema = z.object({
   userInput: z
     .string()
     .min(1)
-    .describe("The user's input or task to be executed by the sub-agent."),
+    .describe("The user's input or task to be executed by the sub-agent. " +
+      "IMPORTANT: When the task is about operating on a file (read/edit/parse/convert/aggregate/download a document, Excel, Word, etc.), " +
+      "you MUST include the concrete file id(s) in this text (e.g. \"对 fileId=12 的 Excel 做汇总\"), " +
+      "extracting the file id mainly from prior tool results or the conversation context. " +
+      "Do NOT describe the file only by name or vaguely (e.g. \"处理那个 Excel\") — the sub-agent cannot reliably resolve which file without an id. " +
+      "Only omit the file id if no file id can be extracted from tool results or the conversation context; in that case explicitly state that the file id is unknown."),
   continueConversation: z
     .boolean()
     .optional()
@@ -105,7 +110,10 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
         "SUPPORT MULTI-STEP: The sub-agent is cached and can handle multiple steps. " +
         "For subsequent steps with the same skills, set continueConversation to true " +
         "to continue the conversation instead of creating a new sub-agent. " +
-        "After receiving the result, you can continue planning or summarize for the user.",
+        "After receiving the result, you can continue planning or summarize for the user. " +
+        "FILE TASKS: if the task operates on a file, the userInput you pass MUST carry the concrete file id(s) " +
+        "(resolve them from file_list / previous tool results / conversation context before calling this tool); " +
+        "only pass it without a file id when none is genuinely available.",
       schema: executeSkillInputSchema,
       func: async (args) => {
         try {
@@ -140,7 +148,9 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
               "• 你的工作是调用工具完成操作。每步工具调用完成后，简要描述执行了什么操作以及结果。\n" +
               "• 不要做总结、推测或概括性陈述——所有总结由主 Agent 负责。\n" +
               "• 不要在中间步骤说「现在进行下一步」「接下来...」等引导性文字。\n" +
-              "• 工具返回的结果中的详细数据和表格由主 Agent 后续呈现，你无需重复大段数据。\n\n";
+              "• 工具返回的结果中的详细数据和表格由主 Agent 后续呈现，你无需重复大段数据。\n" +
+              "• 【文件操作】优先使用任务（userInput）中已给出的 fileId；若未给出，则从工具返回内容或对话上下文中提取 fileId 再操作，" +
+              "不要凭空臆造 fileId。若从工具返回内容和对话上下文都无法提取到 fileId，如实说明文件 id 未知，不要随意选择文件。\n\n";
             const baseSystemPrompt = buildStaticSystemPrompt();
             messages = [
               new SystemMessage(subAgentSystemInstruction + baseSystemPrompt),
