@@ -1,141 +1,254 @@
-# external-service-skill 规格说明
+# external-service-skill Specification
 
-## 目的
-`kind="external"` CONFIG-mode Skill 的运行时执行。将 Skill 输入框映射到外部服务入参，按契约组装出站 HTTP 请求，注入认证信息，处理超时重试和响应格式化。
+## Purpose
+TBD - created by archiving change add-external-service-skill. Update Purpose after archive.
+## ADDED Requirements
+### Requirement: External CONFIG Skill model
 
-## 新增需求
+The system SHALL support a CONFIG-mode extended skill whose canonical configuration kind is `external`, and whose stored `configuration` object SHALL contain only the normative fields `serviceName` (reference to a `external_service.name` row where `enabled=1`) and `interfaceDescription` (free-form text shown to the LLM). The system SHALL reject creation or update when `kind=external` is used with any of the deprecated fields `inputs` (array) / `mapsTo` / `operation`, when `serviceName` is missing, or when the referenced `external_service` row does not exist or is disabled.
 
-### 需求：External CONFIG Skill 模型
+#### Scenario: Persist external skill with serviceName and interfaceDescription
 
-系统必须支持 canonical 配置类型为 `external` 的 CONFIG-mode 扩展 Skill，其存储的 `configuration` 对象必须包含以下规范字段：
-- `serviceName`（引用 `external_service.name` 行）
-- `operation`（LLM 工具名后缀）
-- `inputs`（Skill 输入框定义的 JSON 数组）
+- **WHEN** a user creates an extended skill with `executionMode` CONFIG and `configuration` containing `"kind": "external"`, a non-empty `serviceName` that references an `enabled=1` row in `external_service`, and an optional `interfaceDescription` string
+- **THEN** the system persists the skill successfully through SkillGateway
+- **AND** `configuration` is stored as `{"kind":"external","serviceName":"...","interfaceDescription":"..."}` (no other fields)
 
-`inputs` 数组中的每个对象必须包含字段：`key`（字符串，在 Skill 内唯一）、`displayName`、`isRequired`（布尔）、`placeholder`、`valueType`（枚举：string/number/boolean）、`description`、`mapsTo`（字符串，引用该 service 下某 `external_service_input.external_param_name`，或 null）、`sortOrder`。
+#### Scenario: Reject deprecated inputs array
 
-#### 场景：使用所有字段持久化 external Skill
+- **WHEN** a create or update request uses `kind=external` with `configuration.inputs` (array) present
+- **THEN** the system rejects the request with validation error "Field 'inputs' is not allowed for kind=external"
 
-- **当**用户创建一个扩展 Skill，`executionMode` 为 CONFIG，`configuration` 包含 `"kind": "external"`、非空 `serviceName`、非空 `operation`、非空 `inputs` 数组，且 `inputs` 中每个 `mapsTo != null` 的项都引用了对应 service 存在的 `external_service_input.external_param_name`
-- **则**系统成功持久化该 Skill
-- **且**`inputs` 数组完整存入 `skills.configuration`
+#### Scenario: Reject deprecated mapsTo field
 
-#### 场景：拒绝 inputs 数组内重复的 key
+- **WHEN** a create or update request uses `kind=external` with `configuration.mapsTo` present at any nesting level
+- **THEN** the system rejects the request with validation error "Field 'mapsTo' is not allowed for kind=external"
 
-- **当**创建或更新请求中 `kind=external` 且有两个 `inputs` 条目共享相同的 `key`
-- **则**系统拒绝该请求并返回校验错误
+#### Scenario: Reject deprecated operation field
 
-#### 场景：拒绝未映射到必填外部入参的 Skill
+- **WHEN** a create or update request uses `kind=external` with `configuration.operation` present
+- **THEN** the system rejects the request with validation error "Field 'operation' is not allowed for kind=external"
 
-- **当**创建或更新请求中 `kind=external`，且存在一个 `external_service_input` 行（属于该 service）的 `is_required=1`，但 `inputs` 数组中没有任何条目的 `mapsTo` 指向该 `external_param_name`
-- **则**系统拒绝该请求并返回校验错误
-- **且**错误信息中指明缺失的外部参数名
+#### Scenario: Reject missing serviceName
 
-#### 场景：拒绝引用不存在的 service
+- **WHEN** a create or update request uses `kind=external` with missing or whitespace-only `serviceName`
+- **THEN** the system rejects the request with validation error "serviceName is required for kind=external"
 
-- **当**创建或更新请求中 `kind=external` 且 `serviceName` 在 `external_service` 中不存在
-- **则**系统拒绝该请求并返回校验错误
+#### Scenario: Reject non-existent serviceName
 
-### 需求：External Skill 对 LLM 的暴露
+- **WHEN** a create or update request uses `kind=external` with `serviceName` that does not exist in `external_service` table
+- **THEN** the system rejects the request with validation error "External service not found: {serviceName}"
 
-agent 扩展 Skill 加载器必须为每个已启用的 `kind=external` Skill 注册一个工具，使用与 `api`/`ssh`/`python`/`template` 相同的外部 `payload` Zod 包装（agent-core 中无需针对 kind 的分支），且内层 `payload` 对象的 Zod schema 必须从 Skill 的 `configuration.inputs` 数组派生，使得 LLM 仅看到 Skill 定义的输入字段（而非外部服务的参数名）。
+#### Scenario: Reject disabled serviceName
 
-#### 场景：LLM 看到 Skill 定义的 key，而非外部参数名
+- **WHEN** a create or update request uses `kind=external` with `serviceName` that references a row in `external_service` with `enabled=0`
+- **THEN** the system rejects the request with validation error "External service is disabled: {serviceName}"
 
-- **当**一个 Skill 的 `configuration.inputs` 包含 `[{"key": "city", "mapsTo": "q"}, {"key": "units", "mapsTo": "units"}]`
-- **则**LLM 工具 schema 必须包含属性 `city` 和 `units`
-- **且**LLM 不得看到属性 `q`（外部参数名）
+### Requirement: Sub-table is runtime single source of truth
 
-### 需求：基于映射的请求组装
+The Gateway SHALL NOT copy any `external_service_input` row data into `skills.configuration` at create or update time. The skill's runtime behavior MUST be determined solely by querying the `external_service_input` rows that reference the skill's `serviceName` at execution time. When an admin modifies the `external_service_input` table (adds a row / changes `is_required` / changes `is_raw_transmission` / changes `param_location` / changes `display_name`), all `kind=external` skills referencing that `serviceName` SHALL pick up the change on the next execution (no skill re-save required, no redeploy required).
 
-Gateway executor 必须在运行时遍历 `inputs[]`，将每个 `mapsTo` 值解析为 `external_service_input` 表中的对应行，并按以下方式组装出站 HTTP 请求：对于每个 `mapsTo != null` 的 `inputs[]` 条目，定位对应的 `external_service_input` 行，将 LLM 提供的值按 `external_service_input.in` 指示的位置（query/path/body/header）追加到请求中，使用 `external_param_name` 作为出站 key。`mapsTo = null` 的条目必须被静默忽略。
+#### Scenario: Admin adds new input row
 
-#### 场景：GET query 组装（带 URL 编码）
+- **WHEN** admin inserts a new row into `external_service_input` with `service_id=X` and `external_param_name=q2` and `is_required=1`
+- **THEN** all `kind=external` skills with `serviceName` referencing row X (no skill re-save) SHALL fail at execution with "Missing required field: q2" if the LLM does not provide `q2` in `parameters`
+- **AND** the LLM tool schema (next time the skill is loaded) SHALL include `q2` as a required property
 
-- **当**一个 Skill 引用一个 `http_method=GET` 的 service，一个 `inputs` 条目 `{"key": "city", "mapsTo": "q"}` 解析到 `external_service_input`（`in=query`、`is_raw_transmission=0`），且 LLM 提供 `city="北京"`
-- **则**Gateway 必须将 `?q=%E5%8C%97%E4%BA%AC` 追加到 service URL
+#### Scenario: Admin changes is_raw_transmission
 
-#### 场景：原文透传（不编码、不序列化）
+- **WHEN** admin updates `external_service_input` row for `external_param_name=q` to set `is_raw_transmission=1` (was 0)
+- **THEN** on the next execution of any skill referencing that service, the Gateway SHALL pass `q` value to the third-party without URL encoding / JSON serialization / escaping
 
-- **当**一个 `inputs` 条目 `{"key": "code", "mapsTo": "code"}` 解析到 `external_service_input`（`in=body`、`content_type=json`、`is_raw_transmission=1`），且 LLM 提供 `code="print('hello')\nimport json"`（包含换行和引号的字符串）
-- **则**Gateway 必须将值原文写入 JSON body，即 `"code": "print('hello')\nimport json"`，不转义换行或引号
-- **且**不得再次 JSON 序列化该字符串值
+#### Scenario: Skill configuration has no input copies
 
-#### 场景：未映射的输入被忽略
+- **WHEN** a `kind=external` skill is persisted with `configuration = {"kind":"external","serviceName":"X","interfaceDescription":"Y"}`
+- **THEN** the `configuration` JSON in the database contains exactly those 3 keys and no input-related fields
+- **AND** at execution time the Gateway fetches the input contract from `external_service_input WHERE service_id = X.id`
 
-- **当**一个 Skill 有 `inputs` 条目 `{"key": "internalNote", "mapsTo": null}`，且 LLM 提供了 `internalNote="debug-123"`
-- **则**Gateway 不得将 `internalNote` 包含在出站请求中
+### Requirement: External skill runtime exposure to LLM
 
-### 需求：出站请求位置组装
+The agent extended-skill loader SHALL register a tool for each enabled `kind=external` skill using the same outer-`payload` Zod wrapper as `api` / `ssh` / `template` / `python` (no kind-specific branch in agent-core). The Zod schema for the inner `payload` object SHALL be derived from the `external_service_input` rows of the referenced `serviceName`: each row contributes one property whose name is `external_param_name`, whose type is `param_type` (string / number / boolean), and whose `is_required=1` rows become `required` in the Zod schema.
 
-对于 `in=path`：Gateway 必须将 service URL 中的 `{external_param_name}` 占位符替换为提供的值（URL 解码后的字符串）。对于 `in=header`：Gateway 必须追加一个 Header，名称为 `external_param_name`，值为提供的值。对于 `in=body`：当 service 的 inputs 中存在任何 `in=body` 条目时，Gateway 必须收集所有此类值，并按第一个 body 的 `content_type` 序列化（json → Jackson 序列化；form → `application/x-www-form-urlencoded`；text → 纯文本 body）。
+#### Scenario: Zod schema derived from sub-table rows
 
-#### 场景：Path 参数替换
+- **WHEN** a `kind=external` skill's `serviceName` references an `external_service` with 3 sub-table rows: `q` (string, required), `units` (string, optional), `lang` (string, optional)
+- **THEN** agent-core's Zod schema for this tool's inner payload is `z.object({ q: z.string(), units: z.string().optional(), lang: z.string().optional() })`
+- **AND** the LLM is informed that `q` is mandatory and `units` / `lang` are optional
 
-- **当**一个 service 的 `endpoint_url = "https://api.example.com/users/{userId}/orders/{orderId}"`，且有两个 `inputs` 条目映射到 `in=path` 的 `external_service_input` 行
-- **则**Gateway 必须用对应值替换 `{userId}` 和 `{orderId}`
-- **且**结果 URL 中不得包含剩余的 `{placeholder}` 段
+#### Scenario: agent-core has no external-specific branch
 
-### 需求：认证注入
+- **WHEN** the LLM invokes a `kind=external` tool
+- **THEN** agent-core MUST NOT contain any `if (config.kind === 'external')` branch in the tool invocation path
+- **AND** the call MUST go through the same `POST /api/skills/execute` path as `api` / `ssh` / `template` / `python` extension skills
 
-Gateway 必须在发送出站请求前根据 `external_service.auth_type` 注入认证 Header：
-- `apiKey`：注入名称为 `auth_header_name`、值为 `auth_value_static`（已解密）的 Header
-- `bearer`：注入 `Authorization: Bearer {auth_value_static}`
-- `dynamicToken`：首先调用 `auth_token_endpoint`（使用 `auth_token_method` 和 `auth_token_request_body`），通过 JSONPath `auth_token_path` 提取 token，在 `auth_token_cache_seconds` 秒内缓存，然后注入该 Header
+### Requirement: External skill execution by Gateway
 
-#### 场景：Bearer Token 注入
+The Gateway's `SkillExecutionService.execute()` MUST route `kind=external` skills to a new `executeExternalSkill()` method (in `ExternalServiceSkillExecutor`) that:
+1. Resolves the referenced `external_service` row from `configuration.serviceName` (return 400 if disabled or not found)
+2. Resolves the `external_service_input` rows for that service (ordered by `display_order ASC, id ASC`)
+3. Performs required-field validation: for every sub-table row with `is_required=1`, asserts that `llmParams` contains a value for `external_param_name`; returns 400 with "Missing required field: {external_param_name}" if any is missing
+4. Constructs the outbound HTTP request by iterating sub-table rows and applying their `param_location` / `is_raw_transmission` / `body_content_type` rules to the LLM-provided value
+5. Injects authentication headers per `external_service.auth_kind` and `auth_config` JSON
+6. Executes the HTTP call with `retry_max` exponential backoff (base 500ms, fixed)
+7. Returns the response (formatted per `response_format`) to the LLM
 
-- **当**一个 Skill 引用一个 `auth_type=bearer`、`auth_value_static`（已加密）= "s3cr3t" 的 service
-- **则**Gateway 必须解密该值，计算 "Bearer s3cr3t"，并注入 `Authorization: Bearer s3cr3t` 到出站请求 Header
+#### Scenario: Forward LLM parameters by sub-table rules
 
-#### 场景：Dynamic Token 缓存和复用
+- **WHEN** the LLM calls a `kind=external` skill with `parameters = { q: "北京", units: "metric" }` and the referenced service has sub-table row `q` (param_location=query, is_raw_transmission=0) and `units` (param_location=query, is_raw_transmission=0)
+- **THEN** the Gateway's outbound URL contains `?q=%E5%8C%97%E4%BA%AC&units=metric`
+- **AND** no LLM-side field renaming occurs (the LLM key `q` directly becomes the query key `q`)
 
-- **当**一个 Skill 引用一个 `auth_type=dynamicToken`、`auth_token_cache_seconds=300` 的 service，且 10 个并发 Skill 执行请求在 5 秒内到达
-- **则**Gateway 必须仅调用 `auth_token_endpoint` 一次
-- **且**在 300 秒窗口内复用该缓存 token 处理全部 10 个出站请求
+#### Scenario: Raw transmission for code field
 
-### 需求：超时和重试
+- **WHEN** the LLM calls a `kind=external` skill with `parameters = { code: "def add(a,b):\n  return a+b" }` and the referenced service has sub-table row `code` (param_location=body, body_content_type=json, is_raw_transmission=1)
+- **THEN** the Gateway's outbound request body is `{"code":"def add(a,b):\n  return a+b"}` (the `\n` is a real newline, not the 2-character `\n` escape)
+- **AND** Jackson serialization is NOT applied to the `code` value
 
-Gateway 必须将 `timeout_seconds` 作为每次请求的超时时间。请求失败（非 2xx 响应或网络错误）时，Gateway 必须按 `retry_max` 重试最多 N 次（N = retry_max + 1 次尝试），指数退避从 `retry_backoff_ms` 毫秒开始（每次翻倍：1×、2×、4×、...）。
+#### Scenario: Missing required field rejected
 
-#### 场景：一次重试后成功
+- **WHEN** the LLM calls a `kind=external` skill with `parameters = { units: "metric" }` (missing `q`) and the referenced service has sub-table row `q` with `is_required=1`
+- **THEN** the Gateway returns 400 with error "Missing required field: q"
+- **AND** no outbound HTTP call is made
 
-- **当**一个 service 的 `retry_max=2`、`retry_backoff_ms=500`，且第一次出站请求返回 HTTP 503
-- **则**Gateway 必须等待 500ms 后重试
-- **且**若第二次尝试返回 200，不得进行第三次重试，直接返回响应给 LLM
+#### Scenario: Disabled service rejected at execution
 
-#### 场景：全部重试耗尽
+- **WHEN** the LLM calls a `kind=external` skill whose `serviceName` references an `external_service` row with `enabled=0`
+- **THEN** the Gateway returns 400 with error "External service disabled: {serviceName}"
+- **AND** no sub-table query is made
 
-- **当**一个 service 的 `retry_max=2` 且全部三次尝试均返回 HTTP 500
-- **则**Gateway 必须在第三次尝试后向 LLM 返回错误
+#### Scenario: LLM extra key not in sub-table
 
-### 需求：响应格式化
+- **WHEN** the LLM calls a `kind=external` skill with `parameters = { q: "北京", foo: "bar" }` where the sub-table has row `q` but not `foo`
+- **THEN** the Gateway's outbound request does NOT include `foo` (no sub-table row = no outbound)
+- **AND** the audit log records `foo` as "LLM 误传" (LLM-provided but no sub-table row) for traceability
 
-Gateway 必须根据 `external_service.response_format` 处理外部服务响应：
-- `json`：将响应 body 解析为 JSON，返回解析后的对象给 LLM
-- `text`：返回原始字符串
-- `binary-base64`：将 body 作为 Base64 编码字符串返回
+### Requirement: Outbound supports query / body / path / header
 
-#### 场景：JSON 响应解析
+The Gateway's `executeExternalSkill()` MUST support placing LLM-provided values in the outbound HTTP request at 4 locations based on each sub-table row's `param_location`:
 
-- **当**一个 service 的 `response_format=json`，且外部服务返回 `{"temp": 25.3, "humidity": 80}`
-- **则**Gateway 必须返回解析后的 JSON 对象 `{temp: 25.3, humidity: 80}` 给 LLM
+- `query`: URL query parameter (URL-encoded if `is_raw_transmission=0`, raw if `=1`)
+- `body`: request body, with format determined by `body_content_type`:
+  - `json`: included in a JSON object body, with Jackson serialization skipped if `is_raw_transmission=1`
+  - `form`: included in `application/x-www-form-urlencoded` body
+  - `text`: the entire body is the value (only one sub-table row may have `body_content_type=text`); `is_raw_transmission=0` applies standard text encoding, `=1` writes the value verbatim
+  - `binary`: multipart upload, where the value is a `file:<userFileId>` reference resolved via `FileRefResolver` and `FileToolService`
+- `path`: replaces `{external_param_name}` placeholder in `endpoint_url` with the URL-encoded (or raw) value
+- `header`: added as a request header with the value as-is (URL encoding does not apply to headers)
 
-### 需求：带脱敏的审计日志
+#### Scenario: Path placeholder substitution
 
-Gateway 必须以 `HttpClientAuditMode.SKILL_OUTBOUND` 模式将出站请求写入 `api_call_log`。对于每个 `external_service_input.sensitive=1` 的行，Gateway 必须在写入日志前将对应值替换为 `"***MASKED***"`。
+- **WHEN** `endpoint_url = "https://api.example.com/users/{userId}/posts"` and the sub-table has row `userId` (param_location=path, is_raw_transmission=0)
+- **AND** the LLM provides `parameters = { userId: "123" }`
+- **THEN** the Gateway's outbound URL is `https://api.example.com/users/123/posts`
 
-#### 场景：敏感字段在审计日志中脱敏
+#### Scenario: Multipart file upload
 
-- **当**一个 `inputs` 条目映射到 `sensitive=1` 的 `external_service_input`，且 LLM 提供了值 `"sk-abc123"`
-- **则**出站请求中必须包含真实值 `"sk-abc123"`
-- **且**`api_call_log.payload` 字段必须包含 `"***MASKED***"` 而非真实值
+- **WHEN** the sub-table has row `file` (param_location=body, body_content_type=binary)
+- **AND** the LLM provides `parameters = { file: "file:42" }` (a `user_file.id=42` reference)
+- **THEN** the Gateway resolves the user_file via `FileRefResolver`, reads the file via `FileToolService`, and constructs a multipart/form-data body with one part named `file` containing the file content
 
-### 需求：Skill 输入框必填字段校验
+### Requirement: Authentication via auth_config JSON
 
-运行时，Gateway 必须验证每个 `isRequired=true` 的 `inputs[]` 条目在 LLM 提供的参数中存在（非 null）。缺失必填字段必须导致 HTTP 400，并在消息中指明缺失的字段 key。
+The Gateway's `executeExternalSkill()` MUST inject authentication headers per `external_service.auth_kind` and the `auth_config` JSON field:
 
-#### 场景：缺失必填 Skill 输入字段
+- `none`: no authentication headers injected
+- `apiKey`: inject header `{auth_config.headerName}: {decrypted auth_config.valueStatic}` (or, if `headerName` is empty, append `?{headerName}={valueStatic}` to the query string)
+- `bearer`: inject header `Authorization: Bearer {decrypted auth_config.valueStatic}`
+- `dynamicToken`: call `auth_config.tokenEndpoint` with `auth_config.tokenRequestBody` (HTTP POST), extract the token via `auth_config.tokenPath` (JSONPath), cache for `auth_config.cacheSeconds` seconds, then inject as bearer (or per `auth_config.headerName` if specified)
 
-- **当**一个 Skill 有 `inputs` 条目 `{"key": "city", "isRequired": true, "mapsTo": "q"}`，且 LLM 在 payload 中未提供 `city` 字段
-- **则**Gateway 必须返回 HTTP 400，消息为 `"Missing required field: city"`
+The `auth_config.valueStatic` field MUST be encrypted at rest via `AesCipher.encrypt()` (admin INSERT path enforces encryption; the SELECT path uses `AesCipher.decrypt()` to expose plaintext only in the executor and `ExternalServiceView` admin endpoint, with `ExternalServiceView` masking the value by default for non-admin roles).
+
+#### Scenario: API Key authentication
+
+- **WHEN** `external_service.auth_kind = "apiKey"` and `auth_config = {"headerName": "appid", "valueStatic": "<encrypted>"}`
+- **THEN** the Gateway's outbound request includes header `appid: <decrypted value>`
+- **AND** the decrypted value is NOT logged in `api_call_log` (masked by `ExternalOutboundPayloadMasker` if `is_sensitive=1`)
+
+#### Scenario: Bearer authentication
+
+- **WHEN** `external_service.auth_kind = "bearer"` and `auth_config = {"valueStatic": "<encrypted>"}`
+- **THEN** the Gateway's outbound request includes header `Authorization: Bearer <decrypted value>`
+
+#### Scenario: Dynamic Token with caching
+
+- **WHEN** `external_service.auth_kind = "dynamicToken"` and `auth_config = {"tokenEndpoint": "https://auth.example.com/token", "tokenRequestBody": {"client_id":"x","client_secret":"y"}, "tokenPath": "data.token", "cacheSeconds": 300}`
+- **THEN** on first request, the Gateway POSTs to `tokenEndpoint` with `tokenRequestBody`, extracts `data.token` from the response, caches it for 300 seconds
+- **AND** on subsequent requests within 300 seconds, the Gateway uses the cached token without calling `tokenEndpoint` again
+- **AND** the `tokenEndpoint` call is audited with `HttpClientAuditMode.NONE` (not logged in `api_call_log` to avoid pollution)
+
+### Requirement: Retry with exponential backoff
+
+The Gateway's `executeExternalSkill()` MUST retry failed outbound calls up to `retry_max` times (excluding the first attempt). The backoff base is fixed at 500ms with exponential growth: 500ms, 1000ms, 2000ms, 4000ms, 8000ms for attempts 1-5. Total timeout per attempt is system default 30s (not configurable in this change).
+
+#### Scenario: Retry on 5xx error
+
+- **WHEN** `retry_max = 2` and the first outbound call returns HTTP 503
+- **THEN** the Gateway waits 500ms, retries (attempt 2)
+- **IF** the second attempt also fails, the Gateway waits 1000ms, retries (attempt 3)
+- **IF** the third attempt also fails, the Gateway gives up and returns the last error to the LLM
+
+#### Scenario: No retry for non-idempotent operations
+
+- **WHEN** `retry_max = 0` and the outbound call fails
+- **THEN** the Gateway does not retry and returns the error immediately
+- **AND** admin is advised (via description field) to set `retry_max=0` for non-idempotent operations (e.g., script execution, notification push)
+
+### Requirement: Response format handling
+
+The Gateway's `executeExternalSkill()` MUST format the outbound response per `external_service.response_format`:
+
+- `json`: parse the response body as JSON and return as a structured object to the LLM
+- `text`: return the response body as a plain string to the LLM
+- `binary-base64`: base64-encode the response body (e.g., file download) and return as a string to the LLM
+
+#### Scenario: JSON response formatting
+
+- **WHEN** the outbound call returns `Content-Type: application/json` and body `{"temp": 25, "humidity": 60}`
+- **THEN** the Gateway returns the parsed object `{"temp": 25, "humidity": 60}` to the LLM
+
+#### Scenario: Text response formatting
+
+- **WHEN** the outbound call returns `Content-Type: text/plain` and body `var hq_str_sh600519="贵州茅台,1880.00,..."`
+- **THEN** the Gateway returns the raw string `var hq_str_sh600519="贵州茅台,1880.00,..."` to the LLM
+
+### Requirement: Audit log masking by is_sensitive
+
+The Gateway's `ExternalOutboundPayloadMasker` MUST, before writing the LLM parameters to `api_call_log`, replace the value of any `external_service_input` row with `is_sensitive=1` with the string `"***MASKED***"`. LLM-provided keys that are NOT in the sub-table MUST still be included in the audit log (labeled as "LLM-provided but no sub-table row" for traceability).
+
+#### Scenario: Sensitive field masked in audit
+
+- **WHEN** the LLM provides `parameters = { q: "北京", token: "abc123" }` and the sub-table has `q` (is_sensitive=0) and `token` (is_sensitive=1)
+- **THEN** the `api_call_log` audit entry shows `q: "北京"` and `token: "***MASKED***"`
+
+#### Scenario: LLM extra key visible in audit
+
+- **WHEN** the LLM provides `parameters = { q: "北京", foo: "bar" }` and the sub-table has only `q` (no `foo` row)
+- **THEN** the `api_call_log` audit entry shows `q: "北京"` and `foo: "bar"` (with note that `foo` was not transmitted to the third party)
+
+### Requirement: Link trace header propagation
+
+The Gateway's `executeExternalSkill()` MUST propagate the inbound trace headers (`X-Trace-Id`, `X-Request-Id`, `X-User-Id`, `X-Session-Id`) to the outbound request, and add `X-Parent-Span-Id` referencing the gateway's span. The reuse of `GatewayHttpClientAuditInterceptor` is sufficient; no new interceptor is required.
+
+#### Scenario: Trace header propagation
+
+- **WHEN** the inbound request has `X-Trace-Id: trace-xyz` and `X-User-Id: 12345`
+- **THEN** the outbound request includes `X-Trace-Id: trace-xyz` and `X-User-Id: 12345`
+- **AND** the outbound request includes `X-Parent-Span-Id: <gateway-span-id>`
+
+### Requirement: Sub-table caching with 5-minute TTL
+
+The Gateway's `ExternalServiceRegistry` MUST cache `external_service` and `external_service_input` rows in memory (`ConcurrentHashMap`) for 5 minutes. On startup, the cache is loaded eagerly. Admin-initiated table modifications SHOULD call `registry.invalidateAll()` or `registry.invalidateService(id)` for immediate effect; otherwise the change takes effect within 5 minutes.
+
+#### Scenario: Cache loaded at startup
+
+- **WHEN** the Gateway starts and the DB has 3 services with 10 sub-table rows total
+- **THEN** the cache is populated with all 3 services and 10 sub-table rows before the first request is served
+
+#### Scenario: Admin invalidates cache after modification
+
+- **WHEN** admin updates a sub-table row and calls `registry.invalidateService(serviceId)`
+- **THEN** the next execution of any skill referencing that service picks up the change (no 5-minute delay)
+
+#### Scenario: Cache TTL fallback
+
+- **WHEN** admin updates a sub-table row but does NOT call `invalidateService` (e.g., direct SQL)
+- **THEN** within 5 minutes (cache TTL), the change takes effect automatically on the next execution
