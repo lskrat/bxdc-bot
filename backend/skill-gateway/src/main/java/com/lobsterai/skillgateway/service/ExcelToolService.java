@@ -110,7 +110,7 @@ public class ExcelToolService {
             userFile.setIsToolGenerated(1);
             userFileMapper.insert(userFile);
 
-            String downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId());
+            String downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
             return ExcelOperationResult.successWithFile("write", downloadUrl);
         } catch (Exception e) {
             log.error("Write operation failed", e);
@@ -556,7 +556,7 @@ public class ExcelToolService {
             newFile.setUploadTime(LocalDateTime.now());
             userFileMapper.insert(newFile);
 
-            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId());
+            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
             return ExcelOperationResult.successWithFile("convert_format", downloadUrl);
         } catch (Exception e) {
             log.error("Convert format operation failed", e);
@@ -624,7 +624,7 @@ public class ExcelToolService {
             newFile.setIsToolGenerated(1);
             userFileMapper.insert(newFile);
 
-            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId());
+            String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
             return ExcelOperationResult.successWithFile("apply_style", downloadUrl);
         } catch (Exception e) {
             log.error("Apply style operation failed", e);

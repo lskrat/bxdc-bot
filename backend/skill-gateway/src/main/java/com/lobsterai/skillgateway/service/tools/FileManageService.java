@@ -2,6 +2,7 @@ package com.lobsterai.skillgateway.service.tools;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.lobsterai.skillgateway.config.FtpConfig;
 import com.lobsterai.skillgateway.dto.FileParseResult;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.UserFile;
@@ -63,6 +64,7 @@ public class FileManageService {
     private final FileParseService fileParseService;
     private final ObjectMapper objectMapper;
     private final ConversationService conversationService;
+    private final FtpConfig ftpConfig;
 
     @Autowired
     public FileManageService(FileToolService fileToolService,
@@ -70,13 +72,15 @@ public class FileManageService {
                              UserFileMapper userFileMapper,
                              FileParseService fileParseService,
                              ObjectMapper objectMapper,
-                             ConversationService conversationService) {
+                             ConversationService conversationService,
+                             FtpConfig ftpConfig) {
         this.fileToolService = fileToolService;
         this.ftpFileService = ftpFileService;
         this.userFileMapper = userFileMapper;
         this.fileParseService = fileParseService;
         this.objectMapper = objectMapper;
         this.conversationService = conversationService;
+        this.ftpConfig = ftpConfig;
     }
 
     /** Spring 启动后覆盖 FileToolService 中的占位实现为完整版。 */
@@ -456,7 +460,8 @@ public class FileManageService {
             detail.put("fileSizeReadable", formatSize(userFile.getFileSize()));
             detail.put("fileType", userFile.getFileType());
             detail.put("uploadTime", userFile.getUploadTime() != null ? userFile.getUploadTime().toString() : null);
-            detail.put("downloadUrl", userFile.getDownloadUrl());
+            // 始终用 ftpConfig 现生成带 token 的 URL
+            detail.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userFile.getUserId()));
             detail.put("parsed", fileParseService.isParseComplete(userFile));
 
             // 解析摘要
@@ -509,7 +514,8 @@ public class FileManageService {
         item.put("fileSizeReadable", formatSize(uf.getFileSize()));
         item.put("fileType", uf.getFileType());
         item.put("uploadTime", uf.getUploadTime() != null ? uf.getUploadTime().toString() : null);
-        item.put("downloadUrl", uf.getDownloadUrl());
+        // 始终用 ftpConfig 现生成带 token 的 URL（避免历史数据 / 旧 upload 写入没 token 的 downloadUrl）
+        item.put("downloadUrl", ftpConfig.buildDownloadUrl(uf.getId(), uf.getUserId()));
         item.put("parsed", fileParseService.isParseComplete(uf));
         return item;
     }

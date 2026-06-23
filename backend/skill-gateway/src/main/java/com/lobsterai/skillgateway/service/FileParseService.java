@@ -111,7 +111,7 @@ public class FileParseService {
         if (userFile.getDownloadUrl() != null) {
             result.setDownloadUrl(userFile.getDownloadUrl());
         } else {
-            String downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId());
+            String downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userFile.getUserId());
             result.setDownloadUrl(downloadUrl);
             userFile.setDownloadUrl(downloadUrl);
         }

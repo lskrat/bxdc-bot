@@ -402,7 +402,8 @@ public class FileUploadController {
         body.put("fileType", uf.getFileType());
         body.put("size", uf.getFileSize());
         body.put("uploadTime", uf.getUploadTime() != null ? uf.getUploadTime().toString() : null);
-        body.put("downloadUrl", uf.getDownloadUrl());
+        // 始终用 ftpConfig 现生成带 token 的 URL
+        body.put("downloadUrl", ftpConfig.buildDownloadUrl(uf.getId(), uf.getUserId()));
         body.put("status", status);
         if (parsed) {
             body.put("parsedSummary", uf.getParsedSummary());

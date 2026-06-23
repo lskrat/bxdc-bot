@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Skill-gateway logback 配置。
+
+  目标：把 spring-boot 应用日志写入 logs/skill-gateway.log
+  （相对 mvn 进程 cwd，即 backend/skill-gateway/logs/skill-gateway.log）。
+
+  滚动策略：按天 + 单文件 ≤50MB，保留 30 天 / 总 5GB，归档自动 gzip。
+
+  业务包 com.lobsterai.skillgateway DEBUG；其他包 INFO。
+
+  不配 CONSOLE appender，避免与 mvn 启动器的 stdout 重定向
+  （logs/gw.out）双写同一份日志。开发时实时查看：
+      Get-Content logs/skill-gateway.log -Wait
+-->
+<configuration>
+
+    <property name="LOG_DIR" value="/approot1/skill-gateway/logs/api"/>
+    <property name="LOG_FILE_NAME" value="skill-gateway"/>
+    <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{40} - %msg%n"/>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/${LOG_FILE_NAME}.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/${LOG_FILE_NAME}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>5GB</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <logger name="com.lobsterai.skillgateway" level="DEBUG"/>
+
+    <root level="INFO">
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>
