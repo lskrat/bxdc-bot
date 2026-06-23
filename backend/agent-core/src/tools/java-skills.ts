@@ -1054,14 +1054,26 @@ export async function loadGatewayExtendedTools(
     enabledSkillIds?: number[];
     /** 技能所有者类型过滤：1=用户技能, 2=系统技能, undefined=全部 */
     skillOwnerType?: number;
+    /**
+     * 主 Agent 专用：按当前会话勾选的技能加载用户技能。
+     * 为 true 且 conversationId 存在时，调 /api/skills/by-conversation，
+     * 由 gateway 查会话表 enabled_skills 并按用户可见性 + enabled 过滤返回。
+     */
+    loadFromConversation?: boolean;
   },
 ): Promise<StructuredTool[]> {
   try {
     const listHeaders = gatewaySkillReadHeaders(apiToken, userId);
     
-    // 根据 skillOwnerType 决定调用哪个端点
+    // 根据加载方式决定调用哪个端点
     let response;
-    if (options?.skillOwnerType !== undefined) {
+    if (options?.loadFromConversation && options?.conversationId) {
+      // 主 Agent：加载当前会话勾选的用户技能（gateway 内部查会话表 + 可见性过滤）
+      response = await axios.get(`${gatewayUrl}/api/skills/by-conversation`, {
+        headers: listHeaders,
+        params: { conversationId: options.conversationId },
+      });
+    } else if (options?.skillOwnerType !== undefined) {
       response = await axios.get(`${gatewayUrl}/api/skills/by-owner-type`, {
         headers: listHeaders,
         params: { ownerType: options.skillOwnerType },

@@ -35,7 +35,7 @@ public interface SkillMapper extends BaseMapper<Skill> {
                 .or(w -> w.eq("visibility", SkillVisibility.PRIVATE)
                         .eq("created_by", userId))
                 .or(w -> w.eq("visibility", SkillVisibility.TEAM)
-                        .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', ?, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId)));
+                        .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', {0}, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId)));
     }
 
     default List<Skill> findVisibleSummaryForUserByOwnerType(String userId, Integer ownerType) {
@@ -45,12 +45,27 @@ public interface SkillMapper extends BaseMapper<Skill> {
                         .or(w2 -> w2.eq("visibility", SkillVisibility.PRIVATE)
                                 .eq("created_by", userId))
                         .or(w2 -> w2.eq("visibility", SkillVisibility.TEAM)
-                                .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', ?, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId))));
+                                .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', {0}, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId))));
     }
 
     default List<Skill> findBySkillOwnerTypeAndEnabledIsTrue(Integer ownerType) {
         return selectList(new QueryWrapper<Skill>()
                 .eq("skill_owner_type", ownerType)
                 .eq("enabled", true));
+    }
+
+    /**
+     * 按 ID 列表查询「该用户可见 + enabled=true」的技能（主 Agent 加载会话勾选技能用）。
+     * 可见性规则与 {@link #findVisibleSummaryForUserByOwnerType} 一致：PUBLIC / 自己创建的 PRIVATE / 所在 TEAM。
+     */
+    default List<Skill> findVisibleEnabledSummaryForUserByIds(String userId, List<Long> ids) {
+        return selectList(new QueryWrapper<Skill>()
+                .in("id", ids)
+                .eq("enabled", true)
+                .and(w -> w.eq("visibility", SkillVisibility.PUBLIC)
+                        .or(w2 -> w2.eq("visibility", SkillVisibility.PRIVATE)
+                                .eq("created_by", userId))
+                        .or(w2 -> w2.eq("visibility", SkillVisibility.TEAM)
+                                .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', {0}, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId))));
     }
 }

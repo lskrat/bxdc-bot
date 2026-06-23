@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Service;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -58,6 +59,18 @@ public class SkillService {
      */
     public List<Skill> listSkillsByOwnerType(Integer ownerType) {
         return skillMapper.findBySkillOwnerTypeAndEnabledIsTrue(ownerType);
+    }
+
+    /**
+     * 按 ID 列表查询该用户可见且 enabled=true 的技能（主 Agent 加载会话勾选技能用）。
+     * @param userId 当前用户 ID（用于可见性过滤）
+     * @param ids 会话表 enabled_skills 解析出的 skillId 列表；null/空则返回空列表
+     */
+    public List<Skill> listEnabledSkillsForUserByIds(String userId, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return skillMapper.findVisibleEnabledSummaryForUserByIds(userId, ids);
     }
 
     public Optional<Skill> getSkillByIdForUser(Long id, String userId) {

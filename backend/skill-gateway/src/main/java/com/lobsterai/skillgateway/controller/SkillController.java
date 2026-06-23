@@ -29,6 +29,7 @@ import com.lobsterai.skillgateway.entity.SkillTextPrompt;
 import com.lobsterai.skillgateway.mapper.SkillTextPromptMapper;
 import com.lobsterai.skillgateway.service.ApiProxyService;
 import com.lobsterai.skillgateway.service.AsyncPollingAuditService;
+import com.lobsterai.skillgateway.service.ConversationService;
 import com.lobsterai.skillgateway.service.SkillExecutionService;
 import com.lobsterai.skillgateway.util.JsonPathUtils;
 import com.lobsterai.skillgateway.util.StringUtils;
@@ -59,6 +60,8 @@ public class SkillController {
 
     private final SkillExecutionService skillExecutionService;
 
+    private final ConversationService conversationService;
+
     public SkillController(
             SkillService skillService,
             SkillParseService skillParseService,
@@ -71,7 +74,8 @@ public class SkillController {
             ApiProxyService apiProxyService,
             AsyncPollingAuditService pollingAuditService,
             ObjectMapper objectMapper,
-            SkillExecutionService skillExecutionService
+            SkillExecutionService skillExecutionService,
+            ConversationService conversationService
     ) {
         this.skillService = skillService;
         this.skillParseService = skillParseService;
@@ -85,6 +89,7 @@ public class SkillController {
         this.pollingAuditService = pollingAuditService;
         this.objectMapper = objectMapper;
         this.skillExecutionService = skillExecutionService;
+        this.conversationService = conversationService;
     }
 
     // --- Skill Management (CRUD) ---
@@ -106,6 +111,20 @@ public class SkillController {
             @RequestParam(value = "ownerType") Integer ownerType
     ) {
         return skillService.listSkillsByOwnerType(ownerType);
+    }
+
+    /**
+     * 主 Agent 加载会话勾选技能：传入会话 ID，由 gateway 查会话表 enabled_skills，
+     * 解析出 skillId 列表后返回「该用户可见 + enabled=true」的技能列表。
+     * X-User-Id 用于校验会话归属并做可见性过滤。
+     */
+    @GetMapping("/by-conversation")
+    public List<Skill> getSkillsByConversation(
+            @RequestHeader("X-User-Id") String userId,
+            @RequestParam("conversationId") String conversationId
+    ) {
+        List<Long> enabledSkillIds = conversationService.getEnabledSkillIds(conversationId, userId);
+        return skillService.listEnabledSkillsForUserByIds(userId, enabledSkillIds);
     }
 
     @GetMapping("/{id}")
