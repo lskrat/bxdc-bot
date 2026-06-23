@@ -34,6 +34,17 @@ import {
   type ToolTraceStatus,
 } from "./tool-trace-context";
 import { describeGatewayExtendedTool } from "./java-skills";
+import { interrupt, isGraphInterrupt, INTERRUPT } from "@langchain/langgraph";
+
+/**
+ * 从 payload 中提取中断条目
+ */
+function extractInterruptEntries(payload: unknown): Array<{ value?: unknown }> {
+  if (!payload || typeof payload !== 'object') return [];
+  const p = payload as Record<string, unknown>;
+  const arr = p[INTERRUPT] ?? p.__interrupt__;
+  return Array.isArray(arr) ? arr : [];
+}
 
 const executeSkillInputSchema = z.object({
   skillIds: z
@@ -184,11 +195,54 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
           const iterator = stream[Symbol.asyncIterator]();
 
           while (true) {
-            const { value: raw, done } = await iterator.next();
-            if (done) break;
+            let raw: any;
+            try {
+              const result = await iterator.next();
+              if (result.done) break;
+              raw = result.value;
+            } catch (error) {
+              // 检测 LangGraph 中断信号，重新抛出以便主 Agent 处理
+              if (isGraphInterrupt(error) || (error && typeof error === 'object' && '__interrupt__' in error)) {
+                throw error;
+              }
+              throw error;
+            }
 
             const payload = unwrapLangGraphStreamPayload(raw);
             lastPayload = payload;
+            
+            // 检测子 Agent 发送的中断信号
+            const interruptEntries = extractInterruptEntries(payload);
+            if (interruptEntries.length > 0) {
+              const interruptData = interruptEntries[0]?.value;
+              if (interruptData && typeof interruptData === 'object') {
+                // 记录中断的 toolCallId，用于后续工具状态事件匹配
+                const pendingInterruptToolCallId = (interruptData as any).toolCallId;
+                if (pendingInterruptToolCallId && typeof pendingInterruptToolCallId === 'string') {
+                  // 将中断的 toolCallId 保存到对应的工具调用记录中
+                  const toolName = (interruptData as any).toolName;
+                  if (toolName) {
+                    const pendingCall = toolCalls.find(tc => tc.toolName === toolName && tc.output === "");
+                    if (pendingCall) {
+                      pendingCall.toolId = pendingInterruptToolCallId;
+                    }
+                  }
+                }
+                // 重新抛出中断信号，让主 Agent 处理
+                throw interrupt({
+                  kind: (interruptData as any).kind || 'extended_skill_confirmation',
+                  toolName: `subagent_${(interruptData as any).toolName || 'unknown'}`,
+                  toolCallId: (interruptData as any).toolCallId || `subagent_${Date.now()}`,
+                  skillName: (interruptData as any).skillName || 'unknown',
+                  skillId: (interruptData as any).skillId,
+                  summary: (interruptData as any).summary || 'Sub-agent skill execution',
+                  details: (interruptData as any).details || '',
+                  parametersPreview: (interruptData as any).parametersPreview,
+                  gatewayRequestId: (interruptData as any).gatewayRequestId || '',
+                });
+              }
+            }
+            
             const streamMessages = payload?.messages || [];
 
             for (const msg of streamMessages) {
@@ -237,14 +291,14 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
                   lastCall.output = toolOutput;
                 }
 
-                const toolId = (typeof toolCallId === 'string' && toolCallId)
-                  ? toolCallId
-                  : lastCall?.toolId || `${toolName}:${Date.now()}`;
+                const toolId = lastCall?.toolId || (typeof toolCallId === 'string' && toolCallId) || `${toolName}:${Date.now()}`;
                 const gatewayInfo = describeGatewayExtendedTool(toolName);
 
                 const status: ToolTraceStatus =
                   toolOutput.includes('CANCELLED') || toolOutput.includes('Error') ? 'failed' : 'completed';
 
+                console.log(`[DEBUG] emitToolTraceEvent: toolId=${toolId}, toolName=${toolName}, status=${status}, lastCall?.toolId=${lastCall?.toolId}, toolCallId=${toolCallId}`);
+                
                 emitToolTraceEvent({
                   type: 'tool_status',
                   toolId,
@@ -313,6 +367,11 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             conversationCached: subAgentCache.has(cacheKey),
           });
         } catch (error) {
+          // 检测 LangGraph 中断信号，重新抛出以便主 Agent 处理确认请求
+          if (isGraphInterrupt(error) || (error && typeof error === 'object' && '__interrupt__' in error)) {
+            throw error;
+          }
+          
           const errMsg = `Error executing skill: ${error instanceof Error ? error.message : String(error)}`;
           try {
             const parentToolId = getActiveParentToolId('execute_skill_with_context');

@@ -492,15 +492,21 @@ export function provideChat() {
     toolId: string,
     toolStatus: ToolInvocationStatus,
   ): ConfirmationRequest[] {
+    console.log(`[DEBUG] applyConfirmationExecutionOutcome: toolId=${toolId}, toolStatus=${toolStatus}, confirmations count=${confirmations.length}`);
+    for (const c of confirmations) {
+      console.log(`[DEBUG]   checking confirmation: toolCallId=${c.toolCallId}, status=${c.status}, match=${c.toolCallId === toolId}`);
+    }
     if (toolStatus !== 'completed' && toolStatus !== 'failed') return confirmations
-    return confirmations.map((c) =>
+    const updated: ConfirmationRequest[] = confirmations.map((c) =>
       c.toolCallId === toolId && c.status === 'confirmed'
         ? {
             ...c,
-            executionOutcome: toolStatus === 'completed' ? 'completed' : 'failed',
+            executionOutcome: (toolStatus === 'completed' ? 'completed' : 'failed') as 'completed' | 'failed',
           }
         : c,
     )
+    console.log(`[DEBUG] applyConfirmationExecutionOutcome result:`, updated);
+    return updated
   }
 
   function upsertToolInvocation(toolEvent: {
