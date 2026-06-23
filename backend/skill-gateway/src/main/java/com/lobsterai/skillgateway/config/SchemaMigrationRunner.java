@@ -186,6 +186,7 @@ public class SchemaMigrationRunner implements InitializingBean {
         ensureColumn(conn, table, "team_id", existingColumns,
                 "ALTER TABLE skills ADD COLUMN team_id VARCHAR(512) NULL " +
                 "COMMENT '团队可见性关联的团队 ID（add-skill-team-visibility 引入）'");
+        // 复合索引：team_id 字段的查询加速（add-skill-team-visibility 引入的 idx_skills_team_id）
         ensureIndex(conn, table, "idx_skills_team_id", existingIndexes,
                 "ALTER TABLE skills ADD INDEX idx_skills_team_id (team_id)");
     }
@@ -204,6 +205,13 @@ public class SchemaMigrationRunner implements InitializingBean {
 
         Set<String> existingColumns = getColumnNames(conn, table);
         Set<String> existingIndexes = getIndexNames(conn, table);
+
+        // 0. source_file_id：cf21bda (wuqilei 6-13 "feat: 新增Excel工具操作能力") 加的列
+        //    关联临时文件与源文件（旧库需要补这列否则 _temp 后缀处理路径会缺字段）。
+        //    当时 commit 漏了 Java migration，这里补齐（已存在则跳过，幂等）。
+        ensureColumn(conn, table, "source_file_id", existingColumns,
+                "ALTER TABLE user_files ADD COLUMN source_file_id BIGINT DEFAULT NULL " +
+                "COMMENT '源文件 ID（用于临时文件关联源文件，cf21bda wuqilei 引入）'");
 
         // 1. session_id 列
         ensureColumn(conn, table, "session_id", existingColumns,
