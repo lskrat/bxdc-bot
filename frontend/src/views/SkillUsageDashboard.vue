@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { fetchSkillUsageOverview, fetchSkillUsageDetails, type SkillUsageOverviewItem, type SkillUsageDetailRecord } from '../services/api'
 
 // Filters
@@ -25,17 +25,18 @@ const detailPageSize = ref(20)
 const overviewColumns = [
   { colKey: 'skillName', title: 'Skill名称', width: 180 },
   { colKey: 'toolName', title: '类型', width: 120 },
-  { colKey: 'totalCalls', title: '调用次数', width: 100, align: 'right' as const },
-  { colKey: 'successRate', title: '成功率', width: 100, cell: 'successRate' },
-  { colKey: 'uniqueUsers', title: '调用用户数', width: 100, align: 'right' as const },
-  { colKey: 'createdBy', title: '创建者', width: 120 },
-  { colKey: 'firstCallTime', title: '首次调用', width: 160 },
-  { colKey: 'lastCallTime', title: '最近调用', width: 160 },
+  { colKey: 'totalCalls', title: '调用次数', width: 100, align: 'right' as const, sorter: true },
+  { colKey: 'successRate', title: '成功率', width: 100, cell: 'successRate', sorter: true },
+  { colKey: 'uniqueUsers', title: '调用用户数', width: 100, align: 'right' as const, sorter: true },
+  { colKey: 'avgDurationMs', title: '平均耗时(ms)', width: 120, align: 'right' as const, sorter: true },
+  { colKey: 'createdBy', title: '创建者', width: 120, cell: 'createdBy' },
+  { colKey: 'firstCallTime', title: '首次调用', width: 160, sorter: true },
+  { colKey: 'lastCallTime', title: '最近调用', width: 160, sorter: true },
   { colKey: 'actions', title: '操作', width: 100, cell: 'actions' },
 ]
 
 const detailColumns = [
-  { colKey: 'userId', title: '调用用户', width: 150 },
+  { colKey: 'userId', title: '调用用户', width: 150, cell: 'userId' },
   { colKey: 'status', title: '状态', width: 100, cell: 'status' },
   { colKey: 'startTime', title: '开始时间', width: 160 },
   { colKey: 'durationMs', title: '耗时(ms)', width: 100, align: 'right' as const },
@@ -52,6 +53,37 @@ function successRateColor(row: SkillUsageOverviewItem): string {
   if (rate > 0.9) return 'var(--td-success-color)'
   if (rate < 0.5) return 'var(--td-error-color)'
   return 'var(--td-text-color-primary)'
+}
+
+// 列排序（前端本地排序，基于已加载的全量数据）
+type SortInfo = { sortBy: string; descending: boolean }
+const sort = ref<SortInfo | undefined>(undefined)
+
+const sortedData = computed<SkillUsageOverviewItem[]>(() => {
+  const s = sort.value
+  if (!s || !s.sortBy) return overviewData.value
+  const dir = s.descending ? -1 : 1
+  const sortBy = s.sortBy
+  return [...overviewData.value].sort((a, b) => {
+    let av: number
+    let bv: number
+    if (sortBy === 'successRate') {
+      av = a.totalCalls === 0 ? 0 : a.successCalls / a.totalCalls
+      bv = b.totalCalls === 0 ? 0 : b.successCalls / b.totalCalls
+    } else if (sortBy === 'firstCallTime' || sortBy === 'lastCallTime') {
+      av = a[sortBy] ? new Date(a[sortBy]).getTime() : 0
+      bv = b[sortBy] ? new Date(b[sortBy]).getTime() : 0
+    } else {
+      av = Number((a as Record<string, unknown>)[sortBy] ?? 0)
+      bv = Number((b as Record<string, unknown>)[sortBy] ?? 0)
+    }
+    return (av - bv) * dir
+  })
+})
+
+function onSortChange(value: SortInfo | undefined) {
+  sort.value = value && value.sortBy ? value : undefined
+  overviewPage.value = 1
 }
 
 async function loadOverview() {
@@ -133,9 +165,10 @@ onMounted(() => {
 
     <!-- Overview table -->
     <t-table
-      :data="overviewData"
+      :data="sortedData"
       :columns="overviewColumns"
       :loading="overviewLoading"
+      :sort="sort"
       :pagination="{
         current: overviewPage,
         pageSize: overviewPageSize,
@@ -145,12 +178,16 @@ onMounted(() => {
       row-key="skillName"
       hover
       stripe
+      @sort-change="onSortChange"
       @page-change="(pi: { current: number }) => overviewPage = pi.current"
     >
       <template #successRate="{ row }">
         <span :style="{ color: successRateColor(row), fontWeight: 600 }">
           {{ successRate(row) }}
         </span>
+      </template>
+      <template #createdBy="{ row }">
+        {{ row.createdByName || row.createdBy }}
       </template>
       <template #actions="{ row }">
         <t-button
@@ -185,6 +222,9 @@ onMounted(() => {
         hover
         @page-change="onDetailPageChange"
       >
+        <template #userId="{ row }">
+          {{ row.userName || row.userId }}
+        </template>
         <template #status="{ row }">
           <t-tag
             :theme="row.status === 'completed' ? 'success' : 'danger'"

@@ -67,6 +67,10 @@ public class ToolCallLog {
     @TableField("created_at")
     private LocalDateTime createdAt;
 
+    /** 调用用户昵称（来自 users 表 JOIN，非持久化） */
+    @TableField(exist = false)
+    private String userName;
+
     public Long getId() {
         return id;
     }
@@ -97,6 +101,14 @@ public class ToolCallLog {
 
     public void setUserId(String userId) {
         this.userId = userId;
+    }
+
+    public String getUserName() {
+        return userName;
+    }
+
+    public void setUserName(String userName) {
+        this.userName = userName;
     }
 
     public String getToolName() {

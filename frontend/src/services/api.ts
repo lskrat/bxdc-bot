@@ -226,6 +226,7 @@ export interface SkillUsageOverviewItem {
   failCalls: number
   uniqueUsers: number
   createdBy: string
+  createdByName?: string
   firstCallTime: string
   lastCallTime: string
   avgDurationMs: number
@@ -256,6 +257,7 @@ export interface SkillUsageDetailPage {
 export interface SkillUsageDetailRecord {
   id: number
   userId: string
+  userName?: string
   status: string
   startTime: string
   endTime: string

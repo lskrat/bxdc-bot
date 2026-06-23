@@ -13,6 +13,7 @@ public class SkillUsageOverviewDTO {
     private Long failCalls;
     private Long uniqueUsers;
     private String createdBy;
+    private String createdByName;
 
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
     private LocalDateTime firstCallTime;
@@ -42,6 +43,9 @@ public class SkillUsageOverviewDTO {
 
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
+
+    public String getCreatedByName() { return createdByName; }
+    public void setCreatedByName(String createdByName) { this.createdByName = createdByName; }
 
     public LocalDateTime getFirstCallTime() { return firstCallTime; }
     public void setFirstCallTime(LocalDateTime firstCallTime) { this.firstCallTime = firstCallTime; }
