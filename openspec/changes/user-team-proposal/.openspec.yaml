@@ -1,0 +1,8 @@
+schema: spec-driven
+created: 2026-06-22
+artifactPaths:
+  proposal: proposal.md
+  design: design.md
+  tasks: tasks.md
+  specs:
+    existingOutputPaths: []

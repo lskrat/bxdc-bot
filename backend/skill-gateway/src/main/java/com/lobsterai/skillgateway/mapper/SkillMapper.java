@@ -1,6 +1,8 @@
 package com.lobsterai.skillgateway.mapper;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.entity.SkillVisibility;
@@ -16,52 +18,39 @@ public interface SkillMapper extends BaseMapper<Skill> {
         return Optional.ofNullable(selectOne(new LambdaQueryWrapper<Skill>().eq(Skill::getName, name)));
     }
 
+    default int updateIntroMdById(Long id, String introMd) {
+        return update(null, new LambdaUpdateWrapper<Skill>()
+                .eq(Skill::getId, id)
+                .set(Skill::getIntroMd, introMd));
+    }
+
     default List<Skill> findAllPublicSummary() {
         return selectList(new LambdaQueryWrapper<Skill>()
                 .eq(Skill::getVisibility, SkillVisibility.PUBLIC));
     }
 
     default List<Skill> findVisibleSummaryForUser(String userId) {
-        return selectList(new LambdaQueryWrapper<Skill>()
-                .eq(Skill::getVisibility, SkillVisibility.PUBLIC)
-                .or(w -> w.eq(Skill::getVisibility, SkillVisibility.PRIVATE)
-                        .eq(Skill::getCreatedBy, userId)));
+        return selectList(new QueryWrapper<Skill>()
+                .eq("visibility", SkillVisibility.PUBLIC)
+                .or(w -> w.eq("visibility", SkillVisibility.PRIVATE)
+                        .eq("created_by", userId))
+                .or(w -> w.eq("visibility", SkillVisibility.TEAM)
+                        .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', ?, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId)));
     }
 
-    /**
-     * 按可见性 + 所有者类型过滤（用于页面只查询用户技能）
-     * @param userId 当前用户 ID
-     * @param skillOwnerType 1: 用户技能, 2: 系统技能
-     */
-    default List<Skill> findVisibleSummaryForUserByOwnerType(String userId, Integer skillOwnerType) {
-        if (userId == null || userId.trim().isEmpty()) {
-            return selectList(new LambdaQueryWrapper<Skill>()
-                    .eq(Skill::getVisibility, SkillVisibility.PUBLIC)
-                    .eq(Skill::getSkillOwnerType, skillOwnerType));
-        }
-        return selectList(new LambdaQueryWrapper<Skill>()
-                .eq(Skill::getSkillOwnerType, skillOwnerType)
-                .and(w -> w.eq(Skill::getVisibility, SkillVisibility.PUBLIC)
-                        .or(ww -> ww.eq(Skill::getVisibility, SkillVisibility.PRIVATE)
-                                .eq(Skill::getCreatedBy, userId))));
+    default List<Skill> findVisibleSummaryForUserByOwnerType(String userId, Integer ownerType) {
+        return selectList(new QueryWrapper<Skill>()
+                .eq("skill_owner_type", ownerType)
+                .and(w -> w.eq("visibility", SkillVisibility.PUBLIC)
+                        .or(w2 -> w2.eq("visibility", SkillVisibility.PRIVATE)
+                                .eq("created_by", userId))
+                        .or(w2 -> w2.eq("visibility", SkillVisibility.TEAM)
+                                .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', ?, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId))));
     }
 
-    /**
-     * 按技能所有者类型查找技能
-     * @param skillOwnerType 1: 用户技能, 2: 系统技能
-     */
-    default List<Skill> findBySkillOwnerType(Integer skillOwnerType) {
-        return selectList(new LambdaQueryWrapper<Skill>()
-                .eq(Skill::getSkillOwnerType, skillOwnerType));
-    }
-
-    /**
-     * 按技能所有者类型查找启用的技能
-     * @param skillOwnerType 1: 用户技能, 2: 系统技能
-     */
-    default List<Skill> findBySkillOwnerTypeAndEnabledIsTrue(Integer skillOwnerType) {
-        return selectList(new LambdaQueryWrapper<Skill>()
-                .eq(Skill::getSkillOwnerType, skillOwnerType)
-                .eq(Skill::isEnabled, true));
+    default List<Skill> findBySkillOwnerTypeAndEnabledIsTrue(Integer ownerType) {
+        return selectList(new QueryWrapper<Skill>()
+                .eq("skill_owner_type", ownerType)
+                .eq("enabled", true));
     }
 }

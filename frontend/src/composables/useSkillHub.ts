@@ -190,7 +190,8 @@ export function useSkillHub() {
     isLoading.value = true;
     error.value = null;
     try {
-      const res = await fetch(apiUrl('/api/skills'), {
+      // ownerType=1 仅拉取用户技能；系统内置技能（ownerType=2，如文件操作）不在 SkillHub 展示
+      const res = await fetch(apiUrl('/api/skills?ownerType=1'), {
         cache: 'no-store',
         headers: userIdHeader(),
       });

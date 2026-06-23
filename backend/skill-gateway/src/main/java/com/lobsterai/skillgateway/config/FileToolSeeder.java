@@ -244,24 +244,15 @@ public class FileToolSeeder implements ApplicationRunner {
 
             Skill existing = skillMapper.selectOne(
                     new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
-                            .eq(Skill::getName, familyName));
+                            .eq(Skill::getName, familyName)
+                            .eq(Skill::getSkillOwnerType, 2));
             if (existing != null) {
-                String prev = existing.getSchemaPropertiesJson();
-                boolean descChanged = description != null && !description.equals(existing.getDescription());
-                if (prev == null || !prev.equals(schemaJson)) {
-                    existing.setSchemaPropertiesJson(schemaJson);
-                    existing.setDescription(description);
-                    existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
-                    skillMapper.updateById(existing);
-                    log.info("Updated family skill schema: {} (id={})", familyName, existing.getId());
-                } else if (descChanged) {
-                    existing.setDescription(description);
-                    existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
-                    skillMapper.updateById(existing);
-                    log.info("Updated family skill description: {} (id={})", familyName, existing.getId());
-                } else {
-                    log.debug("Family skill already exists with same schema: {}", familyName);
-                }
+                // 已存在系统技能：直接更新 schema/description/ownerType，不再依据内容是否变化判断。
+                existing.setSchemaPropertiesJson(schemaJson);
+                existing.setDescription(description);
+                existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
+                skillMapper.updateById(existing);
+                log.info("Updated family skill: {} (id={})", familyName, existing.getId());
                 return;
             }
 
@@ -348,26 +339,19 @@ public class FileToolSeeder implements ApplicationRunner {
             String schemaJson = objectMapper.writeValueAsString(schema);
 
             // 检查是否已存在同名 skill — 已存在则更新 schema（description 和 schema 跟随代码升级）
+            // 必须限定 skill_owner_type=2（系统技能），避免误匹配到用户自建的同名技能（ownerType=1）后被当系统技能覆盖。
+            // 仅存在用户同名技能时此查询返回 null，走下方 insert 新建一条 ownerType=2 的系统技能行。
             Skill existing = skillMapper.selectOne(
                     new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
-                            .eq(Skill::getName, toolName));
+                            .eq(Skill::getName, toolName)
+                            .eq(Skill::getSkillOwnerType, 2));
             if (existing != null) {
-                String prev = existing.getSchemaPropertiesJson();
-                boolean descChanged = description != null && !description.equals(existing.getDescription());
-                if (prev == null || !prev.equals(schemaJson)) {
-                    existing.setSchemaPropertiesJson(schemaJson);
-                    existing.setDescription(description);
-                    existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
-                    skillMapper.updateById(existing);
-                    log.info("Updated existing skill schema: {} (id={})", toolName, existing.getId());
-                } else if (descChanged) {
-                    existing.setDescription(description);
-                    existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
-                    skillMapper.updateById(existing);
-                    log.info("Updated existing skill description: {} (id={})", toolName, existing.getId());
-                } else {
-                    log.debug("Skill already exists with same schema: {}", toolName);
-                }
+                // 已存在系统技能：直接更新 schema/description/ownerType，不再依据内容是否变化判断。
+                existing.setSchemaPropertiesJson(schemaJson);
+                existing.setDescription(description);
+                existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
+                skillMapper.updateById(existing);
+                log.info("Updated existing skill: {} (id={})", toolName, existing.getId());
                 return;
             }
 

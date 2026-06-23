@@ -5,5 +5,6 @@ package com.lobsterai.skillgateway.entity;
  */
 public enum SkillVisibility {
     PUBLIC,
-    PRIVATE
+    PRIVATE,
+    TEAM
 }

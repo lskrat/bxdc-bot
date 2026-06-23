@@ -99,6 +99,11 @@ function formatToolArguments(args?: unknown) {
   return raw
 }
 
+function formatToolSummary(summary?: string) {
+  if (!summary) return ''
+  return summary.length > 200 ? summary.slice(0, 200) + '...' : summary
+}
+
 /** Tool 返回正文（SSE `result`），在消息区与日志区展示 */
 function formatToolResultText(result?: string) {
   if (result == null || String(result).length === 0) return ''
@@ -128,7 +133,7 @@ function parseDownloadInfo(result?: string): DownloadInfo | null {
     if (!m) return null
     const fileNameMatch = raw.match(/"originalFileName"\s*:\s*"([^"]+)"/)
       || raw.match(/"newFileName"\s*:\s*"([^"]+)"/)
-    return { url: m[1], fileName: fileNameMatch ? fileNameMatch[1] : 'download' }
+    return { url: m[1] || '', fileName: fileNameMatch ? (fileNameMatch[1] || 'download') : 'download' }
   }
   // 解包 { success, output: {...} } 或 { output: "..." }
   if (payload && typeof payload === 'object') {
@@ -315,6 +320,17 @@ const logViewerRows = computed<LogViewerRow[]>(() => {
 const expandedLogs = ref<Set<string>>(new Set())
 const expandedResultKeys = ref<Set<string>>(new Set())
 const expandedChildKeys = ref<Set<string>>(new Set())
+const expandedArgsKeys = ref<Set<string>>(new Set())
+
+function toggleArgsExpansion(toolId: string) {
+  const next = new Set(expandedArgsKeys.value)
+  if (next.has(toolId)) {
+    next.delete(toolId)
+  } else {
+    next.add(toolId)
+  }
+  expandedArgsKeys.value = next
+}
 
 function toggleResultExpansion(toolId: string) {
   const next = new Set(expandedResultKeys.value)
@@ -878,7 +894,13 @@ async function copyContent(text: string) {
                 </div>
               </div>
               <div v-if="tool.arguments !== undefined" class="tool-status-args">
-                参数：{{ formatToolArguments(tool.arguments) }}
+                <div class="tool-args-header" @click="toggleArgsExpansion(tool.id)">
+                  <span class="tool-result-arrow">{{ expandedArgsKeys.has(tool.id) ? '▼' : '▶' }}</span>
+                  <span class="tool-status-result-label">查看调用参数</span>
+                </div>
+                <div v-if="expandedArgsKeys.has(tool.id)">
+                  <pre class="tool-status-result-body">{{ formatToolArguments(tool.arguments) }}</pre>
+                </div>
               </div>
               <div
                 v-if="formatToolResultText(tool.result)"
@@ -926,8 +948,13 @@ async function copyContent(text: string) {
                     <span class="tool-status-text">{{ formatToolStatus(child.status) }}</span>
                     <span v-if="child.summary" class="tool-status-separator">·</span>
                     <span v-if="child.summary" class="tool-child-summary">{{ formatToolSummary(child.summary) }}</span>
-                    <span v-if="child.arguments !== undefined" class="tool-status-separator">·</span>
-                    <span v-if="child.arguments !== undefined" class="tool-child-summary">参数：{{ formatToolArguments(child.arguments) }}</span>
+                  </div>
+                  <div
+                    v-if="expandedChildKeys.has(child.id) && child.arguments !== undefined"
+                    class="tool-child-result"
+                  >
+                    <div class="tool-child-args-label">调用参数</div>
+                    <pre class="tool-status-result-body">{{ formatToolArguments(child.arguments) }}</pre>
                   </div>
                   <div
                     v-if="expandedChildKeys.has(child.id) && formatToolResultText(child.result)"
@@ -1234,6 +1261,33 @@ async function copyContent(text: string) {
 .tool-result-header:hover {
   background: var(--td-brand-color-light-hover, #d6e6ff);
   border-color: var(--td-brand-color, #0052d9);
+}
+
+.tool-args-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  background: var(--td-brand-color-light, #e7f1ff);
+  border: 1px solid var(--td-brand-color-focus, #b0c8f0);
+  font-size: 12px;
+  color: var(--td-brand-color, #0052d9);
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.tool-args-header:hover {
+  background: var(--td-brand-color-light-hover, #d6e6ff);
+  border-color: var(--td-brand-color, #0052d9);
+}
+
+.tool-child-args-label {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+  margin-bottom: 4px;
 }
 
 .tool-result-arrow {

@@ -1,11 +1,14 @@
 package com.lobsterai.skillgateway.controller;
 
+import com.lobsterai.skillgateway.dto.ParseFromDescriptionRequest;
+import com.lobsterai.skillgateway.dto.SkillParseResponse;
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.service.AsyncTaskPollingService;
 import com.lobsterai.skillgateway.service.BuiltinToolExecutionService;
 import com.lobsterai.skillgateway.service.GatewayOutboundAuditService;
 import com.lobsterai.skillgateway.service.LinuxScriptExecutionService;
 import com.lobsterai.skillgateway.service.ServerLedgerService;
+import com.lobsterai.skillgateway.service.SkillParseService;
 import com.lobsterai.skillgateway.service.SkillService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -43,6 +46,7 @@ import com.lobsterai.skillgateway.util.StringUtils;
 public class SkillController {
 
     private final SkillService skillService;
+    private final SkillParseService skillParseService;
     private final LinuxScriptExecutionService linuxScriptExecutionService;
     private final ServerLedgerService serverLedgerService;
     private final BuiltinToolExecutionService builtinToolExecutionService;
@@ -57,6 +61,7 @@ public class SkillController {
 
     public SkillController(
             SkillService skillService,
+            SkillParseService skillParseService,
             LinuxScriptExecutionService linuxScriptExecutionService,
             ServerLedgerService serverLedgerService,
             BuiltinToolExecutionService builtinToolExecutionService,
@@ -69,6 +74,7 @@ public class SkillController {
             SkillExecutionService skillExecutionService
     ) {
         this.skillService = skillService;
+        this.skillParseService = skillParseService;
         this.linuxScriptExecutionService = linuxScriptExecutionService;
         this.serverLedgerService = serverLedgerService;
         this.builtinToolExecutionService = builtinToolExecutionService;
@@ -92,13 +98,12 @@ public class SkillController {
     }
 
     /**
-     * 按技能所有者类型查询技能
-     * @param ownerType 1: 用户技能, 2: 系统技能
+     * 按技能所有者类型检索技能（agent-core 加载用户/系统技能时调用）。
+     * ownerType=1 用户技能，ownerType=2 系统技能；仅返回 enabled=true 的技能。
      */
     @GetMapping("/by-owner-type")
     public List<Skill> getSkillsByOwnerType(
-            @RequestParam Integer ownerType,
-            @RequestHeader(value = "X-User-Id", required = false) String userId
+            @RequestParam(value = "ownerType") Integer ownerType
     ) {
         return skillService.listSkillsByOwnerType(ownerType);
     }
@@ -113,6 +118,66 @@ public class SkillController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    /**
+     * 保存skill的markdown介绍（20260626）
+     * @param userId
+     * @param skill
+     * @return
+     *
+     * http://localhost:18080/api/skills/updateIntroMd
+     * POST JSON
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     * Content-Type:application/json
+     * JSON：
+     * {
+     *   "id":40,
+     *   "introMd": "# 天气查询技能\n\n## 功能概述\n用于查询指定城市的天气信息..."
+     * }
+     */
+    @PostMapping("/updateIntroMd")
+    public ResponseEntity<?> updateSkillIntroMd(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestBody Skill skill
+    ) {
+        if (userId == null || StringUtils.isBlank(userId)) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "X-User-Id header is required"));
+        }
+        if (skill == null || skill.getId() == null) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "Skill id is required"));
+        }
+        try {
+            Skill result = skillService.updateSkillIntroMd(skill.getId(), skill.getIntroMd(), userId);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            if (e.getMessage() != null && e.getMessage().startsWith("Skill not found")) {
+                return ResponseEntity.notFound().build();
+            }
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Collections.singletonMap("error", "Failed to update skill intro: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * 创建skill（20260626）
+     * POST http://localhost:18080/api/skills
+     * Content-Type: application/json
+     * X-User-Id: 123456
+     * {
+     *   "name": "多团队共享技能",
+     *   "description": "多个团队成员都可见",
+     *   "type": "API",
+     *   "configuration": "{\"kind\":\"api\",\"operation\":\"公共查询\",\"method\":\"GET\",\"endpoint\":\"http://api.example.com/common\"}",
+     *   "visibility": "TEAM",
+     *   "teamId": "1, 2, 3"
+     * }
+     *
+     * @param skill
+     * @param userId
+     * @return
+     */
     @PostMapping
     public ResponseEntity<?> createSkill(
             @RequestBody Skill skill,
@@ -125,6 +190,82 @@ public class SkillController {
         }
     }
 
+    // --- Skill Parse from Description ---
+
+    /**
+     * 从自然语言描述解析生成 Skill 对象（20260626）
+     * @param userId      用户 ID（从 X-User-Id header 获取）
+     * @param request     包含 description 的请求体
+     * @return SkillParseResponse 解析响应（包含 skill、warnings、extractedFields）
+     *
+     * 添加skill（自然语言转Skill对象）
+     * http://localhost:18080/api/skills/parse-from-description
+     * POST JSON
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     * Content-Type:application/json
+     * JSON:
+     * {"description":"新增一个skill，查询当日新闻。地址 http://v.juhe.cn/toutiao/index?key=c990e44845181032f48cc9a556e3a006&type=top。请求类型 GET。接口描述：返回头条(推荐)、国内，娱乐，体育，军事，科技，财经，时尚等新闻信息; 数据来源网络整理"}
+     */
+    @PostMapping("/parse-from-description")
+    public ResponseEntity<?> parseFromDescription(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestBody ParseFromDescriptionRequest request
+    ) {
+        if (userId == null || StringUtils.isBlank(userId)) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "X-User-Id header is required"));
+        }
+        if (request == null || request.getDescription() == null || request.getDescription().trim().isEmpty()) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "description is required"));
+        }
+        try {
+            SkillParseResponse response = skillParseService.parseFromDescription(userId, request.getDescription());
+            return ResponseEntity.ok(response);
+        } catch (SkillParseService.SkillParseException e) {
+            String code = e.getCode();
+            if ("LLM_NOT_CONFIGURED".equals(code)) {
+                return ResponseEntity.badRequest().body(new HashMap<String, Object>() {{
+                    put("error", e.getMessage());
+                    put("code", code);
+                }});
+            } else if ("INVALID_REQUEST".equals(code)) {
+                return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
+            }
+            return ResponseEntity.internalServerError().body(new HashMap<String, Object>() {{
+                put("error", "Skill parsing failed: " + e.getMessage());
+                put("code", code);
+            }});
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(new HashMap<String, Object>() {{
+                put("error", "Skill parsing failed: " + e.getMessage());
+                put("code", "INTERNAL_ERROR");
+            }});
+        }
+    }
+
+    /**
+     * 更新skill（20260626）
+     *PUT http://localhost:18080/api/skills/46
+     * Content-Type: application/json
+     * X-User-Id: 123456
+     * {
+     *   "name": "多团队共享技能",
+     *   "description": "多个团队成员都可见",
+     *   "type": "API",
+     *   "configuration": "{\"kind\":\"api\",\"operation\":\"公共查询\",\"method\":\"GET\",\"endpoint\":\"http://api.example.com/common\"}",
+     *   "executionMode": "CONFIG",
+     *   "enabled": true,
+     *   "requiresConfirmation": false,
+     *   "visibility": "TEAM",
+     *   "teamId": "1"
+     * }
+     *
+     * @param id
+     * @param skillDetails
+     * @param userId
+     * @return
+     */
     @PutMapping("/{id}")
     public ResponseEntity<?> updateSkill(
             @PathVariable Long id,
@@ -154,6 +295,59 @@ public class SkillController {
         }
     }
 
+    /**
+     * 根据Skill对象信息生成整体介绍（20260626）
+     * @param userId
+     * @param skill
+     * @return
+     *
+     * http://localhost:18080/api/skills/generate-intro
+     * POST JSON
+     * 参数：
+     * header:
+     * X-User-Id:123456
+     * Content-Type:application/json
+     * JSON：
+     * {
+     * 	"id": null,
+     * 	"name": "，查询当日新闻。地址 http://v.juhe.cn/toutiao/index?key=c990e44845181032f48cc9a556e3a006&type=top。请求类型 GET。接口描述：返回头条(推荐)、国内，娱乐，体育，军事，科技，财经，时尚等新闻信息; 数据来源网络整理",
+     * 	"description": "返回头条(推荐)、国内，娱乐，体育，军事，科技，财经，时尚等新闻信息; 数据来源网络整理",
+     * 	"type": "API",
+     * 	"configuration": "{\"kind\":\"api\",\"operation\":\"查询当日新闻\",\"method\":\"GET\",\"endpoint\":\"http://v.juhe.cn/toutiao/index\",\"headers\":{},\"queryParams\":{\"type\":\"top。请求类型\",\"key\":\"c990e44845181032f48cc9a556e3a006\"}}",
+     * 	"executionMode": "CONFIG",
+     * 	"enabled": true,
+     * 	"requiresConfirmation": false,
+     * 	"visibility": "PRIVATE",
+     * 	"avatar": null,
+     * 	"createdBy": null,
+     * 	"createdAt": null,
+     * 	"updatedAt": null,
+     * 	"templatePlaceholders": [],
+     * 	"schemaPropertiesJson": null,
+     * 	"schemaProperties": {}
+     * }
+     */
+    @PostMapping("/generate-intro")
+    public ResponseEntity<?> generateSkillIntro(
+            @RequestHeader(value = "X-User-Id", required = false) String userId,
+            @RequestBody Skill skill
+    ) {
+        if (userId == null || StringUtils.isBlank(userId)) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "X-User-Id header is required"));
+        }
+        if (skill == null) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "Skill is required"));
+        }
+        try {
+            Skill result = skillService.generateIntro(userId, skill);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Collections.singletonMap("error", "Failed to generate skill intro: " + e.getMessage()));
+        }
+    }
+
     @GetMapping("/server-lookup")
     public ResponseEntity<?> lookupServer(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
@@ -170,7 +364,7 @@ public class SkillController {
         List<ServerLedgerService.ServerNameCandidate> candidates = serverLedgerService.findTopServerNameMatches(userId, q, 5);
         List<Map<String, Object>> list = new java.util.ArrayList<>();
         for (ServerLedgerService.ServerNameCandidate c : candidates) {
-            java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
+            Map<String, Object> row = new java.util.LinkedHashMap<>();
             row.put("id", c.id());
             row.put("name", c.name());
             list.add(row);
@@ -189,7 +383,6 @@ public class SkillController {
     public ResponseEntity<?> executeSkill(
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
-            @RequestHeader(value = "X-Conversation-Id", required = false) String conversationId,
             @RequestBody Map<String, Object> body
     ) {
         try {
@@ -201,13 +394,6 @@ public class SkillController {
             req.adjustedParams = body.get("adjustedParams");
             req.userId = userId;
             req.sessionId = sessionId;
-            // conversation-file-isolation: zhangzhuang merge 后 153 行引用 req.conversationId
-            // 兼容 X-Conversation-Id header（zhangzhuang 新增），X-Session-Id 兜底
-            req.conversationId = conversationId != null && !conversationId.isEmpty() ? conversationId : sessionId;
-            // bxdcbot-multi-turn-async：父任务标识
-            req.parentToolId = (String) body.get("parentToolId");
-            req.parentSkillId = body.get("parentSkillId") instanceof Number
-                    ? ((Number) body.get("parentSkillId")).longValue() : null;
 
             Object result = skillExecutionService.execute(req);
             return ResponseEntity.ok(result);
