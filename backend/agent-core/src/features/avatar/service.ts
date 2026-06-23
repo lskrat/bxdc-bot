@@ -1,6 +1,6 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { composeOpenAiCompatibleFetch } from "../../utils/llm-request-role-normalize";
-import { GENERATE_AVATAR_SYSTEM_PROMPT, GREETING_TEMPLATES } from "./prompts";
+import { GENERATE_AVATAR_SYSTEM_PROMPT } from "./prompts";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 
 export class AvatarService {
@@ -42,10 +42,5 @@ export class AvatarService {
       console.error("Error generating avatar:", error);
       return '👤'; // Fallback on error
     }
-  }
-
-  async generateGreeting(nickname: string, avatar: string): Promise<string> {
-    const template = GREETING_TEMPLATES[Math.floor(Math.random() * GREETING_TEMPLATES.length)];
-    return template.replace("{nickname}", nickname).replace("{avatar}", avatar);
   }
 }

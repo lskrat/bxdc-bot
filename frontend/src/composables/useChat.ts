@@ -1,7 +1,6 @@
 import { ref, provide, inject, type InjectionKey } from 'vue'
 import { confirmAction, getAgentStreamUrl } from '../services/api'
 import { agentUrl } from '../services/config'
-import { useUser } from './useUser'
 import { useFileUpload } from './useFileUpload'
 import { useConversations } from './useConversations'
 import { type LlmLogEntry, isLlmLogEvent, mergeLlmLogEntries } from '../utils/llmLog'
@@ -140,7 +139,6 @@ export interface ChatState {
   error: ReturnType<typeof ref<string | null>>
   sendMessage: (content: string, userId?: string, attachedFiles?: UploadFileInfo[]) => Promise<void>
   addMessage: (message: Message) => void
-  fetchGreeting: () => Promise<void>
   confirmSkillAction: (toolCallId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) => Promise<void>
   updateConfirmationArguments: (toolCallId: string, adjustedParams: Record<string, unknown>) => void
   /** Callback invoked after SSE stream completes; ChatView sets this to persist conversation messages */
@@ -155,7 +153,6 @@ export function provideChat() {
   const error = ref<string | null>(null)
   const activeSessionId = ref<string | null>(null)
   const saveMessageCallback = ref<((messages: Message[]) => void) | null>(null)
-  const { currentUser } = useUser()
   const { createSession, processStreamEvent, completeSession } = useThinkingMode()
   const fileUpload = useFileUpload()
 
@@ -1008,45 +1005,12 @@ export function provideChat() {
     }
   }
 
-  async function fetchGreeting() {
-    if (messages.value.length > 0) return
-    if (!currentUser.value) return
-
-    try {
-        const res = await fetch(agentUrl('/features/avatar/greeting'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                nickname: currentUser.value.nickname,
-                avatar: currentUser.value.avatar
-            })
-        });
-        const data = await res.json()
-        const greetingContent = extractMessageContent(data) ?? data?.greeting ?? null
-
-        if (typeof greetingContent === 'string' && greetingContent.length > 0) {
-          addMessage({
-            id: 'greeting',
-            role: 'assistant',
-            content: greetingContent,
-            timestamp: Date.now(),
-            toolInvocations: [],
-            llmLogs: [],
-            logTimeline: [],
-          })
-        }
-    } catch (e) {
-        console.error("Failed to fetch greeting:", e)
-    }
-  }
-
   const state: ChatState = {
     messages,
     isThinking,
     error,
     sendMessage,
     addMessage,
-    fetchGreeting,
     confirmSkillAction,
     updateConfirmationArguments,
     saveMessageCallback,

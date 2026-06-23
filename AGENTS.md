@@ -176,6 +176,19 @@ mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
 - **不要**在多个增量 commit 里改 `schema-mysql.sql` 让用户手动 `mysql -e "..."` 跑
 - 复杂 schema 变更（加索引 / 改字段类型 / 数据迁移）走 Java migration 类（参考 `StartupRecoveryRunner` 模式）
 
+#### ⚠️ 给已有表加列：必须同步写 `SchemaMigrationRunner` 幂等迁移（强警告）
+
+`schema-mysql.sql` 用的是 `CREATE TABLE IF NOT EXISTS`，**只对「不存在的表」按完整定义建表，对「已存在的表」既不重建也不补列**。因此：
+
+- **只改实体 `@TableField` + 改 `schema-mysql.sql` 的 CREATE TABLE 是不够的**。空库环境正常（新建表带新列），但**已有旧表的环境（同事/部署/老库）启动会报 `Unknown column 'xxx' in 'field list'`**——查询用到了新列，而旧表没这列。
+- **新增/修改列时，MUST 同步在 `SchemaMigrationRunner` 对应的 `migrateXxx()` 里加一条幂等 `ALTER TABLE ... ADD COLUMN`（及必要的 `ensureIndex`）**，用 `ensureColumn(conn, table, "列名", existingColumns, "ALTER ...")` 模式（已存在则跳过）。`SchemaMigrationRunner` 是 `HIGHEST_PRECEDENCE` 的 `InitializingBean`，在所有 `ApplicationRunner`（如 `FileToolSeeder`）之前执行，保证查询前列已就绪。
+- **自查 checklist**（给任何表加列后跑一遍）：
+  1. 实体 `@TableField` 加了列 ✓
+  2. `schema-mysql.sql` 的 CREATE TABLE 加了列（空库路径）✓
+  3. `SchemaMigrationRunner.migrateXxx()` 加了幂等 `ensureColumn`（旧库路径）✓ ← **最易漏，必查**
+  4. 列若进入 Mapper 的 SELECT 列表，对照确认该表所有「后期新增列」都已在迁移里覆盖
+- 教训来源：`team_id`、`intro_md` 两列只改了实体与 CREATE TABLE 却漏了 `migrateSkills` 迁移，导致旧库启动 `Unknown column` 连环报错。
+
 ### 5.4 Java 版本与 language level 必须保持 JDK 1.8
 - 编译目标统一为 **JDK 1.8**（`pom.xml` 的 `<java.version>1.8</java.version>` 与 `maven-compiler-plugin` 的 `source/target` 同步）
 - IntelliJ Project language level 必须设为 **8 - Lambdas, type annotations etc.**（与 JDK 1.8 严格对应）

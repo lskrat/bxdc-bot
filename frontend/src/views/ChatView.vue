@@ -12,7 +12,7 @@ import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import ApiDetailView from '../components/ApiDetailView.vue'
 
-const { error, messages, fetchGreeting, saveMessageCallback } = provideChat()
+const { error, messages, saveMessageCallback } = provideChat()
 // provideConversations must be called before useConversations (parent proviides to Layout child)
 provideConversations()
 const conversations = useConversations()
@@ -267,15 +267,9 @@ onMounted(async () => {
       conversations.currentConversationId.value,
       currentUser.value.id,
     )
-    // Convert API messages to chat messages format
-    if (historyMessages.length > 0) {
-      messages.value = convertHistoryMessages(historyMessages)
-    } else {
-      // Empty conversation: show greeting
-      fetchGreeting()
-    }
-  } else {
-    fetchGreeting()
+    // Convert API messages to chat messages format.
+    // 问好语已作为持久化历史消息随 switchConversation 返回，无需前端模拟。
+    messages.value = convertHistoryMessages(historyMessages)
   }
 
   const taskId = route.query.taskId
@@ -294,9 +288,8 @@ watch(
   (msgs) => {
     if (!msgs) return
     if (msgs.length === 0) {
-      // Empty conversation: clear old messages and show greeting
+      // Empty conversation (e.g. legacy without greeting): clear old messages
       messages.value = []
-      fetchGreeting()
       return
     }
     messages.value = convertHistoryMessages(msgs)

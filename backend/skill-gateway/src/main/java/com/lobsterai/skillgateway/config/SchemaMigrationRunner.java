@@ -163,16 +163,29 @@ public class SchemaMigrationRunner implements InitializingBean {
         }
 
         Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
 
         // schema_properties：lskrat 6-08 在 Skill 实体加的 @TableField，SQL 未同步
         ensureColumn(conn, table, "schema_properties", existingColumns,
                 "ALTER TABLE skills ADD COLUMN schema_properties TEXT DEFAULT NULL " +
                 "COMMENT 'Skill 实体持久化的 JSON schema 配置（lskrat 6-08 加，未同步 SQL）'");
+        // intro_md：Skill 实体的 @TableField("intro_md")（skill-intro-md-update-api 相关），
+        // schema-mysql.sql 的 CREATE TABLE 已含此列，但对已存在的 skills 表不会补列，故在此迁移。
+        ensureColumn(conn, table, "intro_md", existingColumns,
+                "ALTER TABLE skills ADD COLUMN intro_md TEXT DEFAULT NULL " +
+                "COMMENT 'Skill 的 Markdown 整体介绍'");
         // skill_owner_type：zhangzhuang 6-16 merge 入 wuqilei PR 改的，schema-mysql.sql 已加但现有 skills 表缺列
         // 1=用户技能 / 2=系统技能 / 0=未指定
         ensureColumn(conn, table, "skill_owner_type", existingColumns,
                 "ALTER TABLE skills ADD COLUMN skill_owner_type TINYINT(1) DEFAULT 1 " +
                 "COMMENT '1=用户技能, 2=系统技能, 0=未指定（zhangzhuang merge wuqilei 1afb8db 引入）'");
+        // team_id：add-skill-team-visibility change 在 Skill 实体加的 @TableField("team_id")，
+        // schema-mysql.sql 的 CREATE TABLE 已含此列，但对已存在的 skills 表不会补列，故在此迁移。
+        ensureColumn(conn, table, "team_id", existingColumns,
+                "ALTER TABLE skills ADD COLUMN team_id VARCHAR(512) NULL " +
+                "COMMENT '团队可见性关联的团队 ID（add-skill-team-visibility 引入）'");
+        ensureIndex(conn, table, "idx_skills_team_id", existingIndexes,
+                "ALTER TABLE skills ADD INDEX idx_skills_team_id (team_id)");
     }
 
     /**
