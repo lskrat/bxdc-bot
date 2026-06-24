@@ -334,7 +334,7 @@ export function provideFileUpload(): FileUploadState {
     const filesToOverwrite = new Set<File>()
     if (duplicates.length === 1) {
       // 单文件：保持原 UX，逐文件弹窗
-      const p = duplicates[0]
+      const p = duplicates[0]!
       const body = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_FILE(p.file.name, p.duplicateTime!)
       const replace = await showOverwriteConfirm(p.file.name, body)
       if (replace) filesToOverwrite.add(p.file)
