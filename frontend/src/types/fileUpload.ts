@@ -175,6 +175,8 @@ export interface FileUploadConfig {
     FILE_TOO_LARGE: string;
     TOO_MANY_FILES: string;
     DUPLICATE_FILE: (name: string, time: string) => string;
+    // addFiles 聚合多个重复文件时使用的批量文案；addFiles 阶段 2 调用
+    DUPLICATE_BATCH: (count: number, lines: string[]) => string;
   };
 }
 
