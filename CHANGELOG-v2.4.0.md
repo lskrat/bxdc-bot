@@ -190,7 +190,49 @@ VALUES (...) ...;  -- 9 条
 
 ---
 
-## 六、部署说明
+## 六、API Skill 入参按 parameterContract.properties[*].type 做强转
+
+> 发布日期: 2026-06-24
+
+### 功能概述
+
+修复 LLM 透传字符串 boolean / 数字给 API Skill 时，下游接口收不到正确类型的 bug。`SkillExecutionService.mergeDefaults()` 现在会按 `parameterContract.properties[*].type` 声明把字符串 / Number 等非契约类型强转成契约类型。
+
+支持的强转规则：
+
+| 契约 type | 输入 | 输出 |
+|-----------|------|------|
+| `boolean` | `"true"` / `"True"` / `"TRUE"` / `"yes"` / `"1"`（大小写不敏感、去前后空格）| `Boolean.TRUE` |
+| `boolean` | `"false"` / `"False"` / `"FALSE"` / `"no"` / `"0"` / `""` | `Boolean.FALSE` |
+| `boolean` | 非法字符串（如 `"abc"`）| 抛 `IllegalArgumentException`（含字段名 + 实际值）|
+| `integer` | `"42"` 字符串 | `Long(42)` |
+| `number` | `"0.75"` 字符串 | `Double(0.75)` |
+| 未声明 type | 任意 | 原样保留（保守契约）|
+
+强转失败前调 `log.warn` 记录 `skillId / userId / key / expectedType / actualType / actualValue`，方便运维排查。
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/skill-gateway/src/main/java/com/lobsterai/skillgateway/service/SkillExecutionService.java` | `mergeDefaults` 末尾新增按 `properties[*].type` 强转循环；新增私有方法 `coerceByType(key, value, type, skillId, userId)`；同时修复 `mergeDefaults` 预存在的 ClassCastException（property 是简化描述格式 `{"name": "用户 ID"}` 时不再 crash）|
+| `backend/skill-gateway/src/test/java/com/lobsterai/skillgateway/service/SkillExecutionServiceTest.java` | 新建单测文件，覆盖 15 类典型场景（29 个 testcase 全通过）|
+
+### 兼容性提示
+
+> ⚠️ **运维注意**：本次变更会让原本「字符串 boolean 也能蒙混过」的接口立刻按契约返回 boolean。如果你的下游接口**意外**接受了字符串 boolean（例如 `"enabled":"true"` 而不是 `"enabled":true`），本次修复后会按契约返回 boolean，下游会 400。
+
+**如需保留字符串行为**：把该字段的契约从 `type: "boolean"` 改为 `type: "string"`，或直接移除 `type` 字段（按未声明 type 处理，原样保留字符串）。
+
+### 配套 OpenSpec
+
+- change: `openspec/changes/fix-api-skill-boolean-type-coercion/`
+- spec: `openspec/changes/fix-api-skill-boolean-type-coercion/specs/api-extension-skill-llm-tool-call/spec.md`（1 requirement + 16 scenario）
+- 架构评审: `openspec/reviews/2026-06-24-fix-api-skill-boolean-type-coercion.md`（**PASS**）
+
+---
+
+## 七、部署说明
 
 ### 部署顺序
 
