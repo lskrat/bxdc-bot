@@ -93,6 +93,24 @@ function showOverwriteConfirm(_fileName: string, message: string): Promise<boole
   })
 }
 
+/**
+ * open spec: unsupported-file-type-alert — 不支持文件类型弹窗
+ *
+ * 必须显式保存 dialog 实例 + onConfirm/onClose 手动 destroy()：
+ * TDesign DialogPlugin.alert 在没有 onConfirm 时，部分版本不会自动关闭弹窗
+ * （同样的写法 DialogPlugin.confirm 在 showOverwriteConfirm 里也用了显式 destroy）。
+ */
+function showUnsupportedTypeAlert(fileName: string): void {
+  const dialog = DialogPlugin.alert({
+    header: '不支持的文件类型',
+    body: `文件 "${fileName}" 的格式暂不支持上传。\n\n当前仅支持：${FILE_UPLOAD_CONFIG.MESSAGES.UNSUPPORTED_TYPE}`,
+    theme: 'warning',
+    confirmBtn: '我知道了',
+    onConfirm: () => dialog.destroy(),
+    onClose: () => dialog.destroy(),
+  })
+}
+
 /** 移除指定 ID 的文件（跨分组） */
 function removeFileById(
   groups: Record<FileType, UploadFileInfo[]>,
@@ -241,7 +259,8 @@ export function provideFileUpload(): FileUploadState {
       // 1. 类型校验：通过扩展名识别 FileType
       const fileType = getFileTypeFromName(file.name)
       if (!fileType) {
-        MessagePlugin.warning(FILE_UPLOAD_CONFIG.MESSAGES.UNSUPPORTED_TYPE)
+        // open spec: unsupported-file-type-alert — 模态弹窗替代顶部 toast
+        showUnsupportedTypeAlert(file.name)
         continue
       }
 
@@ -647,7 +666,8 @@ export function useFileUpload(): FileUploadState {
     for (const file of files) {
       const fileType = getFileTypeFromName(file.name)
       if (!fileType) {
-        MessagePlugin.error(`不支持的文件格式：${file.name}`)
+        // open spec: unsupported-file-type-alert — 模态弹窗替代顶部 toast
+        showUnsupportedTypeAlert(file.name)
         continue
       }
       const validation = await validateFile(file, uploadedFiles.value[fileType])
