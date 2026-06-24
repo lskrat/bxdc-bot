@@ -110,18 +110,18 @@ public class FileToolSeeder implements ApplicationRunner {
                 mdMergeSchema());
 
         // ===== Excel 操作（支持 xlsx/xls/csv）=====
-        seedFileOperate("excel_read", "分页读取 Excel/CSV 文件内容。支持 .xlsx、.xls、.csv 三种格式。返回表头（headers）和当前页数据（rows），默认每页 50 行。通过 page 参数切换页码。大文件请逐页读取，避免 token 超限。返回结果包含 headers、rows、currentPage、pageSize、totalPages、totalRows、totalCols、hasMore 等分页信息。", excelReadSchema());
-        seedFileOperate("excel_write", "创建或覆盖 Excel 文件。两种场景：1) 传入 fileId 时在临时文件基础上写入数据；2) 不传 fileId 时根据 headers 和 rows 创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新的 fileId 供后续操作使用。需提供 headers（列头数组，必填）和 rows（数据行数组）。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelWriteSchema());
-        seedFileOperate("excel_init_temp", "初始化临时文件：根据原文件生成临时文件副本，上传到 FTP 并返回文件信息。此工具用于多步数据处理场景，首次操作前需调用此工具创建临时文件，后续所有 Excel 操作都在此临时文件上进行。返回结果包含 fileId（文件 ID，作为后续工具调用的入参）、fileName（临时文件名）、filePath（FTP 下载路径）和 headers（列头信息）。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", fileRefSchema());
-        seedFileOperate("excel_filter", "根据条件筛选数据行。支持多种操作符：equals（等于）、contains（包含）、gt（大于）、lt（小于）、gte（大于等于）、lte（小于等于）、notEquals（不等于）。筛选结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelFilterSchema());
-        seedFileOperate("excel_sort", "根据指定列对数据进行排序。支持升序（asc）和降序（desc）两种排序方向。排序结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelSortSchema());
-        seedFileOperate("excel_aggregate", "按指定列分组并进行聚合统计。支持 sum（求和）、avg（平均值）、count（计数）、min（最小值）、max（最大值）五种聚合类型。聚合结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelAggregateSchema());
-        seedFileOperate("excel_pivot", "透视分析：按行维度和列维度进行交叉汇总。需指定 rowDimension（行维度列）、colDimension（列维度列）和 valueColumn（值列）。透视结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelPivotSchema());
-        seedFileOperate("excel_calculate", "列运算：基于现有列生成新计算列。通过 formula 参数指定计算公式，支持用 {列名} 引用其他列，例如 {销售额} * {数量} 或 {单价} * 1.1。计算结果作为新列添加到数据中，写回临时文件。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelCalculateSchema());
-        seedFileOperate("excel_select_columns", "选择指定列，删除其他列。需提供 columns 数组指定要保留的列名。选择结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelSelectColumnsSchema());
-        seedFileOperate("excel_clean", "数据清洗操作。支持三种清洗类型：trim（去除字符串首尾空格）、deduplicate（去除重复行）、removeEmpty（移除空行）。清洗结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelCleanSchema());
-        seedFileOperate("excel_convert_format", "格式转换：将 Excel 文件转换为其他格式。支持 xlsx、xls、csv 三种格式之间的转换。转换结果写回临时文件，返回更新后的文件信息。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。", excelConvertFormatSchema());
-        seedFileOperate("excel_validate", "合规校验：根据指定规则对数据进行校验。支持多种校验规则，如必填校验、数值范围校验、格式校验等。校验结果以 JSON 格式返回，不修改原文件。", excelValidateSchema());
+        seedFileOperate("excel_read", "分页读取 Excel/CSV 内容，返回表头与当前页数据（默认每页 50 行，用 page 翻页）。多工作表：默认读第一个，可用 sheetName 或 sheetIndex 指定其他工作表。大文件请逐页读取。", excelReadSchema());
+        seedFileOperate("excel_write", "创建或覆盖 Excel：传 fileId 则在该文件上追加/替换 sheetName 指定的工作表（其余工作表保留），不传则按 headers/rows 新建文件并返回 fileId。建多工作表文件：先不传 fileId 写第一个 sheet 拿到 fileId，再用同一 fileId + 不同 sheetName 依次追加其余 sheet（同名会覆盖）。downloadUrl 请以 Markdown 链接展示。", excelWriteSchema());
+        seedFileOperate("excel_init_temp", "初始化临时文件：复制原文件为临时副本，返回 fileId 供后续 Excel 操作使用。多步处理前先调用此工具。", fileRefSchema());
+        seedFileOperate("excel_filter", "按条件筛选数据行，操作符：equals/contains/gt/lt/gte/lte/notEquals。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelFilterSchema());
+        seedFileOperate("excel_sort", "按指定列排序（asc/desc）。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelSortSchema());
+        seedFileOperate("excel_aggregate", "按列分组聚合，类型：sum/avg/count/min/max。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelAggregateSchema());
+        seedFileOperate("excel_pivot", "透视分析：按 rowDimension（行维度）、colDimension（列维度）、valueColumn（值列）交叉汇总。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelPivotSchema());
+        seedFileOperate("excel_calculate", "列运算：用 formula 生成新计算列，可用 {列名} 引用其他列，如 {销售额}*{数量}。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelCalculateSchema());
+        seedFileOperate("excel_select_columns", "保留 columns 指定的列、删除其余列。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelSelectColumnsSchema());
+        seedFileOperate("excel_clean", "数据清洗，类型：trim（去首尾空格）/deduplicate（去重）/removeEmpty（删空行）。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelCleanSchema());
+        seedFileOperate("excel_convert_format", "格式转换：xlsx/xls/csv 互转。转 CSV 时可用 sheetName 或 sheetIndex 指定导出的工作表（默认第一个）。结果写回临时文件。", excelConvertFormatSchema());
+        seedFileOperate("excel_validate", "合规校验：按 rules 规则校验数据（如必填、范围、格式），以 JSON 返回结果，不改原文件。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。", excelValidateSchema());
     }
 
     // ========== 整合方案 B：word_ops 单一入口 ==========
@@ -768,6 +768,8 @@ public class FileToolSeeder implements ApplicationRunner {
         s.put("fileRef", stringProp("文件名（可选）", false));
         s.put("page", intProp("页码，从 1 开始，默认 1", false));
         s.put("pageSize", intProp("每页行数，默认 50，建议 20~100 之间", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         return s;
     }
 
@@ -779,6 +781,7 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", false);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetName", stringProp("新建工作表名称，默认 \"Sheet1\"", false));
         Map<String, Object> headers = new LinkedHashMap<>();
         headers.put("type", "array");
         headers.put("description", "列头列表（必填），如 [\"姓名\", \"年龄\", \"部门\"]");
@@ -801,6 +804,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("column", stringProp("列名（必填）", true));
         s.put("operator", stringProp("操作符：equals/contains/gt/lt/gte/lte/notEquals，默认 equals", false));
         s.put("value", stringProp("筛选值（必填）", true));
@@ -815,6 +820,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("column", stringProp("排序列名（必填）", true));
         s.put("order", stringProp("排序方向：asc/desc，默认 asc", false));
         return s;
@@ -828,6 +835,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("groupBy", stringProp("分组列名（必填）", true));
         s.put("aggColumn", stringProp("聚合列名（必填）", true));
         s.put("aggType", stringProp("聚合类型：sum/avg/count/min/max，默认 sum", false));
@@ -842,6 +851,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("rowDimension", stringProp("行维度（必填）", true));
         s.put("colDimension", stringProp("列维度（必填）", true));
         s.put("valueColumn", stringProp("值列（必填）", true));
@@ -856,6 +867,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("newColumn", stringProp("新列名（必填）", true));
         s.put("formula", stringProp("计算公式，支持引用列名，如 {col1} + {col2} * 1.1", true));
         return s;
@@ -869,6 +882,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         
         Map<String, Object> columns = new LinkedHashMap<>();
         columns.put("type", "array");
@@ -887,6 +902,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("cleanType", stringProp("清洗类型：trim（去除首尾空格）/deduplicate（去重）/removeEmpty（移除空行）", true));
         return s;
     }
@@ -899,6 +916,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先。转换为 CSV 时仅导出指定工作表", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表。转换为 CSV 时仅导出指定工作表", false));
         s.put("targetFormat", stringProp("目标格式：xlsx/xls/csv", true));
         return s;
     }
@@ -911,6 +930,8 @@ public class FileToolSeeder implements ApplicationRunner {
         fileId.put("required", true);
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
+        s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         
         Map<String, Object> rules = new LinkedHashMap<>();
         rules.put("type", "array");

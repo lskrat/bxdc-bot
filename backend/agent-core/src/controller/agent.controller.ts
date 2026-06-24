@@ -65,6 +65,7 @@ import { buildStaticSystemPrompt, Prompts } from '../prompts';
 import { ConversationLogger } from '../utils/conversation-logger';
 import { gatewayCompactClient } from '../services/gateway-compact-client';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
+import { collectDownloadUrls, sanitizeDownloadUrls } from '../utils/download-url-guard';
 
 /** Payload from {@link interrupt} in extended skills / SSH tools (see java-skills). */
 type SkillInterruptPayload = {
@@ -395,6 +396,7 @@ export class AgentController {
     traceId: string,
     sessionId: string,
     userId?: string,
+    allowedDownloadUrls?: Set<string>,
   ) {
     const chunkMessages = getChunkMessages(chunk);
     for (let messageIndex = 0; messageIndex < chunkMessages.length; messageIndex += 1) {
@@ -412,6 +414,7 @@ export class AgentController {
           traceId,
           sessionId,
           userId,
+          allowedDownloadUrls,
         );
       }
 
@@ -428,6 +431,7 @@ export class AgentController {
           traceId,
           sessionId,
           userId,
+          allowedDownloadUrls,
         );
       }
     }
@@ -444,7 +448,14 @@ export class AgentController {
     traceId: string,
     sessionId: string,
     userId?: string,
+    allowedDownloadUrls?: Set<string>,
   ) {
+    // 收集工具真实返回的下载 URL 进白名单（输出守卫用，防模型编造链接）
+    if (allowedDownloadUrls && toolCall.result !== undefined) {
+      const resultText = typeof toolCall.result === 'string' ? toolCall.result : JSON.stringify(toolCall.result);
+      collectDownloadUrls(resultText, allowedDownloadUrls);
+    }
+
     const previousStatus = seenToolStatuses.get(toolCall.toolId);
     const prevEmittedResult = lastEmittedToolResult.get(toolCall.toolId);
 
@@ -691,6 +702,8 @@ export class AgentController {
         const lastToolArguments = new Map<string, unknown>();
         const lastEmittedToolResult = new Map<string, string | undefined>();
         const toolCallStartTimes = new Map<string, number>();
+        // 输出守卫：收集工具真实返回的下载 URL，最终回答里非白名单链接将被剥离
+        const allowedDownloadUrls = new Set<string>();
         try {
           const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
             subject.next({ data: JSON.stringify(event) });
@@ -849,7 +862,7 @@ export class AgentController {
                     const forward = stripInterruptForClient(payload);
                     if (forward != null) {
                       subject.next({ data: JSON.stringify(forward) });
-                      this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId);
+                      this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId, allowedDownloadUrls);
                       if (typeof forward === 'object') {
                         const lastAssistantMessage = getChunkMessages(forward)
                           .filter((message) => isAssistantMessage(message))
@@ -891,7 +904,7 @@ export class AgentController {
             const forward = stripInterruptForClient(payload);
             if (forward != null) {
               subject.next({ data: JSON.stringify(forward) });
-              this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId);
+              this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId, allowedDownloadUrls);
 
               if (typeof forward === 'object') {
                 const messages = getChunkMessages(forward);
@@ -946,6 +959,17 @@ export class AgentController {
                   }
                 }
               }
+            }
+          }
+
+          // 输出守卫：剥离模型编造的下载链接（非工具真实返回的 download URL）
+          if (typeof fullAssistantResponse === 'string' && fullAssistantResponse.length > 0) {
+            const guarded = sanitizeDownloadUrls(fullAssistantResponse, allowedDownloadUrls);
+            if (guarded.changed) {
+              console.warn(`[DownloadGuard] Stripped fabricated download link(s) from response. session=${sessionId}`);
+              fullAssistantResponse = guarded.text;
+              // 发整段修正覆盖（replace=true 提示前端替换已渲染内容）
+              subject.next({ data: JSON.stringify({ role: 'assistant', content: guarded.text, replace: true }) });
             }
           }
 

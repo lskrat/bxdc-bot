@@ -53,7 +53,7 @@ export const Prompts = new Proxy({} as SystemPrompts, {
 });
 
 /**
- * 拼接 `runTask` 注入的静态 `system` 内容：角色与使命 + 四条策略（顺序与历史行为一致）。
+ * 拼接 `runTask` 注入的静态 `system` 内容：角色与使命 + 五条策略（顺序与历史行为一致）。
  */
 export function buildStaticSystemPrompt(): string {
   return (
@@ -62,6 +62,7 @@ export function buildStaticSystemPrompt(): string {
     + Prompts.extendedSkillRoutingPolicy
     + Prompts.taskTrackingPolicy
     + Prompts.confirmationUIPolicy
+    + Prompts.downloadUrlPolicy
   );
 }
 

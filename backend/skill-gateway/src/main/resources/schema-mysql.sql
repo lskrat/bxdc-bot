@@ -348,4 +348,17 @@ CREATE TABLE IF NOT EXISTS python_sandbox  (
   INDEX idx_python_sandbox_enabled(enabled) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 2 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'Python ' ROW_FORMAT = Dynamic;
 
+-- sys_label（系统标签表 - 用于分类和标记数据）
+CREATE TABLE IF NOT EXISTS sys_label (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+    name VARCHAR(255) NOT NULL COMMENT '标签名称',
+    type VARCHAR(128) COMMENT '标签类型',
+    intro TEXT COMMENT '标签简介',
+    update_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    update_by VARCHAR(128) COMMENT '更新人ID',
+    del INT DEFAULT 0 COMMENT '是否逻辑删除：0=未删除，1=已删除',
+    INDEX idx_sys_label_del (del),
+    INDEX idx_sys_label_type (type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统标签表';
+
 SET FOREIGN_KEY_CHECKS = 1;

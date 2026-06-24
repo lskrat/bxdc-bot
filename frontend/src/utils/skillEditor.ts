@@ -75,6 +75,8 @@ export interface PythonConfigDraft {
   operation: string
   /** LLM-facing 中文说明 */
   interfaceDescription: string
+  /** 参数格式契约 JSON 文本（与 api.parameterContractText 同形，由后端 schema jsonEditor 渲染） */
+  parameterContractText: string
 }
 
 export interface OpenClawConfigDraft {
@@ -132,7 +134,7 @@ const SSH_ALLOWED_KEYS = [
 
 const TEMPLATE_ALLOWED_KEYS = ['kind', 'prompt']
 
-const PYTHON_ALLOWED_KEYS = ['kind', 'sandboxName', 'code', 'operation', 'interfaceDescription']
+const PYTHON_ALLOWED_KEYS = ['kind', 'sandboxName', 'code', 'operation', 'interfaceDescription', 'parameterContract']
 
 const OPENCLAW_ALLOWED_KEYS = ['kind', 'systemPrompt', 'allowedTools', 'orchestration']
 
@@ -330,6 +332,7 @@ function parsePythonDraft(configuration: JsonRecord): PythonConfigDraft {
     code: readString(configuration, 'code'),
     operation: readString(configuration, 'operation'),
     interfaceDescription: readString(configuration, 'interfaceDescription'),
+    parameterContractText: formatJsonText(configuration.parameterContract),
   }
 }
 
@@ -392,6 +395,7 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
       code: '',
       operation: '',
       interfaceDescription: '',
+      parameterContractText: '',
     }
   }
 
@@ -536,12 +540,14 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
   }
 
   if (draft.kind === 'python') {
+    const parameterContract = parseJsonText(draft.parameterContractText, '参数契约')
     return JSON.stringify({
       kind: 'python',
       sandboxName: requireNonEmpty(draft.sandboxName, 'Python 沙箱'),
       code: requireNonEmpty(draft.code, 'Python 脚本'),
       operation: requireNonEmpty(draft.operation, '操作标识'),
       ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
+      ...(parameterContract !== undefined ? { parameterContract } : {}),
     })
   }
 

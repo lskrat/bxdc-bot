@@ -219,20 +219,30 @@ export const FILE_UPLOAD_CONFIG: FileUploadConfig = {
     image: 50 * MIB,
   },
   ACCEPTED_EXTENSIONS: {
+    // open spec: unsupported-file-type-alert — 前端接受 doc/docx/xls/xlsx/csv/txt/md；
+    //   其他扩展名 (.ppt/.pptx/.py/.png/.jpg/.jpeg/.webp/...) 让 getFileTypeFromName 返回 null
+    //   → 触发 DialogPlugin.alert 弹窗（文案见 MESSAGES.UNSUPPORTED_TYPE）
+    //   注：.csv 前端识别为 excel 类型，但后端目前 415 拒收；按用户当前需求仍允许前端识别
     word: ['.doc', '.docx'],
     excel: ['.xls', '.xlsx', '.csv'],
-    ppt: ['.ppt', '.pptx'],
-    txt: ['.txt', '.md', '.py'],
-    image: ['.png', '.jpg', '.jpeg', '.webp'],
+    // ppt/image 留空数组：getFileTypeFromName 找不到扩展名 → 返回 null → 触发 DialogPlugin.alert
+    ppt: [],
+    txt: ['.txt', '.md'],
+    image: [],
   },
   MAX_FILES_PER_SESSION: 5,
   MAX_CONCURRENT_PARSES: 3,
   MESSAGES: {
-    UNSUPPORTED_TYPE: '当前仅支持doc、docx、xls、xlsx、csv、txt、md、py文件的上传',
+    // open spec: unsupported-file-type-alert — 弹窗文案按用户需求固定
+    UNSUPPORTED_TYPE: '当前仅支持doc、docx、xls、xlxs、csv、txt以及md文件的上传',
     FILE_TOO_LARGE: '文件大小超过10Mb，请修改后重试。',
     TOO_MANY_FILES: '单次最多上传5个文件，请减少选择。',
-    DUPLICATE_FILE: (_name: string, time: string) =>
-      `该文件已于${time}上传，是否进行替换？`,
+    DUPLICATE_FILE: (name: string, time: string) =>
+      `文件 "${name}" 已于 ${time} 上传，是否进行替换？`,
+    // 多文件同时上传、其中多个都重复时，调用方把同批次的重复文件名聚合成多行传给 body。
+    // 例如：`以下 ${count} 个文件已上传过：\n• a.xlsx (于 17:18)\n• b.docx (于 17:20)\n是否全部替换？`
+    DUPLICATE_BATCH: (count: number, lines: string[]) =>
+      `以下 ${count} 个文件已上传过：\n${lines.join('\n')}\n是否全部替换？`,
   },
 };
 

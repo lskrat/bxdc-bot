@@ -138,6 +138,8 @@ export interface ChatState {
   isThinking: ReturnType<typeof ref<boolean>>
   error: ReturnType<typeof ref<string | null>>
   sendMessage: (content: string, userId?: string, attachedFiles?: UploadFileInfo[]) => Promise<void>
+  /** Stop the current in-flight SSE stream (cancel button while agent is reasoning). */
+  stop: () => void
   addMessage: (message: Message) => void
   confirmSkillAction: (toolCallId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) => Promise<void>
   updateConfirmationArguments: (toolCallId: string, adjustedParams: Record<string, unknown>) => void
@@ -153,6 +155,10 @@ export function provideChat() {
   const error = ref<string | null>(null)
   const activeSessionId = ref<string | null>(null)
   const saveMessageCallback = ref<((messages: Message[]) => void) | null>(null)
+  /** AbortController for the current in-flight SSE stream; null when no stream is active. */
+  let currentAbortController: AbortController | null = null
+  /** Stream reader for the current SSE stream; null when no stream is active. */
+  let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = null
   const { createSession, processStreamEvent, completeSession } = useThinkingMode()
   const fileUpload = useFileUpload()
 
@@ -781,6 +787,10 @@ export function provideChat() {
 
       const url = getAgentStreamUrl()
 
+      // 创建 AbortController 绑定到本轮 SSE 流，stop() 时 abort + reader.cancel() 双重中断
+      const abortController = new AbortController()
+      currentAbortController = abortController
+
       // 拼接文件解析内容到 instruction（任务 8 拼接，任务 pass-parsed-content-to-llm 改用统一截断逻辑）
       let finalInstruction = content
       if (attachedFiles && attachedFiles.length > 0) {
@@ -810,10 +820,12 @@ export function provideChat() {
           enabledSkillIds: conversationEnabledSkillIds,
           conversationId,
         }),
+        signal: abortController.signal,
       })
 
       if (!response.ok) {
         console.error('[skill] Failed to connect to agent:', response.statusText)
+        currentAbortController = null
         isThinking.value = false
         try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
         error.value = 'Failed to connect to agent'
@@ -823,10 +835,12 @@ export function provideChat() {
       const reader = response.body?.getReader()
       if (!reader) {
         console.error('[skill] No response body')
+        currentAbortController = null
         isThinking.value = false
         try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
         return
       }
+      currentReader = reader
 
       const decoder = new TextDecoder('utf-8')
       let buffer = ''
@@ -836,6 +850,8 @@ export function provideChat() {
         
         if (done) {
           console.log('Stream complete')
+          currentReader = null
+          currentAbortController = null
           settleLastToolInvocations('completed')
           isThinking.value = false
           try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
@@ -984,6 +1000,12 @@ export function provideChat() {
                 return
               }
 
+              // 输出守卫修正：后端剥离了编造的下载链接，整段覆盖已渲染内容
+              if (data?.replace === true && typeof data.content === 'string' && (data.role === 'assistant' || data.role === undefined)) {
+                setLastMessage(removeThinkTags(data.content))
+                continue
+              }
+
               const extracted = extractMessageContent(data)
               if (extracted !== null) {
                 console.log('Extracted content:', extracted)
@@ -998,12 +1020,21 @@ export function provideChat() {
         }
       }
     } catch (err) {
-      console.error('[skill] Failed to send message:', err)
-      error.value = err instanceof Error ? err.message : 'Failed to send message'
-      isThinking.value = false
-      try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
-      activeSessionId.value = null
+      // 用户主动 stop 时会触发 AbortError，不当错误处理（stop() 已重置状态）
+      const isAbort = err instanceof DOMException && err.name === 'AbortError'
+        || (err as any)?.name === 'AbortError'
+      if (isAbort) {
+        console.log('[skill] Stream aborted by user')
+      } else {
+        console.error('[skill] Failed to send message:', err)
+        error.value = err instanceof Error ? err.message : 'Failed to send message'
+        isThinking.value = false
+        try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
+        activeSessionId.value = null
+      }
     } finally {
+      currentReader = null
+      currentAbortController = null
       // 发送完成后清空文件状态（任务 8.4）
       if (attachedFiles && attachedFiles.length > 0) {
         fileUpload.clearFiles()
@@ -1011,11 +1042,52 @@ export function provideChat() {
     }
   }
 
+  /**
+   * 停止当前 SSE 流：双保险中断 fetch + reader，让 Agent 端的 LLM 推理停止，
+   * 关闭思考会话、清空 isThinking，前端可立即输入下一条消息。
+   */
+  function stop(): void {
+    const controller = currentAbortController
+    const r = currentReader
+    if (!controller && !r) {
+      // 没有正在进行的流：仅作为保险，确保 isThinking 状态被重置
+      isThinking.value = false
+      try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
+      return
+    }
+    // 1) cancel reader（最稳，立刻让 while 循环的 await reader.read() 抛错或返回 done）
+    if (r) {
+      try { r.cancel().catch(() => { /* swallow */ }) } catch { /* ignore */ }
+    }
+    // 2) abort fetch（兜底，确保后端 fetch 也被取消）
+    if (controller) {
+      try { controller.abort() } catch { /* ignore */ }
+    }
+    currentAbortController = null
+    currentReader = null
+    // 3) 重置前端状态（reader.cancel() 触发的 reject 会被 catch 兜底）
+    settleLastToolInvocations('failed')
+    isThinking.value = false
+    try { useConversations().isProcessing.value = false } catch { /* fail-safe */ }
+    if (activeSessionId.value) {
+      completeSession(activeSessionId.value)
+    }
+    activeSessionId.value = null
+    // 在最后一条 assistant 消息末尾追加 "（已停止）" 提示
+    const last = messages.value[messages.value.length - 1]
+    if (last && last.role === 'assistant') {
+      const suffix = '\n\n_（用户已停止生成）_'
+      updateLastAssistantMessage((prev) => ({ ...prev, content: (prev.content || '') + suffix }))
+    }
+    error.value = null
+  }
+
   const state: ChatState = {
     messages,
     isThinking,
     error,
     sendMessage,
+    stop,
     addMessage,
     confirmSkillAction,
     updateConfirmationArguments,
