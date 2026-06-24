@@ -408,6 +408,67 @@ function closeLogViewer() {
   activeLogMessageId.value = null
 }
 
+// ── 执行块折叠（工具调用 + 确认卡片）──
+// Per-message 手动覆盖状态：用户可手动展开/收起（仅在非 pending 状态下可操作）
+// 用 reactive 对象而非 Map，避免 Vue 3 对 Map 的响应式追踪在模板函数调用中失效
+const manualOverrideExpanded = reactive<Record<string, boolean>>({})
+
+interface BlockState {
+  hasAny: boolean
+  hasPending: boolean
+  hasRunning: boolean
+  shouldExpand: boolean
+  toolCount: number
+  pendingCount: number
+}
+
+function getMessageBlockState(item: any, streaming: boolean = false): BlockState {
+  const tools = (item.toolInvocations ?? []) as ToolInvocation[]
+  const confs = (item.confirmations ?? []) as ConfirmationRequest[]
+  const toolCount = tools.length
+  const pendingCount = confs.filter((c: ConfirmationRequest) => c.status === 'pending').length
+  const hasRunning = tools.some((t: ToolInvocation) => t.status === 'running')
+  const hasPending = pendingCount > 0
+  const hasAny = toolCount > 0 || confs.length > 0
+
+  // 展开优先级：pending 强制展开 > 手动覆盖 > streaming/运行中 > 默认收起
+  // streaming：SSE 还在推送（isThinking && item.isLast），tool 逐个到达间隙不会有 running 的 tool，
+  // 但保持展开避免闪烁
+  const manualOverride = manualOverrideExpanded[item.id]
+  let shouldExpand: boolean
+  if (hasPending) {
+    shouldExpand = true
+  } else if (manualOverride !== undefined) {
+    shouldExpand = manualOverride
+  } else if (hasRunning || streaming) {
+    shouldExpand = true
+  } else {
+    shouldExpand = false
+  }
+  return { hasAny, hasPending, hasRunning, shouldExpand, toolCount, pendingCount }
+}
+
+function toggleBlockExpansion(itemId: string, hasPending: boolean) {
+  if (hasPending) return
+  if (manualOverrideExpanded[itemId] !== undefined) {
+    manualOverrideExpanded[itemId] = !manualOverrideExpanded[itemId]
+  } else {
+    manualOverrideExpanded[itemId] = false
+  }
+}
+
+function getBlockLabel(item: any): string {
+  const state = getMessageBlockState(item)
+  const parts: string[] = []
+  if (state.toolCount > 0) {
+    parts.push(`${state.toolCount} 次工具`)
+  }
+  if (state.pendingCount > 0) {
+    parts.push(`${state.pendingCount} 项待确认`)
+  }
+  return `调用详情（${parts.join(' + ')}）`
+}
+
 function openLatestLogViewer() {
   if (latestAssistantMessage.value) {
     activeLogMessageId.value = latestAssistantMessage.value.id
@@ -1006,9 +1067,22 @@ async function copyContent(text: string) {
           </div>
 
           <div
-            v-for="conf in item.confirmations"
-            :key="conf.toolCallId"
-            class="confirmation-card"
+            v-if="item.role === 'assistant' && getMessageBlockState(item, isThinking && item.isLast).hasAny"
+            class="execution-block"
+          >
+            <div
+              class="execution-block-header"
+              :class="{ 'execution-block-header--disabled': getMessageBlockState(item, isThinking && item.isLast).hasPending }"
+              @click="toggleBlockExpansion(item.id, getMessageBlockState(item, isThinking && item.isLast).hasPending)"
+            >
+              <span class="execution-block-arrow">{{ getMessageBlockState(item, isThinking && item.isLast).shouldExpand ? '▾' : '▸' }}</span>
+              <span class="execution-block-label">{{ getBlockLabel(item) }}</span>
+            </div>
+            <div v-show="getMessageBlockState(item, isThinking && item.isLast).shouldExpand" class="execution-block-body">
+              <div
+                v-for="conf in item.confirmations"
+                :key="conf.toolCallId"
+                class="confirmation-card"
             :class="confirmationCardClass(conf)"
           >
             <div class="confirmation-header">
@@ -1174,6 +1248,8 @@ async function copyContent(text: string) {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
             </div>
           </div>
 
@@ -1413,6 +1489,51 @@ async function copyContent(text: string) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.execution-block {
+  border: 1px solid var(--td-border-level-2-color);
+  border-radius: var(--td-radius-medium);
+  overflow: hidden;
+}
+
+.execution-block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  cursor: pointer;
+  user-select: none;
+  background: var(--td-bg-color-secondarycontainer);
+  border-bottom: 1px solid var(--td-border-level-1-color);
+}
+
+.execution-block-header:hover {
+  background: var(--td-bg-color-container-hover);
+}
+
+.execution-block-header--disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.execution-block-header--disabled:hover {
+  background: var(--td-bg-color-secondarycontainer);
+}
+
+.execution-block-arrow {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.execution-block-label {
+  font-weight: 500;
+}
+
+.execution-block-body {
+  padding: 8px 12px;
 }
 
 .tool-status-list {
@@ -1739,6 +1860,7 @@ async function copyContent(text: string) {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: 8px;
   margin-bottom: 6px;
 }
 
