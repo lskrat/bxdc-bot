@@ -594,7 +594,7 @@ public class MdToolService {
             // userFile == null 表示全新文件（无源文件），不挂 sourceFileId
             tempUserFile.setSourceFileId(userFile == null ? null : userFile.getId());
             tempUserFile.setIsToolGenerated(1);
-            tempUserFile.setConversationId(FileToolConversationContext.getConversationId());
+            
             tempUserFile.setUploadTime(java.time.LocalDateTime.now());
             userFileMapper.insert(tempUserFile);
 
