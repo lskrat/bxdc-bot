@@ -877,10 +877,25 @@ async function handleDownload(format: 'md' | 'pdf', msg: Message) {
 
 async function copyContent(text: string) {
   try {
-    await navigator.clipboard.writeText(text)
-    MessagePlugin.success('已复制到剪贴板')
+    const ta = document.createElement('textarea')
+    ta.value = text
+    // 隐藏 textarea，避免页面闪一下
+    ta.style.position = 'fixed'
+    ta.style.top = '0'
+    ta.style.left = '0'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (ok) {
+      MessagePlugin.success('已复制到剪贴板')
+    } else {
+      MessagePlugin.error('复制失败，请手动选择文本')
+    }
   } catch {
-    MessagePlugin.error('复制失败')
+    MessagePlugin.error('复制失败，请手动选择文本')
   }
 }
 </script>
