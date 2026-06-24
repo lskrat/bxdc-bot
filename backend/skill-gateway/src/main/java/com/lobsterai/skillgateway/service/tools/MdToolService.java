@@ -6,6 +6,7 @@ import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.service.FileToolService;
+import com.lobsterai.skillgateway.service.FileToolConversationContext;
 import com.lobsterai.skillgateway.service.FtpFileService;
 
 import com.vladsch.flexmark.ast.BulletList;
@@ -489,10 +490,13 @@ public class MdToolService {
      * @return fileId + downloadUrl + filePath + 写入统计
      */
     public FileToolResponse mdWrite(UserFile userFile, Map<String, Object> params, String userId) {
-        ensureMdFile(userFile);
+        // userFile 为 null 时表示新建文件（md_write 是 OptionalFileIdTool），跳过扩展名校验
+        if (userFile != null) {
+            ensureMdFile(userFile);
+        }
         String content = readStringParam(params, "content", null);
         if (content == null) {
-            return FileToolResponse.error("params.content is required", userFile.getOriginalFileName());
+            return FileToolResponse.error("params.content is required");
         }
         String encoding = readStringParam(params, "encoding", "UTF-8");
         try {
@@ -507,8 +511,9 @@ public class MdToolService {
 
             return FileToolResponse.ok(result, saveResult.get("fileName").toString());
         } catch (Exception e) {
-            log.error("md_write failed for {}", userFile.getOriginalFileName(), e);
-            return FileToolResponse.error("md_write failed: " + e.getMessage(), userFile.getOriginalFileName());
+            String fileName = userFile != null ? userFile.getOriginalFileName() : "(new file)";
+            log.error("md_write failed for {}", fileName, e);
+            return FileToolResponse.error("md_write failed: " + e.getMessage(), fileName);
         }
     }
 
@@ -539,7 +544,7 @@ public class MdToolService {
      * @return 包含 fileId、downloadUrl、fileName、filePath 的 Map
      */
     private Map<String, Object> saveAndReturnResult(String content, UserFile userFile, String userId) throws IOException {
-        String baseName = userFile != null ? userFile.getOriginalFileName() : "merged";
+        String baseName = userFile != null ? userFile.getOriginalFileName() : ("new_" + System.currentTimeMillis() + ".md");
         return saveAndReturnResult(content, userFile, userId, baseName);
     }
 
@@ -571,30 +576,33 @@ public class MdToolService {
 
             log.info("md saveAndReturnResult overwrote temp file: fileId={}, storageFileName={}", resultFileId, storageFileName);
         } else {
-            // 源文件 / 无 fileRef（userFile == null）：创建新文件
+            // userFile == null 表示新建文件（无源文件，不走 _temp 后缀）
+            // userFile != null && sourceFileId == null 表示源文件（创建临时副本，走 _temp 后缀）
+            boolean isNewFile = (userFile == null);
             String fileType = userFile != null ? userFile.getFileType() : "md";
-            String tempFileName = getTempFileName(baseDisplayName);
-            ftpPath = ftpFileService.uploadFile(userId, tempFileName, new ByteArrayInputStream(bytes));
+            String displayFileName = isNewFile ? baseDisplayName : getTempFileName(baseDisplayName);
+            ftpPath = ftpFileService.uploadFile(userId, displayFileName, new ByteArrayInputStream(bytes));
             String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
 
             UserFile tempUserFile = new UserFile();
             tempUserFile.setUserId(userId);
-            tempUserFile.setOriginalFileName(tempFileName);
+            tempUserFile.setOriginalFileName(displayFileName);
             tempUserFile.setFileName(storageFileName);
             tempUserFile.setFileSize((long) bytes.length);
             tempUserFile.setFileType(fileType);
             tempUserFile.setFtpPath(ftpPath);
-            // userFile == null 表示全新合并（md_merge），不挂 sourceFileId
+            // userFile == null 表示全新文件（无源文件），不挂 sourceFileId
             tempUserFile.setSourceFileId(userFile == null ? null : userFile.getId());
             tempUserFile.setIsToolGenerated(1);
+            tempUserFile.setConversationId(FileToolConversationContext.getConversationId());
             tempUserFile.setUploadTime(java.time.LocalDateTime.now());
             userFileMapper.insert(tempUserFile);
 
             resultFileId = tempUserFile.getId();
-            resultFileName = tempFileName;
+            resultFileName = displayFileName;
 
-            log.info("md saveAndReturnResult created new temp file: fileId={}, tempFileName={}, userFileNull={}",
-                    resultFileId, tempFileName, userFile == null);
+            log.info("md saveAndReturnResult created new file: fileId={}, displayFileName={}, userFileNull={}",
+                    resultFileId, displayFileName, userFile == null);
         }
 
         String downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
