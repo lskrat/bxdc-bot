@@ -237,8 +237,12 @@ export const FILE_UPLOAD_CONFIG: FileUploadConfig = {
     UNSUPPORTED_TYPE: '当前仅支持doc、docx、xls、xlxs、csv、txt以及md文件的上传',
     FILE_TOO_LARGE: '文件大小超过10Mb，请修改后重试。',
     TOO_MANY_FILES: '单次最多上传5个文件，请减少选择。',
-    DUPLICATE_FILE: (_name: string, time: string) =>
-      `该文件已于${time}上传，是否进行替换？`,
+    DUPLICATE_FILE: (name: string, time: string) =>
+      `文件 "${name}" 已于 ${time} 上传，是否进行替换？`,
+    // 多文件同时上传、其中多个都重复时，调用方把同批次的重复文件名聚合成多行传给 body。
+    // 例如：`以下 ${count} 个文件已上传过：\n• a.xlsx (于 17:18)\n• b.docx (于 17:20)\n是否全部替换？`
+    DUPLICATE_BATCH: (count: number, lines: string[]) =>
+      `以下 ${count} 个文件已上传过：\n${lines.join('\n')}\n是否全部替换？`,
   },
 };
 

@@ -94,6 +94,35 @@ function showOverwriteConfirm(_fileName: string, message: string): Promise<boole
 }
 
 /**
+ * 多文件重复批量确认弹窗：addFiles 一次性聚合所有同名已上传文件后弹一次。
+ * 文案由调用方传入（FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_BATCH 生成的行列表）。
+ *   true  = 用户点了"全部替换"（本次 batch 全部覆盖）
+ *   false = 用户点了"取消" / 关闭按钮 / 遮罩点击（本次 batch 全部跳过）
+ */
+function showBatchOverwriteConfirm(message: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    const settle = (v: boolean) => {
+      if (settled) return
+      settled = true
+      dialog.destroy()
+      resolve(v)
+    }
+    const dialog = DialogPlugin.confirm({
+      header: '多个文件已存在',
+      body: message,
+      theme: 'warning',
+      confirmBtn: '全部替换',
+      cancelBtn: '取消',
+      onConfirm: () => settle(true),
+      onCancel: () => settle(false),
+      onClose: () => settle(false),
+    })
+    setTimeout(() => settle(false), 60_000)
+  })
+}
+
+/**
  * open spec: unsupported-file-type-alert — 不支持文件类型弹窗
  *
  * 必须显式保存 dialog 实例 + onConfirm/onClose 手动 destroy()：
@@ -251,99 +280,113 @@ export function provideFileUpload(): FileUploadState {
   // ---- addFiles ----
   // 4 步校验（需求方案 A1 §2.2）：类型 → 大小 → 数量 → 重复
   // 返回实际成功添加的文件列表（被校验跳过的不会出现在列表中）
+  // 重复弹窗策略（修复：DUPLICATE_FILE 文案 + 批量弹窗）：
+  //   - 1 个文件重复 → 单文件弹窗（保留原 UX，用户能准确看到哪个文件名）
+  //   - N 个文件重复（N>1）→ 一次性批量弹窗（避免逐个弹 N 次），body 列出所有重复文件名
+  //     用户在批量弹窗点"全部替换" → 这些文件全部标记 overwrite=true
+  //                  点"取消" → 这些文件全部跳过（不加入上传列表）
   async function addFiles(files: File[]): Promise<UploadFileInfo[]> {
     const added: UploadFileInfo[] = []
     if (!files || files.length === 0) return added
 
+    // ====== 阶段 1：基础校验 + 重复性探测（不弹窗，仅收集信息） ======
+    type Probe = {
+      file: File
+      fileType: FileType
+      localExisting: ReturnType<typeof findDuplicateByName>
+      duplicateTime: string | null  // 非 null = 该文件已存在
+    }
+    const probes: Probe[] = []
     for (const file of files) {
-      // 1. 类型校验：通过扩展名识别 FileType
+      // 1. 类型校验
       const fileType = getFileTypeFromName(file.name)
       if (!fileType) {
-        // open spec: unsupported-file-type-alert — 模态弹窗替代顶部 toast
         showUnsupportedTypeAlert(file.name)
         continue
       }
-
-      // 2. 大小校验：单文件 ≤ MAX_SIZE_PER_FILE[fileType]
+      // 2. 大小校验
       if (file.size > FILE_UPLOAD_CONFIG.MAX_SIZE_PER_FILE[fileType]) {
         MessagePlugin.warning(FILE_UPLOAD_CONFIG.MESSAGES.FILE_TOO_LARGE)
         continue
       }
-
-      // 3. 数量校验：累计总数（含本次） ≤ MAX_FILES_PER_SESSION
+      // 3. 数量校验：累计含 probes 已有数 + 当前 file
       const currentTotal = countAllFiles(uploadedFiles.value)
-      if (currentTotal + 1 > FILE_UPLOAD_CONFIG.MAX_FILES_PER_SESSION) {
+      if (currentTotal + probes.length + 1 > FILE_UPLOAD_CONFIG.MAX_FILES_PER_SESSION) {
         MessagePlugin.warning(FILE_UPLOAD_CONFIG.MESSAGES.TOO_MANY_FILES)
         continue
       }
-
-      // 4. 重复校验：先查当前会话，再查后端全量用户文件
-      let existingMsg: string | null = null
-      const existingLocal = findDuplicateByName(uploadedFiles.value, file.name)
-      if (existingLocal) {
-        existingMsg = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_FILE(
-          file.name,
-          formatTime(existingLocal.uploadedAt),
-        )
+      // 4. 重复性探测（不弹窗）
+      const localExisting = findDuplicateByName(uploadedFiles.value, file.name)
+      let duplicateTime: string | null = null
+      if (localExisting) {
+        duplicateTime = formatTime(localExisting.uploadedAt)
       } else {
         const backendDup = await checkBackendDuplicate(file.name)
         if (backendDup?.exists) {
-          existingMsg = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_FILE(
-            file.name,
-            backendDup.uploadTime || '未知时间',
-          )
+          duplicateTime = backendDup.uploadTime || '未知时间'
         }
       }
-      if (existingMsg) {
-        // open spec: overwrite-duplicate-upload — TDesign 弹窗替代 window.confirm
-        // 用户点"覆盖" → 让 uploadFileViaGateway 带 ?overwrite=true（删旧 FTP + 旧 DB 记录）
-        // 用户点"取消" / 关闭 → 跳过本文件
-        const replace = await showOverwriteConfirm(file.name, existingMsg)
-        if (!replace) {
-          continue
-        }
-        // 替换：移除本地同名文件（如果存在）
-        if (existingLocal) {
-          const removed = removeFileById(uploadedFiles.value, existingLocal.id)
-          if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
-          const oldCtrl = abortControllers.get(existingLocal.id)
-          if (oldCtrl) {
-            oldCtrl.abort()
-            abortControllers.delete(existingLocal.id)
-          }
-        }
-      }
+      probes.push({ file, fileType, localExisting, duplicateTime })
+    }
 
-      // 通过所有校验，构建 UploadFileInfo
-      // open spec: overwrite-duplicate-upload — 若 existingMsg 非空且 replace=true（用户点了"覆盖"），
-      // 上传时带 ?overwrite=true 让后端先删旧 FTP + 旧 DB 记录
-      const willOverwrite = existingMsg != null
+    // ====== 阶段 2：聚合重复文件，按场景弹窗（1 个 vs 多个） ======
+    const duplicates = probes.filter(p => p.duplicateTime !== null)
+    const filesToOverwrite = new Set<File>()
+    if (duplicates.length === 1) {
+      // 单文件：保持原 UX，逐文件弹窗
+      const p = duplicates[0]
+      const body = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_FILE(p.file.name, p.duplicateTime!)
+      const replace = await showOverwriteConfirm(p.file.name, body)
+      if (replace) filesToOverwrite.add(p.file)
+    } else if (duplicates.length > 1) {
+      // 多文件同时重复：一次性批量弹窗
+      const lines = duplicates.map(p => `• ${p.file.name}（于 ${p.duplicateTime}）`)
+      const body = FILE_UPLOAD_CONFIG.MESSAGES.DUPLICATE_BATCH(duplicates.length, lines)
+      const replace = await showBatchOverwriteConfirm(body)
+      if (replace) {
+        for (const p of duplicates) filesToOverwrite.add(p.file)
+      }
+    }
+
+    // ====== 阶段 3：构建 UploadFileInfo，按用户确认标记 overwrite ======
+    for (const p of probes) {
+      const isReplaced = filesToOverwrite.has(p.file)
+      // 用户未点"覆盖"的重复文件：跳过
+      if (p.duplicateTime !== null && !isReplaced) {
+        continue
+      }
+      // 替换时先移除本地同名文件
+      if (isReplaced && p.localExisting) {
+        const removed = removeFileById(uploadedFiles.value, p.localExisting.id)
+        if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+        const oldCtrl = abortControllers.get(p.localExisting.id)
+        if (oldCtrl) {
+          oldCtrl.abort()
+          abortControllers.delete(p.localExisting.id)
+        }
+      }
+      const willOverwrite = p.duplicateTime !== null && isReplaced
       const info: UploadFileInfo = {
         id: genId(),
-        file,
-        fileName: file.name,
-        fileType,
-        size: file.size,
+        file: p.file,
+        fileName: p.file.name,
+        fileType: p.fileType,
+        size: p.file.size,
         status: 'pending',
         uploadedAt: Date.now(),
         overwrite: willOverwrite || undefined,
       }
-
-      if (fileType === 'image') {
-        info.previewUrl = URL.createObjectURL(file)
+      if (p.fileType === 'image') {
+        info.previewUrl = URL.createObjectURL(p.file)
       }
-
-      uploadedFiles.value[fileType].push(info)
+      uploadedFiles.value[p.fileType].push(info)
       added.push(info)
     }
 
-    // 防御性：addFiles 完成后立即触发解析，不再依赖 caller 调 parseFiles
-    // （避免 onFileChange / onDrop / onPaste 各自漏调导致文件卡在 pending）
+    // 防御性：addFiles 完成后立即触发解析
     if (added.length > 0) {
-      // fire-and-forget；caller 也可 await parseFiles(added) 等待结果
       parseAllNew(added).catch((e) => console.error('[addFiles] auto-parse failed', e))
     }
-
     return added
   }
 
