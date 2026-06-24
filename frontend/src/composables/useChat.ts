@@ -1000,6 +1000,12 @@ export function provideChat() {
                 return
               }
 
+              // 输出守卫修正：后端剥离了编造的下载链接，整段覆盖已渲染内容
+              if (data?.replace === true && typeof data.content === 'string' && (data.role === 'assistant' || data.role === undefined)) {
+                setLastMessage(removeThinkTags(data.content))
+                continue
+              }
+
               const extracted = extractMessageContent(data)
               if (extracted !== null) {
                 console.log('Extracted content:', extracted)

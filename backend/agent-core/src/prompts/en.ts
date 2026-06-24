@@ -77,6 +77,20 @@ Do not rely on URLs, hosts, or command fragments remembered from earlier message
 `;
 
 /**
+ * 策略提示词：下载链接策略
+ * 
+ * 禁止编造 downloadUrl/fileId，必须逐字来自本轮工具返回
+ */
+const downloadUrlPolicy = `[Download link policy]
+When dealing with file download links (downloadUrl) and file IDs (fileId), you MUST strictly follow:
+1. downloadUrl and fileId may ONLY be used verbatim (copied exactly) from values that tools actually returned in THIS turn.
+2. NEVER construct, concatenate, increment, infer, or guess any downloadUrl or fileId (e.g. do not invent fileId=81 just because fileId=80 appeared earlier, and do not hand-assemble links like /api/files/download/xx?token=xx) — such fabricated links have invalid tokens and point to non-existent files, so the user's click will always fail.
+3. If no tool in this turn returned a usable downloadUrl/fileId and the user needs a download, first call the appropriate tool (e.g. file_list, file_detail, or the tool that regenerates the file) to obtain the real link; if it still cannot be obtained, tell the user honestly that "there is no available download link / the file does not exist" instead of fabricating one.
+4. Old downloadUrl/fileId values that appeared in memory or earlier messages must NOT be reused as this turn's result — re-invoke the tool to fetch the latest real value when needed.
+
+`;
+
+/**
  * 构建任务状态摘要
  * 
  * 根据任务状态映射表生成用于注入到 LLM 提示词中的摘要文本
@@ -114,5 +128,6 @@ export const EnglishPrompts: SystemPrompts = {
   taskTrackingPolicy,
   confirmationUIPolicy,
   extendedSkillRoutingPolicy,
+  downloadUrlPolicy,
   buildTasksSummary,
 };

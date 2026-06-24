@@ -10,15 +10,23 @@ import com.lobsterai.skillgateway.service.FileToolService;
 import com.lobsterai.skillgateway.service.FtpFileService;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
 import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.ss.util.WorkbookUtil;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
 import javax.annotation.PostConstruct;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.*;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -233,34 +241,58 @@ public class ExcelFileToolService {
     // ================================================================
 
     /**
-     * 读取 Excel 文件的内容（支持分页）。
+     * 读取 Excel 文件的内容（支持分页和多工作表）。
      *
      * @param userFile 文件实体
-     * @param params   参数：page（页码，从 1 开始，默认 1）、pageSize（每页行数，默认 50）
+     * @param params   参数：page（页码，从 1 开始，默认 1）、pageSize（每页行数，默认 50）、sheetIndex（工作表索引，从 0 开始，默认 0）、sheetName（工作表名称，优先于 sheetIndex）
      * @param userId   用户 ID
-     * @return Excel 内容数据（含分页信息）
+     * @return Excel 内容数据（含分页信息和工作表信息）
      */
     public FileToolResponse excelRead(UserFile userFile, Map<String, Object> params, String userId) {
         ensureExcelFile(userFile);
         int page = Math.max(1, readIntParam(params, "page", 1));
         int pageSize = Math.max(1, readIntParam(params, "pageSize", 50));
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         try {
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+
+            Sheet sheet;
+            int actualSheetIndex;
+            String actualSheetName;
+
+            if (sheetName != null && !sheetName.trim().isEmpty()) {
+                sheet = wb.getSheet(sheetName);
+                actualSheetIndex = wb.getSheetIndex(sheet);
+                actualSheetName = sheetName;
+            } else {
+                sheet = wb.getSheetAt(sheetIndex);
+                actualSheetIndex = sheetIndex;
+                actualSheetName = wb.getSheetName(sheetIndex);
+            }
+
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
+
+            List<String> allSheetNames = new ArrayList<String>();
+            for (int i = 0; i < wb.getNumberOfSheets(); i++) {
+                allSheetNames.add(wb.getSheetName(i));
+            }
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             List<String> headers = new ArrayList<String>();
             List<List<Object>> rows = new ArrayList<List<Object>>();
 
             int rowCount = sheet.getPhysicalNumberOfRows();
-            int dataRowCount = rowCount - 1; // 总数据行数（不含表头）
+            int dataRowCount = rowCount - 1;
             int totalPages = (int) Math.ceil((double) dataRowCount / pageSize);
-            int startRow = (page - 1) * pageSize + 1; // +1 跳过表头行
+            int startRow = (page - 1) * pageSize + 1;
             int endRow = Math.min(startRow + pageSize, rowCount);
 
-            // 读取表头（第 0 行）
             Row headerRow = sheet.getRow(0);
             if (headerRow != null) {
                 int cellCount = headerRow.getPhysicalNumberOfCells();
@@ -270,7 +302,6 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 只读取当前页的数据行
             for (int i = startRow; i < endRow; i++) {
                 Row row = sheet.getRow(i);
                 if (row == null) continue;
@@ -284,7 +315,6 @@ public class ExcelFileToolService {
                 rows.add(rowData);
             }
 
-            // 生成 fileId 和 downloadUrl（返回当前文件的 ID，带签名 token）
             Long resultFileId = userFile.getId();
             String downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
 
@@ -299,6 +329,10 @@ public class ExcelFileToolService {
             result.put("fileId", resultFileId);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("downloadUrl", downloadUrl);
+            result.put("sheetName", actualSheetName);
+            result.put("sheetIndex", actualSheetIndex);
+            result.put("totalSheets", wb.getNumberOfSheets());
+            result.put("sheetNames", allSheetNames);
 
             wb.close();
             return FileToolResponse.ok(result, userFile.getOriginalFileName());
@@ -327,14 +361,29 @@ public class ExcelFileToolService {
             List<String> headers = parseStringList(params.get("headers"));
             // 安全解析 rows（可能是 List 或 JSON String）
             List<List<Object>> rows = parseRowsList(params.get("rows"));
+            // 获取工作表名称，默认为 "Sheet1"
+            String sheetName = readStringParam(params, "sheetName", "Sheet1");
 
             if (headers == null || headers.isEmpty()) {
                 return FileToolResponse.error("params.headers is required", 
                         userFile != null ? userFile.getOriginalFileName() : "new.xlsx");
             }
 
-            Workbook wb = new XSSFWorkbook();
-            Sheet sheet = wb.createSheet("Sheet1");
+            Workbook wb;
+            if (userFile != null) {
+                // 有 fileId：在原文件的工作簿上追加/替换工作表，避免整体覆盖丢失已有 sheet
+                byte[] existingBytes = downloadBytes(userFile);
+                wb = createWorkbook(existingBytes, userFile.getOriginalFileName());
+                // 同名工作表已存在则先移除（按 sheetName 覆盖该 sheet），否则追加新 sheet
+                int existingIdx = wb.getSheetIndex(sheetName);
+                if (existingIdx >= 0) {
+                    wb.removeSheetAt(existingIdx);
+                }
+            } else {
+                // 无 fileId：创建全新工作簿
+                wb = new XSSFWorkbook();
+            }
+            Sheet sheet = wb.createSheet(sheetName);
             writeDataToSheet(sheet, headers, rows);
 
             // 将工作簿写入内存，获取文件大小
@@ -502,6 +551,8 @@ public class ExcelFileToolService {
         String column = readStringParam(params, "column", null);
         String operator = readStringParam(params, "operator", "equals");
         String value = readStringParam(params, "value", null);
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         if (column == null || value == null) {
             return FileToolResponse.error("params.column and params.value are required", userFile.getOriginalFileName());
@@ -511,7 +562,12 @@ public class ExcelFileToolService {
             // 读取文件：优先读取临时文件，不存在则读取原文件
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
 
             // 执行筛选
             List<String> headers = new ArrayList<String>();
@@ -595,6 +651,8 @@ public class ExcelFileToolService {
         ensureExcelFile(userFile);
         String column = readStringParam(params, "column", null);
         String order = readStringParam(params, "order", "asc");
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         if (column == null) {
             return FileToolResponse.error("params.column is required", userFile.getOriginalFileName());
@@ -603,7 +661,12 @@ public class ExcelFileToolService {
         try {
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
 
             // 读取数据
             List<String> headers = new ArrayList<String>();
@@ -697,6 +760,8 @@ public class ExcelFileToolService {
         String groupBy = readStringParam(params, "groupBy", null);
         String aggColumn = readStringParam(params, "aggColumn", null);
         String aggType = readStringParam(params, "aggType", "sum");
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         if (groupBy == null || aggColumn == null) {
             return FileToolResponse.error("params.groupBy and params.aggColumn are required", userFile.getOriginalFileName());
@@ -705,67 +770,83 @@ public class ExcelFileToolService {
         try {
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
 
             // 执行聚合
             List<String> headers = new ArrayList<String>();
             Map<String, Double> aggregates = new LinkedHashMap<String, Double>();
             Map<String, Long> counts = new LinkedHashMap<String, Long>();
+            Map<String, Double> mins = new LinkedHashMap<String, Double>();
+            Map<String, Double> maxs = new LinkedHashMap<String, Double>();
             
             int groupByIndex = -1;
             int aggIndex = -1;
 
             int rowCount = sheet.getPhysicalNumberOfRows();
-            for (int i = 0; i < rowCount; i++) {
-                Row row = sheet.getRow(i);
-                if (row == null) continue;
 
-                int cellCount = row.getPhysicalNumberOfCells();
+            // 第一行：解析表头，建立 groupBy / aggColumn 列索引
+            Row headerRow = sheet.getRow(0);
+            if (headerRow != null) {
+                int cellCount = headerRow.getPhysicalNumberOfCells();
                 for (int j = 0; j < cellCount; j++) {
-                    Cell cell = row.getCell(j);
-                    if (i == 0) {
-                        String header = getCellStringValue(cell);
-                        headers.add(header);
-                        if (header.equals(groupBy)) {
-                            groupByIndex = j;
-                        }
-                        if (header.equals(aggColumn)) {
-                            aggIndex = j;
-                        }
-                    } else if (groupByIndex >= 0 && aggIndex >= 0) {
-                        Cell groupCell = row.getCell(groupByIndex);
-                        Cell aggCell = row.getCell(aggIndex);
-                        
-                        if (groupCell != null) {
-                            String groupKey = getCellStringValue(groupCell);
-                            counts.put(groupKey, counts.getOrDefault(groupKey, 0L) + 1L);
-                            
-                            Object aggValue = getCellValue(aggCell);
-                            if (aggValue instanceof Number) {
-                                double numValue = ((Number) aggValue).doubleValue();
-                                aggregates.put(groupKey, aggregates.getOrDefault(groupKey, 0.0) + numValue);
-                            }
-                        }
+                    String header = getCellStringValue(headerRow.getCell(j));
+                    headers.add(header);
+                    if (header.equals(groupBy)) {
+                        groupByIndex = j;
+                    }
+                    if (header.equals(aggColumn)) {
+                        aggIndex = j;
                     }
                 }
             }
 
-            // 构建结果数据
+            // 数据行：每行只累加一次（修复此前在内层遍历每列时重复累加、放大列数倍的 bug）
+            if (groupByIndex >= 0 && aggIndex >= 0) {
+                for (int i = 1; i < rowCount; i++) {
+                    Row row = sheet.getRow(i);
+                    if (row == null) continue;
+
+                    Cell groupCell = row.getCell(groupByIndex);
+                    if (groupCell == null) continue;
+
+                    String groupKey = getCellStringValue(groupCell);
+                    counts.put(groupKey, counts.getOrDefault(groupKey, 0L) + 1L);
+
+                    Object aggValue = getCellValue(row.getCell(aggIndex));
+                    if (aggValue instanceof Number) {
+                        double numValue = ((Number) aggValue).doubleValue();
+                        aggregates.put(groupKey, aggregates.getOrDefault(groupKey, 0.0) + numValue);
+                        mins.put(groupKey, Math.min(mins.getOrDefault(groupKey, Double.MAX_VALUE), numValue));
+                        maxs.put(groupKey, Math.max(maxs.getOrDefault(groupKey, -Double.MAX_VALUE), numValue));
+                    }
+                }
+            }
+
+            // 构建结果数据（按出现过的分组遍历 counts，保证 count 聚合对纯非数值组也正确）
             List<String> resultHeaders = Arrays.asList(groupBy, aggType + "_" + aggColumn);
             List<List<Object>> resultRows = new ArrayList<List<Object>>();
-            for (Map.Entry<String, Double> entry : aggregates.entrySet()) {
+            for (Map.Entry<String, Long> entry : counts.entrySet()) {
+                String groupKey = entry.getKey();
                 List<Object> row = new ArrayList<Object>();
-                row.add(entry.getKey());
-                
-                double value = entry.getValue();
-                if ("avg".equalsIgnoreCase(aggType)) {
-                    value = value / counts.get(entry.getKey());
-                } else if ("count".equalsIgnoreCase(aggType)) {
-                    value = counts.get(entry.getKey());
+                row.add(groupKey);
+
+                double value;
+                if ("count".equalsIgnoreCase(aggType)) {
+                    value = entry.getValue();
+                } else if ("avg".equalsIgnoreCase(aggType)) {
+                    value = entry.getValue() > 0 ? aggregates.getOrDefault(groupKey, 0.0) / entry.getValue() : 0.0;
                 } else if ("min".equalsIgnoreCase(aggType)) {
-                    // min 需要遍历实现，这里简化为 sum
+                    value = mins.getOrDefault(groupKey, 0.0);
                 } else if ("max".equalsIgnoreCase(aggType)) {
-                    // max 需要遍历实现，这里简化为 sum
+                    value = maxs.getOrDefault(groupKey, 0.0);
+                } else {
+                    // sum（默认）
+                    value = aggregates.getOrDefault(groupKey, 0.0);
                 }
                 row.add(value);
                 resultRows.add(row);
@@ -818,6 +899,8 @@ public class ExcelFileToolService {
         String rowDimension = readStringParam(params, "rowDimension", null);
         String colDimension = readStringParam(params, "colDimension", null);
         String valueColumn = readStringParam(params, "valueColumn", null);
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         if (rowDimension == null || colDimension == null || valueColumn == null) {
             return FileToolResponse.error("params.rowDimension, params.colDimension and params.valueColumn are required", 
@@ -827,7 +910,12 @@ public class ExcelFileToolService {
         try {
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
 
             // 执行透视
             Map<String, Map<String, Double>> pivot = new LinkedHashMap<String, Map<String, Double>>();
@@ -836,30 +924,35 @@ public class ExcelFileToolService {
             int rowIdx = -1, colIdx = -1, valIdx = -1;
 
             int rowCount = sheet.getPhysicalNumberOfRows();
-            for (int i = 0; i < rowCount; i++) {
-                Row row = sheet.getRow(i);
-                if (row == null) continue;
 
-                int cellCount = row.getPhysicalNumberOfCells();
+            // 第一行：解析表头，建立 行维度/列维度/值列 索引
+            Row headerRow = sheet.getRow(0);
+            if (headerRow != null) {
+                int cellCount = headerRow.getPhysicalNumberOfCells();
                 for (int j = 0; j < cellCount; j++) {
-                    Cell cell = row.getCell(j);
-                    if (i == 0) {
-                        String header = getCellStringValue(cell);
-                        if (header.equals(rowDimension)) rowIdx = j;
-                        if (header.equals(colDimension)) colIdx = j;
-                        if (header.equals(valueColumn)) valIdx = j;
-                    } else if (rowIdx >= 0 && colIdx >= 0 && valIdx >= 0) {
-                        String rowVal = getCellStringValue(row.getCell(rowIdx));
-                        String colVal = getCellStringValue(row.getCell(colIdx));
-                        Object val = getCellValue(row.getCell(valIdx));
-                        
-                        pivot.computeIfAbsent(rowVal, k -> new LinkedHashMap<String, Double>());
-                        colValues.add(colVal);
-                        
-                        if (val instanceof Number) {
-                            double numVal = ((Number) val).doubleValue();
-                            pivot.get(rowVal).merge(colVal, numVal, Double::sum);
-                        }
+                    String header = getCellStringValue(headerRow.getCell(j));
+                    if (header.equals(rowDimension)) rowIdx = j;
+                    if (header.equals(colDimension)) colIdx = j;
+                    if (header.equals(valueColumn)) valIdx = j;
+                }
+            }
+
+            // 数据行：每行只累加一次（修复此前在内层遍历每列时重复累加、放大列数倍的 bug）
+            if (rowIdx >= 0 && colIdx >= 0 && valIdx >= 0) {
+                for (int i = 1; i < rowCount; i++) {
+                    Row row = sheet.getRow(i);
+                    if (row == null) continue;
+
+                    String rowVal = getCellStringValue(row.getCell(rowIdx));
+                    String colVal = getCellStringValue(row.getCell(colIdx));
+                    Object val = getCellValue(row.getCell(valIdx));
+
+                    pivot.computeIfAbsent(rowVal, k -> new LinkedHashMap<String, Double>());
+                    colValues.add(colVal);
+
+                    if (val instanceof Number) {
+                        double numVal = ((Number) val).doubleValue();
+                        pivot.get(rowVal).merge(colVal, numVal, Double::sum);
                     }
                 }
             }
@@ -925,6 +1018,8 @@ public class ExcelFileToolService {
         ensureExcelFile(userFile);
         String newColumn = readStringParam(params, "newColumn", null);
         String formula = readStringParam(params, "formula", null);
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         if (newColumn == null || formula == null) {
             return FileToolResponse.error("params.newColumn and params.formula are required", userFile.getOriginalFileName());
@@ -933,7 +1028,12 @@ public class ExcelFileToolService {
         try {
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
 
             // 读取数据并计算
             List<String> headers = new ArrayList<String>();
@@ -1015,6 +1115,8 @@ public class ExcelFileToolService {
         ensureExcelFile(userFile);
         // 安全解析 columns 参数（可能是 List 或 JSON String）
         List<String> columns = parseStringList(params.get("columns"));
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         if (columns == null || columns.isEmpty()) {
             return FileToolResponse.error("params.columns is required", userFile.getOriginalFileName());
@@ -1023,7 +1125,12 @@ public class ExcelFileToolService {
         try {
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
 
             // 执行列选择
             List<String> headers = new ArrayList<String>();
@@ -1104,6 +1211,8 @@ public class ExcelFileToolService {
     public FileToolResponse excelClean(UserFile userFile, Map<String, Object> params, String userId) {
         ensureExcelFile(userFile);
         String cleanType = readStringParam(params, "cleanType", null);
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         if (cleanType == null) {
             return FileToolResponse.error("params.cleanType is required", userFile.getOriginalFileName());
@@ -1112,7 +1221,12 @@ public class ExcelFileToolService {
         try {
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
 
             // 执行数据清洗
             List<String> headers = new ArrayList<String>();
@@ -1211,6 +1325,8 @@ public class ExcelFileToolService {
     public FileToolResponse excelConvertFormat(UserFile userFile, Map<String, Object> params, String userId) {
         ensureExcelFile(userFile);
         String targetFormat = readStringParam(params, "targetFormat", null);
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         if (targetFormat == null) {
             return FileToolResponse.error("params.targetFormat is required", userFile.getOriginalFileName());
@@ -1221,7 +1337,7 @@ public class ExcelFileToolService {
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
 
             // 转换格式并保存到临时文件
-            byte[] convertedBytes = getConvertedBytes(wb, targetFormat);
+            byte[] convertedBytes = getConvertedBytes(wb, targetFormat, sheetName, sheetIndex);
             int fileSize = convertedBytes.length;
 
             // 生成新的显示文件名（更改扩展名）
@@ -1287,11 +1403,14 @@ public class ExcelFileToolService {
     /**
      * 获取转换后的字节数组。
      */
-    private byte[] getConvertedBytes(Workbook wb, String targetFormat) throws IOException {
+    private byte[] getConvertedBytes(Workbook wb, String targetFormat, String sheetName, int sheetIndex) throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         if ("csv".equalsIgnoreCase(targetFormat)) {
             // CSV 格式需要特殊处理
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            if (sheet == null) {
+                sheet = wb.getSheetAt(0);
+            }
             PrintWriter writer = new PrintWriter(new OutputStreamWriter(baos, StandardCharsets.UTF_8));
             int rowCount = sheet.getPhysicalNumberOfRows();
             for (int i = 0; i < rowCount; i++) {
@@ -1340,11 +1459,18 @@ public class ExcelFileToolService {
         ensureExcelFile(userFile);
         // 安全解析 rules 参数（可能是 List 或 JSON String）
         List<Map<String, Object>> rules = parseMapList(params.get("rules"));
+        String sheetName = readStringParam(params, "sheetName", null);
+        int sheetIndex = readIntParam(params, "sheetIndex", 0);
 
         try {
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
+            Sheet sheet = getSheet(wb, sheetName, sheetIndex);
+            
+            if (sheet == null) {
+                wb.close();
+                return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
+            }
 
             // 执行校验
             List<String> headers = new ArrayList<String>();
@@ -1511,6 +1637,52 @@ public class ExcelFileToolService {
     }
 
     /**
+     * 根据 sheetName 或 sheetIndex 获取工作表。
+     * sheetName 优先于 sheetIndex。
+     *
+     * @param wb         工作簿
+     * @param sheetName  工作表名称（可选）
+     * @param sheetIndex 工作表索引（默认 0）
+     * @return 工作表，如果不存在返回 null
+     */
+    private Sheet getSheet(Workbook wb, String sheetName, int sheetIndex) {
+        if (sheetName != null && !sheetName.trim().isEmpty()) {
+            return wb.getSheet(sheetName);
+        }
+        return wb.getSheetAt(sheetIndex);
+    }
+
+    /**
+     * 获取工作表的实际索引。
+     *
+     * @param wb         工作簿
+     * @param sheetName  工作表名称（可选）
+     * @param sheetIndex 工作表索引（默认 0）
+     * @return 实际工作表索引
+     */
+    private int getSheetIndex(Workbook wb, String sheetName, int sheetIndex) {
+        if (sheetName != null && !sheetName.trim().isEmpty()) {
+            return wb.getSheetIndex(sheetName);
+        }
+        return sheetIndex;
+    }
+
+    /**
+     * 获取工作表的实际名称。
+     *
+     * @param wb         工作簿
+     * @param sheetName  工作表名称（可选）
+     * @param sheetIndex 工作表索引（默认 0）
+     * @return 实际工作表名称
+     */
+    private String getSheetName(Workbook wb, String sheetName, int sheetIndex) {
+        if (sheetName != null && !sheetName.trim().isEmpty()) {
+            return sheetName;
+        }
+        return wb.getSheetName(sheetIndex);
+    }
+
+    /**
      * 将数据写入工作表。
      * 
      * @param sheet   工作表
@@ -1549,8 +1721,9 @@ public class ExcelFileToolService {
             throw new IllegalArgumentException("File not found");
         }
         String fileName = userFile.getOriginalFileName().toLowerCase();
-        if (!fileName.endsWith(".xlsx") && !fileName.endsWith(".xls") && !fileName.endsWith(".csv")) {
-            throw new IllegalArgumentException("Unsupported file format. Only xlsx, xls, csv are supported.");
+        if (!fileName.endsWith(".xlsx") && !fileName.endsWith(".xls")
+                && !fileName.endsWith(".csv") && !fileName.endsWith(".xml")) {
+            throw new IllegalArgumentException("Unsupported file format. Only xlsx, xls, csv, xml are supported.");
         }
     }
 
@@ -1579,13 +1752,210 @@ public class ExcelFileToolService {
     }
 
     private Workbook createWorkbook(byte[] bytes, String fileName) throws IOException {
-        if (fileName.toLowerCase().endsWith(".csv")) {
+        String lower = fileName.toLowerCase();
+        if (lower.endsWith(".csv")) {
             return createWorkbookFromCsv(bytes);
-        } else if (fileName.toLowerCase().endsWith(".xls")) {
+        }
+        // Office 2003 XML（SpreadsheetML）：POI 不支持该纯文本 XML 格式，先按内容嗅探。
+        // 放在扩展名判断之前——这类文件常被命名为 .xls / .xlsx / .xml，统一靠内容识别。
+        if (looksLikeSpreadsheetMl(bytes)) {
+            return createWorkbookFromSpreadsheetMl(bytes);
+        }
+        if (lower.endsWith(".xls")) {
             return new HSSFWorkbook(new ByteArrayInputStream(bytes));
+        } else if (lower.endsWith(".xml")) {
+            // .xml 但内容不是 SpreadsheetML → 给出明确错误，避免 POI 抛晦涩的 zip 解析异常
+            throw new IOException("该 .xml 文件不是有效的 Office 2003 XML 表格（SpreadsheetML）");
         } else {
             return new XSSFWorkbook(new ByteArrayInputStream(bytes));
         }
+    }
+
+    /**
+     * 内容嗅探：判断字节流是否为 Office 2003 XML 表格（SpreadsheetML）。
+     * <p>
+     * 排除二进制（xlsx 的 PK zip 魔数、xls 的 OLE2 魔数），再在开头片段中查找
+     * SpreadsheetML 的命名空间或 mso-application 处理指令。兼容 UTF-8 / UTF-16 BOM。
+     * </p>
+     */
+    private boolean looksLikeSpreadsheetMl(byte[] bytes) {
+        if (bytes == null || bytes.length < 8) {
+            return false;
+        }
+        int b0 = bytes[0] & 0xFF;
+        int b1 = bytes[1] & 0xFF;
+        if (b0 == 0x50 && b1 == 0x4B) {
+            return false; // 'PK' → zip(xlsx)
+        }
+        if (b0 == 0xD0 && b1 == 0xCF) {
+            return false; // OLE2 → xls
+        }
+        // 按 BOM 选择字符集解码开头片段
+        Charset cs = StandardCharsets.UTF_8;
+        if (b0 == 0xFF && b1 == 0xFE) {
+            cs = StandardCharsets.UTF_16LE;
+        } else if (b0 == 0xFE && b1 == 0xFF) {
+            cs = StandardCharsets.UTF_16BE;
+        }
+        int sniffLen = Math.min(bytes.length, 4096);
+        String head = new String(bytes, 0, sniffLen, cs).toLowerCase();
+        if (head.indexOf("urn:schemas-microsoft-com:office:spreadsheet") >= 0) {
+            return true;
+        }
+        return head.indexOf("mso-application") >= 0 && head.indexOf("excel.sheet") >= 0;
+    }
+
+    /**
+     * 把 Office 2003 XML（SpreadsheetML）解析为 POI Workbook（内存 XSSF）。
+     * <p>
+     * 用 JDK 自带 DOM 解析（不新增第三方依赖），遍历 Worksheet/Table/Row/Cell/Data，
+     * 处理 ss:Index 稀疏行列，按 ss:Type 转换 Number/Boolean，其余按字符串存。
+     * 禁用 DTD / 外部实体，防 XXE。
+     * </p>
+     */
+    private Workbook createWorkbookFromSpreadsheetMl(byte[] bytes) throws IOException {
+        final String ssNs = "urn:schemas-microsoft-com:office:spreadsheet";
+        try {
+            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+            dbf.setNamespaceAware(true);
+            setFeatureSafe(dbf, "http://apache.org/xml/features/disallow-doctype-decl", true);
+            setFeatureSafe(dbf, "http://xml.org/sax/features/external-general-entities", false);
+            setFeatureSafe(dbf, "http://xml.org/sax/features/external-parameter-entities", false);
+            dbf.setXIncludeAware(false);
+            dbf.setExpandEntityReferences(false);
+            DocumentBuilder db = dbf.newDocumentBuilder();
+            Document doc = db.parse(new ByteArrayInputStream(bytes));
+
+            Workbook wb = new XSSFWorkbook();
+            List<Element> worksheets = childElementsByLocalName(doc.getDocumentElement(), "Worksheet");
+            if (worksheets.isEmpty()) {
+                wb.createSheet("Sheet1"); // 避免下游 getSheetAt(0) 抛错
+                return wb;
+            }
+            for (int wi = 0; wi < worksheets.size(); wi++) {
+                Element ws = worksheets.get(wi);
+                String name = getNsAttr(ws, ssNs, "Name");
+                if (name == null || name.isEmpty()) {
+                    name = "Sheet" + (wi + 1);
+                }
+                Sheet sheet = wb.createSheet(WorkbookUtil.createSafeSheetName(name));
+
+                Element table = firstChildByLocalName(ws, "Table");
+                if (table == null) {
+                    continue;
+                }
+                List<Element> xmlRows = childElementsByLocalName(table, "Row");
+                int rowIdx = 0; // 0-based POI 行号
+                for (int ri = 0; ri < xmlRows.size(); ri++) {
+                    Element xmlRow = xmlRows.get(ri);
+                    String rIdxAttr = getNsAttr(xmlRow, ssNs, "Index");
+                    if (rIdxAttr != null) {
+                        try {
+                            rowIdx = Integer.parseInt(rIdxAttr.trim()) - 1;
+                        } catch (NumberFormatException ignore) { /* 保持自增 */ }
+                    }
+                    Row row = sheet.createRow(rowIdx);
+                    List<Element> xmlCells = childElementsByLocalName(xmlRow, "Cell");
+                    int colIdx = 0; // 0-based 列号
+                    for (int ci = 0; ci < xmlCells.size(); ci++) {
+                        Element xmlCell = xmlCells.get(ci);
+                        String cIdxAttr = getNsAttr(xmlCell, ssNs, "Index");
+                        if (cIdxAttr != null) {
+                            try {
+                                colIdx = Integer.parseInt(cIdxAttr.trim()) - 1;
+                            } catch (NumberFormatException ignore) { /* 保持自增 */ }
+                        }
+                        Cell cell = row.createCell(colIdx);
+                        Element data = firstChildByLocalName(xmlCell, "Data");
+                        if (data != null) {
+                            applySpreadsheetMlCellValue(cell, getNsAttr(data, ssNs, "Type"), data.getTextContent());
+                        }
+                        colIdx++;
+                    }
+                    rowIdx++;
+                }
+            }
+            return wb;
+        } catch (IOException ioe) {
+            throw ioe;
+        } catch (Exception e) {
+            throw new IOException("解析 Office 2003 XML（SpreadsheetML）失败: " + e.getMessage(), e);
+        }
+    }
+
+    private void applySpreadsheetMlCellValue(Cell cell, String type, String text) {
+        if (text == null) {
+            cell.setCellValue("");
+            return;
+        }
+        String t = type == null ? "" : type.trim();
+        if ("Number".equalsIgnoreCase(t)) {
+            try {
+                cell.setCellValue(Double.parseDouble(text.trim()));
+                return;
+            } catch (NumberFormatException ignore) { /* 落到字符串 */ }
+            cell.setCellValue(text);
+        } else if ("Boolean".equalsIgnoreCase(t)) {
+            String v = text.trim();
+            cell.setCellValue("1".equals(v) || "true".equalsIgnoreCase(v));
+        } else {
+            // String / DateTime / 未知类型：按原文本存（DateTime 保留可读字符串）
+            cell.setCellValue(text);
+        }
+    }
+
+    private void setFeatureSafe(DocumentBuilderFactory dbf, String feature, boolean value) {
+        try {
+            dbf.setFeature(feature, value);
+        } catch (Exception ignore) {
+            // 部分解析器不支持该 feature，忽略（不影响主流程）
+        }
+    }
+
+    private List<Element> childElementsByLocalName(Element parent, String localName) {
+        List<Element> result = new ArrayList<Element>();
+        if (parent == null) {
+            return result;
+        }
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node n = children.item(i);
+            if (n.getNodeType() == Node.ELEMENT_NODE && localName.equals(localNameOf(n))) {
+                result.add((Element) n);
+            }
+        }
+        return result;
+    }
+
+    private Element firstChildByLocalName(Element parent, String localName) {
+        List<Element> list = childElementsByLocalName(parent, localName);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    private String localNameOf(Node n) {
+        String ln = n.getLocalName();
+        if (ln != null) {
+            return ln;
+        }
+        String qn = n.getNodeName();
+        int idx = qn.indexOf(':');
+        return idx >= 0 ? qn.substring(idx + 1) : qn;
+    }
+
+    private String getNsAttr(Element el, String ns, String localName) {
+        if (el == null) {
+            return null;
+        }
+        String v = el.getAttributeNS(ns, localName);
+        if (v != null && !v.isEmpty()) {
+            return v;
+        }
+        v = el.getAttribute("ss:" + localName);
+        if (v != null && !v.isEmpty()) {
+            return v;
+        }
+        v = el.getAttribute(localName);
+        return (v == null || v.isEmpty()) ? null : v;
     }
 
     private Workbook createWorkbookFromCsv(byte[] bytes) {

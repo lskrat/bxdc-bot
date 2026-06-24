@@ -71,6 +71,13 @@ export interface SystemPrompts {
   extendedSkillRoutingPolicy: string;
 
   /**
+   * 策略提示词：下载链接策略
+   * 
+   * 禁止编造 downloadUrl/fileId，必须逐字来自本轮工具返回
+   */
+  downloadUrlPolicy: string;
+
+  /**
    * 构建任务状态摘要
    * 
    * 根据任务状态映射表生成用于注入到 LLM 提示词中的摘要文本
