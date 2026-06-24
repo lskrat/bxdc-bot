@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -418,13 +419,37 @@ public class SkillExecutionService {
             throw new IllegalArgumentException("Invalid service_params JSON for sandbox: "
                     + sandbox.getName() + " — " + e.getMessage(), e);
         }
-        // 2. 把 LLM 透传的 payload 整体作为 script_args；按 service_params schema 校验 script_args
-        //    （service_params 描述的是 script_args 这个值的结构，不是 LLM 整个入参）
-        Map<String, Object> scriptArgs = asMap(parameters);
-        if (scriptArgs == null) {
-            scriptArgs = new LinkedHashMap<>();
+        // 2. 解析 parameterContract（Skill config，描述 LLM 整个入参结构）。
+        //    支持两种写法（任选其一，按使用习惯）：
+        //    A) JSON Schema 嵌套格式（与 api.parameterContract 同形）：{"type":"object","properties":{"k1":{...},"k2":{...}},"required":[...]}
+        //    B) 简化格式（顶层就是参数键值对，值是描述）：{"k1":"desc1","k2":"desc2"}
+        //    - 若 parameterContract 存在：按契约 properties 顺序（格式 A）或顶层 key 顺序（格式 B）从 LLM payload
+        //      提取值组成 List 作为 script_args。
+        //    - 若 parameterContract 不存在：保持原设计，整个 LLM payload 作为 script_args（向后兼容旧配置）。
+        Object scriptArgs;
+        Map<String, Object> paramContract = (Map<String, Object>) config.get("parameterContract");
+        if (paramContract != null) {
+            Object llmPayload = parameters != null ? parameters : new LinkedHashMap<String, Object>();
+            jsonSchemaValidator.validate(objectMapper.writeValueAsString(paramContract), llmPayload);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> properties = (Map<String, Object>) paramContract.get("properties");
+            if (properties == null) {
+                // 简化格式：把整个 contract 当作 properties（顶层 key 即参数名）
+                properties = paramContract;
+            }
+            if (properties == null || properties.isEmpty()) {
+                throw new IllegalArgumentException("Python skill parameterContract 缺少参数键（格式 A：properties；格式 B：顶层 key-value）");
+            }
+            Map<String, Object> llmMap = asMap(llmPayload);
+            List<Object> orderedArgs = new ArrayList<>(properties.size());
+            for (String key : properties.keySet()) {
+                orderedArgs.add(llmMap.get(key));
+            }
+            scriptArgs = orderedArgs;
+        } else {
+            scriptArgs = parameters != null ? parameters : new LinkedHashMap<String, Object>();
+            jsonSchemaValidator.validate(objectMapper.writeValueAsString(schema), scriptArgs);
         }
-        jsonSchemaValidator.validate(objectMapper.writeValueAsString(schema), scriptArgs);
 
         // 3. 拼装出站请求
         String method = sandbox.getHttpMethod() == null ? "POST" : sandbox.getHttpMethod();

@@ -130,11 +130,13 @@ function draftToFormValues(draft: SkillConfigDraft): Record<string, unknown> {
     };
   }
   if (isPythonDraft(draft)) {
+    const pc = draft.parameterContractText.trim() ? (() => { try { return JSON.parse(draft.parameterContractText); } catch { return {}; } })() : undefined;
     return {
       sandboxName: draft.sandboxName,
       code: draft.code,
       operation: draft.operation,
       interfaceDescription: draft.interfaceDescription,
+      parameterContract: pc,
     };
   }
   return {};
@@ -181,6 +183,7 @@ function updateDraftFromFormValues(values: Record<string, unknown>) {
     d.code = (values.code as string) ?? d.code;
     d.operation = (values.operation as string) ?? d.operation;
     d.interfaceDescription = (values.interfaceDescription as string) ?? d.interfaceDescription;
+    d.parameterContractText = values.parameterContract && typeof values.parameterContract === 'object' ? JSON.stringify(values.parameterContract, null, 2) : (typeof values.parameterContract === 'string' ? values.parameterContract : d.parameterContractText);
   }
 }
 
@@ -240,6 +243,7 @@ function handleOptimizeConfirm(optimizedText: string) {
   if (fid === 'description') formData.description = optimizedText;
   else if (fid === 'api_interface_description' && apiDraft.value) apiDraft.value.interfaceDescription = optimizedText;
   else if (fid === 'api_parameter_contract' && apiDraft.value) apiDraft.value.parameterContractText = optimizedText;
+  else if (fid === 'python_parameter_contract' && pythonDraft.value) pythonDraft.value.parameterContractText = optimizedText;
   else if (fid === 'api_async_poll' && apiDraft.value) apiDraft.value.asyncPollText = optimizedText;
   else if (fid === 'api_headers' && apiDraft.value) apiDraft.value.headersText = optimizedText;
   else if (fid === 'api_query' && apiDraft.value) apiDraft.value.queryText = optimizedText;
@@ -276,6 +280,7 @@ const currentConfigKind = computed<ConfigKind>(() => {
 const apiDraft = computed(() => (isApiDraft(configDraft.value) ? configDraft.value : null));
 const sshDraft = computed(() => (isSshDraft(configDraft.value) ? configDraft.value : null));
 const templateDraft = computed(() => (isTemplateDraft(configDraft.value) ? configDraft.value : null));
+const pythonDraft = computed(() => (isPythonDraft(configDraft.value) ? configDraft.value : null));
 const openClawDraft = computed(() => (isOpenClawDraft(configDraft.value) ? configDraft.value : null));
 
 const suggestedTools = computed(() => {
