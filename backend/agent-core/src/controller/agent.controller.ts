@@ -693,17 +693,25 @@ export class AgentController {
     const traceId = `${sessionId}-${Date.now()}`;
     const toolNames: string[] = [];
     const skillNames: string[] = [];
+    // 输出守卫：收集工具真实返回的下载 URL，最终回答里非白名单链接将被剥离。
+    // 声明在 runWithToolTraceContext 之前，使 emit 回调（含子 agent 经 tool-trace 上报的工具结果）也能收集到真实 URL。
+    const allowedDownloadUrls = new Set<string>();
 
     runWithToolTraceContext(
-      (event) => subject.next({ data: JSON.stringify(event) }),
+      (event) => {
+        // 子 agent（execute_skill_with_context）执行的文件技能结果走此 emit 回调上报，
+        // 不经过 emitToolEvent，必须在这里也收集其 downloadUrl 进白名单，避免真实链接被误剥离。
+        if (typeof (event as { result?: unknown }).result === 'string') {
+          collectDownloadUrls((event as { result?: string }).result, allowedDownloadUrls);
+        }
+        subject.next({ data: JSON.stringify(event) });
+      },
       async () => {
         let fullAssistantResponse = '';
         const seenToolStatuses = new Map<string, ToolStatus>();
         const lastToolArguments = new Map<string, unknown>();
         const lastEmittedToolResult = new Map<string, string | undefined>();
         const toolCallStartTimes = new Map<string, number>();
-        // 输出守卫：收集工具真实返回的下载 URL，最终回答里非白名单链接将被剥离
-        const allowedDownloadUrls = new Set<string>();
         try {
           const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
             subject.next({ data: JSON.stringify(event) });

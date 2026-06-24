@@ -319,9 +319,11 @@ function handleDownloadLinkCapture(e: MouseEvent): void {
   const path = e.composedPath ? e.composedPath() : [e.target as Element]
   let anchor: HTMLAnchorElement | null = null
   for (const node of path) {
+    // 仅当事件路径上的节点本身是 <a> 时才视为点中链接。
+    // composedPath() 已展开 Shadow DOM：若用户点的是 shadow 内的链接，<a> 也会出现在 path 中。
+    // 不能用祖先 querySelector('a') 盲搜——那会把"区域内存在下载链接"误判为"点中了下载链接"，
+    // 导致点击消息区域任意位置都触发下载。
     if (node && (node as Element).tagName === 'A') { anchor = node as HTMLAnchorElement; break }
-    const found = (node as Element)?.querySelector?.('a')
-    if (found && /download/.test((found as HTMLAnchorElement).href)) { anchor = found as HTMLAnchorElement; break }
   }
   if (!anchor) return
   const href = anchor.getAttribute('href') || anchor.href || ''

@@ -605,8 +605,7 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 清空原工作表，写入筛选后的数据
-            sheet = wb.getSheetAt(0);
+            // 清空选中的工作表，写入筛选后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
             int lastRowNum = sheet.getLastRowNum();
             for (int i = lastRowNum; i >= 0; i--) {
                 Row row = sheet.getRow(i);
@@ -713,8 +712,7 @@ public class ExcelFileToolService {
                 });
             }
 
-            // 清空原工作表，写入排序后的数据
-            sheet = wb.getSheetAt(0);
+            // 清空选中的工作表，写入排序后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
             int lastRowNum = sheet.getLastRowNum();
             for (int i = lastRowNum; i >= 0; i--) {
                 Row row = sheet.getRow(i);
@@ -852,8 +850,7 @@ public class ExcelFileToolService {
                 resultRows.add(row);
             }
 
-            // 清空原工作表，写入聚合后的数据
-            sheet = wb.getSheetAt(0);
+            // 清空选中的工作表，写入聚合后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
             int lastRowNum = sheet.getLastRowNum();
             for (int i = lastRowNum; i >= 0; i--) {
                 Row row = sheet.getRow(i);
@@ -972,8 +969,7 @@ public class ExcelFileToolService {
                 resultRows.add(rowData);
             }
 
-            // 清空原工作表，写入透视后的数据
-            sheet = wb.getSheetAt(0);
+            // 清空选中的工作表，写入透视后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
             int lastRowNum = sheet.getLastRowNum();
             for (int i = lastRowNum; i >= 0; i--) {
                 Row row = sheet.getRow(i);
@@ -1068,8 +1064,7 @@ public class ExcelFileToolService {
             }
             headers.add(newColumn);
 
-            // 清空原工作表，写入计算后的数据
-            sheet = wb.getSheetAt(0);
+            // 清空选中的工作表，写入计算后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
             int lastRowNum = sheet.getLastRowNum();
             for (int i = lastRowNum; i >= 0; i--) {
                 Row row = sheet.getRow(i);
@@ -1166,8 +1161,7 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 清空原工作表，写入选择后的数据
-            sheet = wb.getSheetAt(0);
+            // 清空选中的工作表，写入选择后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
             int lastRowNum = sheet.getLastRowNum();
             for (int i = lastRowNum; i >= 0; i--) {
                 Row row = sheet.getRow(i);
@@ -1280,8 +1274,7 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 清空原工作表，写入清洗后的数据
-            sheet = wb.getSheetAt(0);
+            // 清空选中的工作表，写入清洗后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
             int lastRowNum = sheet.getLastRowNum();
             for (int i = lastRowNum; i >= 0; i--) {
                 Row row = sheet.getRow(i);
