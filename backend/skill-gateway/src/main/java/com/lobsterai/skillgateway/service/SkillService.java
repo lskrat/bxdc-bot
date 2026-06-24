@@ -2,21 +2,30 @@ package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.entity.SkillVisibility;
+import com.lobsterai.skillgateway.entity.User;
 import com.lobsterai.skillgateway.entity.UserTeam;
+import com.lobsterai.skillgateway.http.LlmHttpClient;
 import com.lobsterai.skillgateway.mapper.SkillMapper;
+import com.lobsterai.skillgateway.mapper.UserMapper;
 import com.lobsterai.skillgateway.mapper.UserTeamMapper;
 import com.lobsterai.skillgateway.util.StringUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
 @Service
 public class SkillService {
+
+    private static final Logger log = LoggerFactory.getLogger(SkillService.class);
 
     /** 平台公共种子 / Built-in 对应行的创建者标识（与 spec 一致） */
     public static final String PLATFORM_PUBLIC_AUTHOR = "public";
@@ -27,11 +36,16 @@ public class SkillService {
     private final SkillMapper skillMapper;
     private final ObjectMapper objectMapper;
     private final UserTeamMapper userTeamMapper;
+    private final UserMapper userMapper;
+    private final LlmHttpClient llmHttpClient;
 
-    public SkillService(SkillMapper skillMapper, ObjectMapper objectMapper, UserTeamMapper userTeamMapper) {
+    public SkillService(SkillMapper skillMapper, ObjectMapper objectMapper, UserTeamMapper userTeamMapper,
+                       UserMapper userMapper, LlmHttpClient llmHttpClient) {
         this.skillMapper = skillMapper;
         this.objectMapper = objectMapper;
         this.userTeamMapper = userTeamMapper;
+        this.userMapper = userMapper;
+        this.llmHttpClient = llmHttpClient;
     }
 
     public List<Skill> listSkillsForUser(String userId) {
@@ -542,11 +556,101 @@ public class SkillService {
                 throw new IllegalArgumentException("Skill not found or not authorized");
             }
         }
-        String generatedIntro = "Generated intro for skill: " + skill.getName();
+
+        User user = userMapper.selectById(userId);
+        Map<String, String> llmConfig = getLlmConfig(user);
+        if (llmConfig == null || llmConfig.get("llmApiKey") == null || llmConfig.get("llmApiKey").isEmpty()) {
+            throw new IllegalArgumentException("LLM API key not configured");
+        }
+
+        String skillJson;
+        try {
+            skillJson = objectMapper.writeValueAsString(skill);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to serialize skill: " + e.getMessage());
+        }
+
+        String generatedIntro = callLlmForSkillIntro(skillJson, llmConfig);
         skill.setIntroMd(generatedIntro);
+
         if (skill.getId() != null) {
             skillMapper.updateById(skill);
         }
         return skill;
+    }
+
+    private Map<String, String> getLlmConfig(User user) {
+        Map<String, String> config = new LinkedHashMap<>();
+
+        if (user != null && user.getLlmApiBase() != null && !user.getLlmApiBase().trim().isEmpty()) {
+            config.put("llmApiBase", user.getLlmApiBase().trim());
+        }
+        if (user != null && user.getLlmModelName() != null && !user.getLlmModelName().trim().isEmpty()) {
+            config.put("llmModelName", user.getLlmModelName().trim());
+        }
+        if (user != null && user.getLlmApiKey() != null && !user.getLlmApiKey().trim().isEmpty()) {
+            config.put("llmApiKey", user.getLlmApiKey().trim());
+        }
+
+        String envBase = System.getenv("OPENAI_API_BASE");
+        String envModel = System.getenv("OPENAI_MODEL_NAME");
+        String envKey = System.getenv("OPENAI_API_KEY");
+
+        if (envModel == null) envModel = "gpt-4";
+        if (envBase != null && !config.containsKey("llmApiBase")) {
+            config.put("llmApiBase", envBase.trim());
+        }
+        if (envModel != null && !config.containsKey("llmModelName")) {
+            config.put("llmModelName", envModel.trim());
+        }
+        if (envKey != null && !config.containsKey("llmApiKey")) {
+            config.put("llmApiKey", envKey.trim());
+        }
+
+        return config;
+    }
+
+    private String callLlmForSkillIntro(String skillJson, Map<String, String> llmConfig) {
+        String systemPrompt = "你是一个技能文档生成专家。请根据提供的 Skill JSON 对象，生成一份详细的 Markdown 格式技能介绍文档。\n\n" +
+                "要求：\n" +
+                "1. 使用中文输出\n" +
+                "2. 结构清晰，包含以下部分：\n" +
+                "   - 技能名称（一级标题）\n" +
+                "   - 技能描述（二级标题）\n" +
+                "   - 技能类型（二级标题）\n" +
+                "   - 配置说明（二级标题，解析 configuration JSON）\n" +
+                "   - 使用场景（二级标题）\n" +
+                "   - 输入输出示例（二级标题）\n" +
+                "3. 内容详实但不冗长\n" +
+                "4. 对于 API 类型技能，需要解析 endpoint、method、headers、queryParams 等\n" +
+                "5. 对于 SSH 类型技能，需要解析 executor、server 等\n" +
+                "6. 对于 TEMPLATE 类型技能，需要解析 prompt 模板\n";
+
+        String userMessage = "请为以下 Skill 对象生成完整的 Markdown 介绍文档：\n\n" + skillJson;
+
+        try {
+            List<Map<String, String>> messages = new ArrayList<>();
+            messages.add(createMessage("system", systemPrompt));
+            messages.add(createMessage("user", userMessage));
+
+            String llmOutput = llmHttpClient.chatCompletion(
+                    llmConfig.get("llmApiBase"),
+                    llmConfig.get("llmApiKey"),
+                    llmConfig.get("llmModelName"),
+                    messages
+            );
+
+            return llmOutput.trim();
+        } catch (LlmHttpClient.LlmHttpException e) {
+            log.error("LLM call failed: {}", e.getMessage());
+            throw new IllegalArgumentException("Failed to generate skill intro: " + e.getMessage());
+        }
+    }
+
+    private Map<String, String> createMessage(String role, String content) {
+        Map<String, String> msg = new LinkedHashMap<>();
+        msg.put("role", role);
+        msg.put("content", content);
+        return msg;
     }
 }
