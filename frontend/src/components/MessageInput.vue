@@ -9,7 +9,7 @@ import { useFileUpload } from '../composables/useFileUpload'
 import { FILE_INPUT_ACCEPT, FILE_TYPE_ICONS, FILE_TYPE_LABELS } from '../types/fileUpload'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
 
-const { sendMessage, isThinking } = useChat()
+const { sendMessage, isThinking, stop } = useChat()
 const { currentUser } = useUser()
 const fileUpload = useFileUpload()
 const input = ref('')
@@ -162,6 +162,11 @@ async function doSendMessage(text: string) {
   } else {
     await sendMessage(text, currentUser.value?.id)
   }
+}
+
+/** TChatSender 加载中显示的停止按钮：中断当前 SSE 流 + 重置 isThinking。 */
+function onStop() {
+  stop()
 }
 
 async function handleSend(value: string) {
@@ -369,6 +374,7 @@ async function handleSend(value: string) {
         :placeholder="isWaitingForParse ? '正在等待文件解析...' : '输入消息，Enter 发送，Shift + Enter 换行'"
         :textarea-props="{ autosize: { minRows: 1, maxRows: 6 } }"
         @send="handleSend"
+        @stop="onStop"
       />
       <t-tooltip content="上传文件">
         <button

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { ThinkingNode } from '../composables/useThinkingMode'
+import { getThinkingNodeLabel } from '../utils/thinkingNodeLabel'
 
 export type { ThinkingNode }
 
@@ -71,16 +72,7 @@ const getNodeIcon = (type: ThinkingNode['type']) => {
   }
 }
 
-const getNodeLabel = (type: ThinkingNode['type']) => {
-  switch (type) {
-    case 'thinking': return '调用准备'
-    case 'tool_call': return '调用工具'
-    case 'tool_result': return '工具返回'
-    case 'llm_call': return '模型推理'
-    case 'processing': return '处理中'
-    default: return '调用'
-  }
-}
+const getNodeLabel = getThinkingNodeLabel
 
 const formatTime = (timestamp: number) => {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -164,7 +156,7 @@ const getDisplayContent = (node: ThinkingNode): string | undefined => {
             <!-- 节点信息 -->
             <div class="node-info">
               <div class="node-header">
-                <span class="node-label">{{ getNodeLabel(node.type) }}</span>
+                <span class="node-label">{{ getNodeLabel(node) }}</span>
                 <div class="node-header-right">
                   <button
                     v-if="canCollapse(node)"
