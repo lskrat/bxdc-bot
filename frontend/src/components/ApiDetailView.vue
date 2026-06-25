@@ -5,6 +5,7 @@ import { EditIcon } from 'tdesign-icons-vue-next'
 import { useConversations } from '../composables/useConversations'
 import { useUser } from '../composables/useUser'
 import { fetchCallLogs, fetchApiKey, regenerateApiKey, updateApiDescription } from '../services/api'
+import { copyTextToClipboard } from '../utils/clipboard'
 import type { ApiCallLog } from '../types/conversation'
 
 const props = defineProps<{
@@ -70,8 +71,14 @@ async function copyApiKey() {
   if (!currentUser.value) return
   try {
     const res = await fetchApiKey(currentUser.value.id, props.conversationId)
-    await navigator.clipboard.writeText(res.apiKey)
-    MessagePlugin.success('已复制到剪贴板')
+    // 修复内网浏览器兼容：navigator.clipboard.writeText 在内网/IE/http iframe 场景
+    // 可能不可用，改用三层兜底工具（navigator → textarea execCommand → 手动选择）。
+    const ok = await copyTextToClipboard(res.apiKey)
+    if (ok) {
+      MessagePlugin.success('已复制到剪贴板')
+    } else {
+      MessagePlugin.error('复制失败，请手动选择文本')
+    }
   } catch (e) {
     MessagePlugin.error('复制失败')
   }
