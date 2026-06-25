@@ -15,7 +15,7 @@
 -->
 <configuration>
 
-    <property name="LOG_DIR" value="/approot1/skill-gateway/logs/api"/>
+    <property name="LOG_DIR" value="logs/api"/>
     <property name="LOG_FILE_NAME" value="skill-gateway"/>
     <property name="LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{40} - %msg%n"/>
 

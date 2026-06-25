@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useConversations } from '../composables/useConversations'
 import { useUser } from '../composables/useUser'
+import { copyTextToClipboard } from '../utils/clipboard'
 
 const props = defineProps<{
   visible: boolean
@@ -60,10 +61,15 @@ function handleDone() {
   emit('published', key || '')
 }
 
-function copyApiKey() {
-  if (publishResult.value?.apiKey) {
-    navigator.clipboard.writeText(publishResult.value.apiKey)
+async function copyApiKey() {
+  if (!publishResult.value?.apiKey) return
+  // 修复内网浏览器兼容：navigator.clipboard.writeText 在内网/IE/http iframe 场景可能
+  // 不可用，复制失败但用户无感知。改用三层兜底工具（navigator → textarea execCommand）。
+  const ok = await copyTextToClipboard(publishResult.value.apiKey)
+  if (ok) {
     MessagePlugin.success('已复制到剪贴板')
+  } else {
+    MessagePlugin.error('复制失败，请手动选择文本')
   }
 }
 </script>

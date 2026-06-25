@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.net.URLEncoder;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -141,7 +142,7 @@ public class SkillExecutionService {
             }
         }
 
-        effectiveParameters = mergeDefaults(effectiveParameters, config);
+        effectiveParameters = mergeDefaults(effectiveParameters, config, skill.getId(), request.userId);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> asyncPollConfig = (Map<String, Object>) config.get("asyncPoll");
@@ -167,7 +168,7 @@ public class SkillExecutionService {
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, Object> mergeDefaults(Object parameters, Map<String, Object> config) {
+    private Map<String, Object> mergeDefaults(Object parameters, Map<String, Object> config, Long skillId, String userId) {
         Map<String, Object> paramContract = (Map<String, Object>) config.get("parameterContract");
         if (paramContract == null) {
             return asMap(parameters);
@@ -179,8 +180,11 @@ public class SkillExecutionService {
 
         Map<String, Object> merged = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : properties.entrySet()) {
-            Map<String, Object> propDef = (Map<String, Object>) entry.getValue();
-            if (propDef != null) {
+            Object propDefObj = entry.getValue();
+            // property 可能是简化描述格式（value 是 String 而非 Map），用 instanceof 守卫避免 ClassCastException。
+            if (propDefObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> propDef = (Map<String, Object>) propDefObj;
                 if (propDef.containsKey("default")) {
                     merged.put(entry.getKey(), propDef.get("default"));
                 } else if (propDef.containsKey("const")) {
@@ -191,7 +195,90 @@ public class SkillExecutionService {
 
         Map<String, Object> inputMap = asMap(parameters);
         merged.putAll(inputMap);
+
+        // 按 parameterContract.properties[*].type 做强转。
+        // 见 openspec/changes/fix-api-skill-boolean-type-coercion/design.md Decision 2。
+        for (Map.Entry<String, Object> entry : properties.entrySet()) {
+            String key = entry.getKey();
+            Object propDefObj = entry.getValue();
+            // 同上：property 可能是简化描述格式（value 是 String 而非 Map），跳过强转。
+            if (!(propDefObj instanceof Map)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> propDef = (Map<String, Object>) propDefObj;
+            if (merged.containsKey(key)) {
+                String declaredType = (String) propDef.get("type");
+                merged.put(key, coerceByType(key, merged.get(key), declaredType, skillId, userId));
+            }
+        }
+
         return merged;
+    }
+
+    /**
+     * 按 parameterContract.properties[*].type 把字符串 / Number 等非契约类型强转成契约类型。
+     * 强转失败抛 IllegalArgumentException，调用前已 log.warn 记录上下文（skillId / userId / key / value / type）。
+     *
+     * 详见 openspec/changes/fix-api-skill-boolean-type-coercion/design.md Decision 2。
+     */
+    private Object coerceByType(String key, Object value, String type, Long skillId, String userId) {
+        if (value == null) return value;
+        if (type == null) return value;
+        if ("boolean".equals(type)) {
+            if (value instanceof Boolean) return value;
+            if (value instanceof String) {
+                String s = ((String) value).trim();
+                if (s.isEmpty() || "false".equalsIgnoreCase(s) || "0".equals(s) || "no".equalsIgnoreCase(s)) return Boolean.FALSE;
+                if ("true".equalsIgnoreCase(s) || "1".equals(s) || "yes".equalsIgnoreCase(s)) return Boolean.TRUE;
+                log.warn("Skill parameter type coercion failed: skillId={}, userId={}, key={}, expectedType=boolean, actualType=String, actualValue='{}'",
+                        skillId, userId, key, value);
+                throw new IllegalArgumentException(
+                        "Skill parameter '" + key + "' declared as boolean but got non-boolean string: '" + value + "'");
+            }
+            log.warn("Skill parameter type coercion failed: skillId={}, userId={}, key={}, expectedType=boolean, actualType={}",
+                    skillId, userId, key, value.getClass().getSimpleName());
+            throw new IllegalArgumentException(
+                    "Skill parameter '" + key + "' declared as boolean but got: " + value.getClass().getSimpleName());
+        }
+        if ("integer".equals(type)) {
+            if (value instanceof Integer || value instanceof Long) return value;
+            if (value instanceof String) {
+                try {
+                    return Long.parseLong(((String) value).trim());
+                } catch (NumberFormatException e) {
+                    log.warn("Skill parameter type coercion failed: skillId={}, userId={}, key={}, expectedType=integer, actualValue='{}'",
+                            skillId, userId, key, value);
+                    throw new IllegalArgumentException(
+                            "Skill parameter '" + key + "' declared as integer but got non-numeric string: '" + value + "'", e);
+                }
+            }
+            if (value instanceof Number) return ((Number) value).longValue();
+            log.warn("Skill parameter type coercion failed: skillId={}, userId={}, key={}, expectedType=integer, actualType={}",
+                    skillId, userId, key, value.getClass().getSimpleName());
+            throw new IllegalArgumentException(
+                    "Skill parameter '" + key + "' declared as integer but got: " + value.getClass().getSimpleName());
+        }
+        if ("number".equals(type)) {
+            if (value instanceof Double || value instanceof Float) return value;
+            if (value instanceof String) {
+                try {
+                    return Double.parseDouble(((String) value).trim());
+                } catch (NumberFormatException e) {
+                    log.warn("Skill parameter type coercion failed: skillId={}, userId={}, key={}, expectedType=number, actualValue='{}'",
+                            skillId, userId, key, value);
+                    throw new IllegalArgumentException(
+                            "Skill parameter '" + key + "' declared as number but got non-numeric string: '" + value + "'", e);
+                }
+            }
+            if (value instanceof Number) return ((Number) value).doubleValue();
+            log.warn("Skill parameter type coercion failed: skillId={}, userId={}, key={}, expectedType=number, actualType={}",
+                    skillId, userId, key, value.getClass().getSimpleName());
+            throw new IllegalArgumentException(
+                    "Skill parameter '" + key + "' declared as number but got: " + value.getClass().getSimpleName());
+        }
+        // type: "string" 或其他 / 未知类型 → 原样保留
+        return value;
     }
 
     @SuppressWarnings("unchecked")
@@ -418,13 +505,37 @@ public class SkillExecutionService {
             throw new IllegalArgumentException("Invalid service_params JSON for sandbox: "
                     + sandbox.getName() + " — " + e.getMessage(), e);
         }
-        // 2. 把 LLM 透传的 payload 整体作为 script_args；按 service_params schema 校验 script_args
-        //    （service_params 描述的是 script_args 这个值的结构，不是 LLM 整个入参）
-        Map<String, Object> scriptArgs = asMap(parameters);
-        if (scriptArgs == null) {
-            scriptArgs = new LinkedHashMap<>();
+        // 2. 解析 parameterContract（Skill config，描述 LLM 整个入参结构）。
+        //    支持两种写法（任选其一，按使用习惯）：
+        //    A) JSON Schema 嵌套格式（与 api.parameterContract 同形）：{"type":"object","properties":{"k1":{...},"k2":{...}},"required":[...]}
+        //    B) 简化格式（顶层就是参数键值对，值是描述）：{"k1":"desc1","k2":"desc2"}
+        //    - 若 parameterContract 存在：按契约 properties 顺序（格式 A）或顶层 key 顺序（格式 B）从 LLM payload
+        //      提取值组成 List 作为 script_args。
+        //    - 若 parameterContract 不存在：保持原设计，整个 LLM payload 作为 script_args（向后兼容旧配置）。
+        Object scriptArgs;
+        Map<String, Object> paramContract = (Map<String, Object>) config.get("parameterContract");
+        if (paramContract != null) {
+            Object llmPayload = parameters != null ? parameters : new LinkedHashMap<String, Object>();
+            jsonSchemaValidator.validate(objectMapper.writeValueAsString(paramContract), llmPayload);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> properties = (Map<String, Object>) paramContract.get("properties");
+            if (properties == null) {
+                // 简化格式：把整个 contract 当作 properties（顶层 key 即参数名）
+                properties = paramContract;
+            }
+            if (properties == null || properties.isEmpty()) {
+                throw new IllegalArgumentException("Python skill parameterContract 缺少参数键（格式 A：properties；格式 B：顶层 key-value）");
+            }
+            Map<String, Object> llmMap = asMap(llmPayload);
+            List<Object> orderedArgs = new ArrayList<>(properties.size());
+            for (String key : properties.keySet()) {
+                orderedArgs.add(llmMap.get(key));
+            }
+            scriptArgs = orderedArgs;
+        } else {
+            scriptArgs = parameters != null ? parameters : new LinkedHashMap<String, Object>();
+            jsonSchemaValidator.validate(objectMapper.writeValueAsString(schema), scriptArgs);
         }
-        jsonSchemaValidator.validate(objectMapper.writeValueAsString(schema), scriptArgs);
 
         // 3. 拼装出站请求
         String method = sandbox.getHttpMethod() == null ? "POST" : sandbox.getHttpMethod();

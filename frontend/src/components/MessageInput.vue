@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { ChatSender as TChatSender } from '@tdesign-vue-next/chat'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
@@ -9,7 +9,7 @@ import { useFileUpload } from '../composables/useFileUpload'
 import { FILE_INPUT_ACCEPT, FILE_TYPE_ICONS, FILE_TYPE_LABELS } from '../types/fileUpload'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
 
-const { sendMessage, isThinking } = useChat()
+const { sendMessage, isThinking, stop } = useChat()
 const { currentUser } = useUser()
 const fileUpload = useFileUpload()
 const input = ref('')
@@ -66,6 +66,9 @@ async function onFileChange(e: Event) {
 
 /** 拖拽上传：调用 composable 的 onDrop，自动 addFiles + 解析 */
 async function onDrop(e: DragEvent) {
+  // 无论 drop 成功 / 被拒（被 addFiles 类型校验拦截），都要清掉 drop zone 高亮
+  isDragOver.value = false
+  dragCounter.value = 0
   await fileUpload.onDrop(e)
 }
 
@@ -74,24 +77,47 @@ async function onPaste(e: ClipboardEvent) {
   await fileUpload.onPaste(e)
 }
 
-/** 拖拽视觉反馈 */
+/**
+ * open spec: drop-zone-stuck — 拖拽视觉反馈用 counter 模式而非 relatedTarget 检测
+ *
+ * Bug 复现：拖文件进入 chat 区域 → 松手 → 蓝色虚线框（drop zone 高亮）一直不消失
+ *
+ * 根因：
+ *   1) 原 onDragLeave 用 e.relatedTarget 判断"是否真的离开"，但 drag 事件的 relatedTarget
+ *      在 Chrome/Edge 浏览器中**始终为 null**（标准里 drag events 的 relatedTarget
+ *      定义就比较模糊），导致 isDragOver 永远为 true
+ *   2) 原 onDrop 没显式重置 isDragOver，依赖 dragleave 触发清空 → bug #1 链式失败
+ *
+ * 修复：dragenter/dragleave counter 模式（counter > 0 表示"在区域内"，counter <= 0 表示"完全离开"）
+ *   + onDrop 显式重置（drop 成功后必然触发）
+ *   + dragend 在 document 监听（用户 ESC 取消拖拽时拖回原处时触发，兜底重置）
+ */
 const isDragOver = ref(false)
+const dragCounter = ref(0)
 function onDragEnter(e: DragEvent) {
   e.preventDefault()
+  dragCounter.value += 1
   isDragOver.value = true
 }
 function onDragLeave(e: DragEvent) {
   e.preventDefault()
-  // 仅在离开最外层时清掉
-  const related = e.relatedTarget as Node | null
-  const current = e.currentTarget as Node
-  if (!related || !current.contains(related)) {
+  dragCounter.value -= 1
+  if (dragCounter.value <= 0) {
+    dragCounter.value = 0
     isDragOver.value = false
   }
 }
 function onDragOver(e: DragEvent) {
   e.preventDefault()
 }
+
+/** 兜底：拖拽被 ESC 取消时，dragend 在 source element 触发，document 监听即可 */
+function onDocumentDragEnd() {
+  dragCounter.value = 0
+  isDragOver.value = false
+}
+onMounted(() => document.addEventListener('dragend', onDocumentDragEnd))
+onBeforeUnmount(() => document.removeEventListener('dragend', onDocumentDragEnd))
 
 /** 移除文件（点击 × 取消按钮） */
 function onRemoveFile(id: string) {
@@ -136,6 +162,11 @@ async function doSendMessage(text: string) {
   } else {
     await sendMessage(text, currentUser.value?.id)
   }
+}
+
+/** TChatSender 加载中显示的停止按钮：中断当前 SSE 流 + 重置 isThinking。 */
+function onStop() {
+  stop()
 }
 
 async function handleSend(value: string) {
@@ -343,6 +374,7 @@ async function handleSend(value: string) {
         :placeholder="isWaitingForParse ? '正在等待文件解析...' : '输入消息，Enter 发送，Shift + Enter 换行'"
         :textarea-props="{ autosize: { minRows: 1, maxRows: 6 } }"
         @send="handleSend"
+        @stop="onStop"
       />
       <t-tooltip content="上传文件">
         <button

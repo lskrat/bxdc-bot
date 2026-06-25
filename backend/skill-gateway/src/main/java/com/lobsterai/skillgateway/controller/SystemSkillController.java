@@ -111,6 +111,16 @@ public class SystemSkillController {
         operation.put("aiHint", "唯一标识该 Skill 操作的 key（LLM 工具名后缀）");
         props.put("operation", operation);
 
+        // 参数格式契约 —— 与 api.parameterContract 同形，ui / aiOptimize / 数据结构一致
+        Map<String, Object> pc = new LinkedHashMap<>();
+        pc.put("type", "object");
+        pc.put("label", "参数格式契约");
+        pc.put("ui", "jsonEditor");
+        Map<String, Object> pcAiOpt = new LinkedHashMap<>();
+        pcAiOpt.put("fieldId", "python_parameter_contract");
+        pc.put("aiOptimize", pcAiOpt);
+        props.put("parameterContract", pc);
+
         Map<String, Object> iface = new LinkedHashMap<>();
         iface.put("type", "string");
         iface.put("label", "接口功能描述");

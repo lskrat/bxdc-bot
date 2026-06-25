@@ -186,17 +186,33 @@ public class ApiProxyService {
         boolean first = true;
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             if (entry.getValue() == null) continue;
-            if (!first) sb.append('&');
-            try {
-                sb.append(java.net.URLEncoder.encode(entry.getKey(), "UTF-8"));
-                sb.append('=');
-                sb.append(java.net.URLEncoder.encode(String.valueOf(entry.getValue()), "UTF-8"));
-            } catch (java.io.UnsupportedEncodingException e) {
-                // UTF-8 is always supported
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            // MultiValueMap（如 encodeFormBody 产出的）的值是 List（如 ["1"]），
+            // 必须逐元素编码成 key=v1&key=v2，不能 String.valueOf 整个 List——
+            // 否则会得到 "[1]" 这种字面量，导致下游接口参数校验失败（如 number "[1]" 非法）。
+            if (value instanceof Collection) {
+                for (Object o : (Collection<?>) value) {
+                    if (o == null) continue;
+                    first = appendFormPair(sb, first, key, String.valueOf(o));
+                }
+            } else {
+                first = appendFormPair(sb, first, key, String.valueOf(value));
             }
-            first = false;
         }
         return sb.toString();
+    }
+
+    private boolean appendFormPair(StringBuilder sb, boolean first, String key, String value) {
+        if (!first) sb.append('&');
+        try {
+            sb.append(java.net.URLEncoder.encode(key, "UTF-8"));
+            sb.append('=');
+            sb.append(java.net.URLEncoder.encode(value, "UTF-8"));
+        } catch (java.io.UnsupportedEncodingException e) {
+            // UTF-8 is always supported
+        }
+        return false;
     }
 
     @SuppressWarnings("unchecked")

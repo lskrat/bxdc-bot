@@ -45,6 +45,42 @@ const DEFAULT_PROMPTS: Record<string, { systemPrompt: string; userPromptTemplate
   },
 };
 
+/**
+ * 从文本中提取第一个完整的 JSON 对象（花括号配对扫描）。
+ * 正确跳过字符串字面量内的 { } 与转义字符，避免非贪婪正则在内层 } 处误截断。
+ * 找不到完整对象时返回 null。
+ */
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 export class OptimizeTextService {
   private llm: ChatOpenAI;
 
@@ -62,11 +98,19 @@ export class OptimizeTextService {
   }
 
   async optimize(fieldId: string, currentText: string, context?: string): Promise<{ optimizedText: string; explanation: string }> {
+    // 归一化输入：上游（前端 jsonEditor / keyValue 字段）可能把 JSON 解析成对象后传入，
+    // 此时 currentText 运行时是 object。若直接拼进 String.replace，会被 toString 成
+    // "[object Object]"，LLM 收到的就不是用户真实输入，导致瞎编 Schema。
+    // 因此对象统一还原为 JSON 文本，保证 LLM 看到的是真实内容。
+    const rawInput: unknown = currentText;
+    const safeText = typeof rawInput === "string"
+      ? rawInput
+      : JSON.stringify(rawInput ?? "", null, 2);
     try {
     const prompt = await this.fetchPrompt(fieldId);
 
     const userMessage = prompt.userPromptTemplate
-      .replace("{{currentText}}", currentText)
+      .replace("{{currentText}}", safeText)
       .replace("{{context}}", context ? `\n上下文：${context}` : "");
 
     console.log('[optimize-text] calling LLM...');
@@ -89,22 +133,25 @@ export class OptimizeTextService {
         .replace(/```/g, "")
         .trim();
 
-      // 2) 非贪婪匹配：找第一个完整的 { ... }，避免把 LLM 后续追加的文字也吃进去
-      const jsonMatch = stripped.match(/\{[\s\S]*?\}/);
-      if (!jsonMatch) {
+      // 2) 花括号配对扫描：提取第一个完整的 { ... }。
+      //    不能用非贪婪正则 /\{[\s\S]*?\}/——当 optimizedText 的值本身是含花括号的
+      //    JSON 字符串（如 api_parameter_contract 的 JSON Schema）时，非贪婪会在
+      //    第一个内层 } 处截断，导致 JSON.parse 失败。
+      const jsonStr = extractFirstJsonObject(stripped);
+      if (!jsonStr) {
         throw new Error("No JSON object found in response");
       }
 
       // 3) JSON 解析失败时打印原始内容（截断 500 字符）方便排查
       let parsed: any;
       try {
-        parsed = JSON.parse(jsonMatch[0]);
+        parsed = JSON.parse(jsonStr);
       } catch (jsonErr) {
         console.error(
           '[optimize-text] JSON.parse failed. raw (first 500 chars):',
           raw.slice(0, 500),
           'matched (first 500 chars):',
-          jsonMatch[0].slice(0, 500)
+          jsonStr.slice(0, 500)
         );
         throw jsonErr;
       }
@@ -121,14 +168,14 @@ export class OptimizeTextService {
     } catch (e) {
       console.error('[optimize-text] parse failed:', e instanceof Error ? e.message : String(e));
       return {
-        optimizedText: currentText,
+        optimizedText: safeText,
         explanation: "AI 优化失败：大模型返回格式异常，请重试。",
       };
     }
     } catch (e) {
       console.error('[optimize-text] LLM call failed:', e instanceof Error ? e.message : String(e));
       return {
-        optimizedText: currentText,
+        optimizedText: safeText,
         explanation: "AI 优化失败：" + (e instanceof Error ? e.message : "未知错误"),
       };
     }

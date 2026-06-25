@@ -77,6 +77,20 @@ const extendedSkillRoutingPolicy = `[扩展技能路由策略]
 `;
 
 /**
+ * 策略提示词：下载链接策略
+ * 
+ * 禁止编造 downloadUrl/fileId，必须逐字来自本轮工具返回
+ */
+const downloadUrlPolicy = `[下载链接策略]
+涉及文件下载链接（downloadUrl）和文件 ID（fileId）时，你必须严格遵守：
+1. downloadUrl 和 fileId 只能逐字（原样照抄）使用本轮对话中工具实际返回结果里的值。
+2. 严禁自行构造、拼接、递增、推测或猜测任何 downloadUrl 或 fileId（例如基于上文 fileId=80 就编造 fileId=81，或自己拼出 /api/files/download/xx?token=xx 这类链接）——这类编造的链接 token 无效、文件不存在，用户点击必然失败。
+3. 如果本轮没有工具返回可用的 downloadUrl/fileId，而用户需要下载，应先调用相应工具（如 file_list、file_detail 或重新生成文件的工具）获取真实链接；若仍无法获取，应如实告知用户"当前没有可用的下载链接/该文件不存在"，而不是编造一个。
+4. 记忆或历史消息中出现过的旧 downloadUrl/fileId 不能直接当作本轮结果使用——需要时重新调用工具获取最新真实值。
+
+`;
+
+/**
  * 任务状态中文映射
  */
 const statusMap: Record<string, string> = {
@@ -124,5 +138,6 @@ export const ChinesePrompts: SystemPrompts = {
   taskTrackingPolicy,
   confirmationUIPolicy,
   extendedSkillRoutingPolicy,
+  downloadUrlPolicy,
   buildTasksSummary,
 };

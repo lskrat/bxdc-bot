@@ -65,6 +65,7 @@ import { buildStaticSystemPrompt, Prompts } from '../prompts';
 import { ConversationLogger } from '../utils/conversation-logger';
 import { gatewayCompactClient } from '../services/gateway-compact-client';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
+import { collectDownloadUrls, sanitizeDownloadUrls } from '../utils/download-url-guard';
 
 /** Payload from {@link interrupt} in extended skills / SSH tools (see java-skills). */
 type SkillInterruptPayload = {
@@ -395,6 +396,7 @@ export class AgentController {
     traceId: string,
     sessionId: string,
     userId?: string,
+    allowedDownloadUrls?: Set<string>,
   ) {
     const chunkMessages = getChunkMessages(chunk);
     for (let messageIndex = 0; messageIndex < chunkMessages.length; messageIndex += 1) {
@@ -412,6 +414,7 @@ export class AgentController {
           traceId,
           sessionId,
           userId,
+          allowedDownloadUrls,
         );
       }
 
@@ -428,6 +431,7 @@ export class AgentController {
           traceId,
           sessionId,
           userId,
+          allowedDownloadUrls,
         );
       }
     }
@@ -444,7 +448,14 @@ export class AgentController {
     traceId: string,
     sessionId: string,
     userId?: string,
+    allowedDownloadUrls?: Set<string>,
   ) {
+    // 收集工具真实返回的下载 URL 进白名单（输出守卫用，防模型编造链接）
+    if (allowedDownloadUrls && toolCall.result !== undefined) {
+      const resultText = typeof toolCall.result === 'string' ? toolCall.result : JSON.stringify(toolCall.result);
+      collectDownloadUrls(resultText, allowedDownloadUrls);
+    }
+
     const previousStatus = seenToolStatuses.get(toolCall.toolId);
     const prevEmittedResult = lastEmittedToolResult.get(toolCall.toolId);
 
@@ -682,9 +693,19 @@ export class AgentController {
     const traceId = `${sessionId}-${Date.now()}`;
     const toolNames: string[] = [];
     const skillNames: string[] = [];
+    // 输出守卫：收集工具真实返回的下载 URL，最终回答里非白名单链接将被剥离。
+    // 声明在 runWithToolTraceContext 之前，使 emit 回调（含子 agent 经 tool-trace 上报的工具结果）也能收集到真实 URL。
+    const allowedDownloadUrls = new Set<string>();
 
     runWithToolTraceContext(
-      (event) => subject.next({ data: JSON.stringify(event) }),
+      (event) => {
+        // 子 agent（execute_skill_with_context）执行的文件技能结果走此 emit 回调上报，
+        // 不经过 emitToolEvent，必须在这里也收集其 downloadUrl 进白名单，避免真实链接被误剥离。
+        if (typeof (event as { result?: unknown }).result === 'string') {
+          collectDownloadUrls((event as { result?: string }).result, allowedDownloadUrls);
+        }
+        subject.next({ data: JSON.stringify(event) });
+      },
       async () => {
         let fullAssistantResponse = '';
         const seenToolStatuses = new Map<string, ToolStatus>();
@@ -849,7 +870,7 @@ export class AgentController {
                     const forward = stripInterruptForClient(payload);
                     if (forward != null) {
                       subject.next({ data: JSON.stringify(forward) });
-                      this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId);
+                      this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId, allowedDownloadUrls);
                       if (typeof forward === 'object') {
                         const lastAssistantMessage = getChunkMessages(forward)
                           .filter((message) => isAssistantMessage(message))
@@ -891,7 +912,7 @@ export class AgentController {
             const forward = stripInterruptForClient(payload);
             if (forward != null) {
               subject.next({ data: JSON.stringify(forward) });
-              this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId);
+              this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId, allowedDownloadUrls);
 
               if (typeof forward === 'object') {
                 const messages = getChunkMessages(forward);
@@ -946,6 +967,17 @@ export class AgentController {
                   }
                 }
               }
+            }
+          }
+
+          // 输出守卫：剥离模型编造的下载链接（非工具真实返回的 download URL）
+          if (typeof fullAssistantResponse === 'string' && fullAssistantResponse.length > 0) {
+            const guarded = sanitizeDownloadUrls(fullAssistantResponse, allowedDownloadUrls);
+            if (guarded.changed) {
+              console.warn(`[DownloadGuard] Stripped fabricated download link(s) from response. session=${sessionId}`);
+              fullAssistantResponse = guarded.text;
+              // 发整段修正覆盖（replace=true 提示前端替换已渲染内容）
+              subject.next({ data: JSON.stringify({ role: 'assistant', content: guarded.text, replace: true }) });
             }
           }
 

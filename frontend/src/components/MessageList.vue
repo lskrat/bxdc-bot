@@ -12,6 +12,7 @@ import AsyncTaskResultMessage from './AsyncTaskResultMessage.vue'
 import BxdcbotRunResultMessage from './BxdcbotRunResultMessage.vue'
 import { ChevronUpIcon, ChevronDownIcon, DownloadIcon, RefreshIcon, CopyIcon, ThumbUpIcon, ThumbDownIcon, Share1Icon } from 'tdesign-icons-vue-next'
 import { apiUrl } from '../services/config'
+import { fileService } from '../services/fileService'
 import { downloadMarkdown, downloadPdf } from '../utils/chatDownload'
 import { MessagePlugin } from 'tdesign-vue-next'
 
@@ -68,14 +69,47 @@ try {
   // ignore
 }
 
+let downloadAnchorObserver: MutationObserver | null = null
+
 onMounted(() => {
+  // 诊断标记：确认浏览器实际执行的是这版新代码（解决"改了不生效"的根因排查）
+  console.log('%c[dl-fix] MessageList onMounted v16 — composedPath + shadow-aware interceptor', 'color:#0a0;font-weight:bold')
   fetchSkills()
-  nextTick(() => ensureScrollListener())
+  nextTick(() => {
+    ensureScrollListener()
+    // 首次改写已渲染的下载链接
+    rewriteDownloadAnchors(document.body)
+  })
+  // 捕获阶段拦截文件下载链接点击：在浏览器 target=_blank 默认行为之前触发。
+  document.addEventListener('click', handleDownloadLinkCapture, true)
+  // MutationObserver 兜底：markdown 流式渲染会不断插入 <a>，且渲染器会在节点插入
+  // *之后* 用 setAttribute 补加 target="_blank"。因此同时监听 childList（新增节点）
+  // 和 attributes（target 属性变化），target 一出现立刻删掉，确保不会开新页签。
+  downloadAnchorObserver = new MutationObserver((mutations) => {
+    for (const mu of mutations) {
+      if (mu.type === 'childList') {
+        mu.addedNodes.forEach((node) => {
+          if (node.nodeType === 1) rewriteDownloadAnchors(node as Element)
+        })
+      } else if (mu.type === 'attributes' && mu.target.nodeType === 1) {
+        rewriteDownloadAnchors(mu.target as Element)
+      }
+    }
+  })
+  downloadAnchorObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['target'],
+  })
 })
 
 onUnmounted(() => {
   chatListEl?.removeEventListener('scroll', handleChatScroll)
   chatListEl = null
+  document.removeEventListener('click', handleDownloadLinkCapture, true)
+  downloadAnchorObserver?.disconnect()
+  downloadAnchorObserver = null
 })
 
 function formatToolStatus(status: 'running' | 'completed' | 'failed') {
@@ -114,6 +148,8 @@ interface DownloadInfo {
   url: string
   fileName: string
   size?: number
+  /** user_files.id — 有值时直接复用 fileService.downloadFile(fileId)，与文件管理下载完全一致 */
+  fileId?: number
 }
 
 /**
@@ -133,7 +169,13 @@ function parseDownloadInfo(result?: string): DownloadInfo | null {
     if (!m) return null
     const fileNameMatch = raw.match(/"originalFileName"\s*:\s*"([^"]+)"/)
       || raw.match(/"newFileName"\s*:\s*"([^"]+)"/)
-    return { url: m[1] || '', fileName: fileNameMatch ? (fileNameMatch[1] || 'download') : 'download' }
+    // 各文件工具的 id 字段名不一致：fileId / newFileId
+    const idMatch = raw.match(/"fileId"\s*:\s*(\d+)/) || raw.match(/"newFileId"\s*:\s*(\d+)/)
+    return {
+      url: m[1] || '',
+      fileName: fileNameMatch ? (fileNameMatch[1] || 'download') : 'download',
+      fileId: idMatch ? Number(idMatch[1]) : undefined,
+    }
   }
   // 解包 { success, output: {...} } 或 { output: "..." }
   if (payload && typeof payload === 'object') {
@@ -150,7 +192,162 @@ function parseDownloadInfo(result?: string): DownloadInfo | null {
     || (typeof payload.newFileName === 'string' && payload.newFileName)
     || 'download'
   const size = typeof payload.size === 'number' ? payload.size : undefined
-  return { url, fileName, size }
+  // 各文件工具的 id 字段名不一致：fileId / newFileId
+  const fileId = typeof payload.fileId === 'number'
+    ? payload.fileId
+    : typeof payload.newFileId === 'number'
+      ? payload.newFileId
+      : undefined
+  return { url, fileName, size, fileId }
+}
+
+/**
+ * 触发 chat 内文件下载，效果与文件管理页完全一致。
+ *
+ * - 有 fileId：直接复用 fileService.downloadFile(fileId)，走和文件管理
+ *   **完全相同**的代码路径（相对路径 /api/files/download/{id} + X-User-Id header，
+ *   经 vite proxy 同源无 CORS）。
+ * - 无 fileId（兜底）：用解析出的 downloadUrl。注意后端 buildDownloadUrl 返回的是
+ *   绝对 URL（http://host:18080/...?token=xxx），直接 fetch 会跨端口触发 CORS，
+ *   因此先剥离 origin 转成相对路径，让 vite proxy 转发。
+ */
+async function handleToolDownload(info: DownloadInfo): Promise<void> {
+  if (downloadLoading.value) return
+  downloadLoading.value = true
+  try {
+    // 优先用 fileId 复用文件管理的下载实现，保证效果完全一致
+    if (typeof info.fileId === 'number') {
+      await fileService.downloadFile(info.fileId)
+      return
+    }
+    // 兜底：把绝对 URL 转相对路径（保留 path + query 的 token），避免跨端口 CORS
+    let requestUrl = info.url
+    try {
+      const parsed = new URL(info.url, window.location.origin)
+      requestUrl = parsed.pathname + parsed.search
+    } catch {
+      /* info.url 已是相对路径，原样使用 */
+    }
+    const res = await fetch(apiUrl(requestUrl), {
+      headers: { 'X-User-Id': localStorage.getItem('user_id') || '' },
+    })
+    if (!res.ok) throw new Error(`下载失败: ${res.status}`)
+    const blob = await res.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = blobUrl
+    // 优先用 Content-Disposition header 的文件名（与文件管理一致），兜底用解析出的 fileName
+    const disposition = res.headers.get('Content-Disposition')
+    const match = disposition?.match(/filename\*=UTF-8''(.+)/) || disposition?.match(/filename="?([^";]+)"?/)
+    a.download = match?.[1]
+      ? decodeURIComponent(match[1])
+      : info.fileName && info.fileName !== 'download'
+        ? info.fileName
+        : 'download'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(blobUrl)
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || '下载失败')
+  } finally {
+    downloadLoading.value = false
+  }
+}
+
+/**
+ * 改写一个 DOM 子树内的文件下载链接，使其不再开新页签。
+ *
+ * 对每个 href 含 /api/files/download/{id} 的 <a>：
+ *  1. 去掉 target（移除 _blank）→ 即便后续点击拦截失效，浏览器也只会"就地"请求，
+ *     后端返回 Content-Disposition: attachment 时直接下载、不离开页面、无新页签。
+ *  2. 在 <a> 上挂捕获阶段 click 监听 → preventDefault + 走 fileService blob 下载，
+ *     效果与文件管理页完全一致。
+ *  3. 用 data 标记避免重复处理（markdown 流式渲染会反复触发 observer）。
+ */
+function rewriteDownloadAnchors(root: Element): void {
+  const anchors: HTMLAnchorElement[] = []
+  if (root.tagName === 'A') anchors.push(root as HTMLAnchorElement)
+  root.querySelectorAll?.('a[href*="/api/files/download/"]').forEach((a) => {
+    anchors.push(a as HTMLAnchorElement)
+  })
+  for (const a of anchors) {
+    const href = a.getAttribute('href') || ''
+    if (!/\/api\/files\/download\/\d+/.test(href)) continue
+    // target 每次都删（幂等）：渲染器可能在节点插入后又补加 target，
+    // 不能因为"已处理过"就跳过删除，否则新加的 target 残留导致开新页签。
+    if (a.hasAttribute('target')) a.removeAttribute('target')
+    // click 监听只绑一次（用标记防重复绑定）
+    if (a.dataset.dlRewritten !== '1') {
+      a.dataset.dlRewritten = '1'
+      a.addEventListener('click', onDownloadAnchorClick, true)
+    }
+  }
+}
+
+/** 下载链接点击处理：阻止默认跳转，走 blob 下载。Shadow DOM 兼容。 */
+function onDownloadAnchorClick(e: MouseEvent): void {
+  if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+  const path = e.composedPath ? e.composedPath() : [e.currentTarget as Element]
+  let href = ''
+  for (const node of path) {
+    if (node && (node as Element).tagName === 'A') {
+      const a = node as HTMLAnchorElement
+      href = a.getAttribute('href') || a.href || ''
+      if (href) break
+    }
+  }
+  if (!href) return
+  const m = href.match(/\/api\/files\/download\/(\d+)/)
+  if (!m) return
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  void downloadFileById(Number(m[1]))
+}
+
+/**
+ * 文档级捕获阶段点击拦截（兜底，与 onDownloadAnchorClick 双保险）。
+ *
+ * 关键：用 e.composedPath() 检索事件路径上的 <a>，而不是 e.target.closest('a')——
+ * 因为 TDesign markdown 渲染可能用了 Shadow DOM，普通 closest() 找不到 shadow
+ * 内部的 <a>，但 click 事件配合 composed:true 会冒泡到 document，composedPath()
+ * 会展开穿过 shadow boundary。
+ */
+function handleDownloadLinkCapture(e: MouseEvent): void {
+  // 仅处理普通左键点击（不干预 Ctrl/Cmd/中键等用户主动新开行为）
+  if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+  const path = e.composedPath ? e.composedPath() : [e.target as Element]
+  let anchor: HTMLAnchorElement | null = null
+  for (const node of path) {
+    // 仅当事件路径上的节点本身是 <a> 时才视为点中链接。
+    // composedPath() 已展开 Shadow DOM：若用户点的是 shadow 内的链接，<a> 也会出现在 path 中。
+    // 不能用祖先 querySelector('a') 盲搜——那会把"区域内存在下载链接"误判为"点中了下载链接"，
+    // 导致点击消息区域任意位置都触发下载。
+    if (node && (node as Element).tagName === 'A') { anchor = node as HTMLAnchorElement; break }
+  }
+  if (!anchor) return
+  const href = anchor.getAttribute('href') || anchor.href || ''
+  if (!href) return
+  const m = href.match(/\/api\/files\/download\/(\d+)/)
+  if (!m) return // 非文件下载链接（普通外链）→ 不干预，正常打开
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  void downloadFileById(Number(m[1]))
+}
+
+/**
+ * 复用文件管理页 fileService.downloadFile，走 blob 下载（无新页签）。
+ */
+async function downloadFileById(fileId: number): Promise<void> {
+  if (downloadLoading.value) return
+  downloadLoading.value = true
+  try {
+    await fileService.downloadFile(fileId)
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || '下载失败')
+  } finally {
+    downloadLoading.value = false
+  }
 }
 
 function formatSize(bytes?: number): string {
@@ -211,6 +408,67 @@ function handleLogDialogVisibilityChange(visible: boolean) {
 
 function closeLogViewer() {
   activeLogMessageId.value = null
+}
+
+// ── 执行块折叠（工具调用 + 确认卡片）──
+// Per-message 手动覆盖状态：用户可手动展开/收起（仅在非 pending 状态下可操作）
+// 用 reactive 对象而非 Map，避免 Vue 3 对 Map 的响应式追踪在模板函数调用中失效
+const manualOverrideExpanded = reactive<Record<string, boolean>>({})
+
+interface BlockState {
+  hasAny: boolean
+  hasPending: boolean
+  hasRunning: boolean
+  shouldExpand: boolean
+  toolCount: number
+  pendingCount: number
+}
+
+function getMessageBlockState(item: any, streaming: boolean = false): BlockState {
+  const tools = (item.toolInvocations ?? []) as ToolInvocation[]
+  const confs = (item.confirmations ?? []) as ConfirmationRequest[]
+  const toolCount = tools.length
+  const pendingCount = confs.filter((c: ConfirmationRequest) => c.status === 'pending').length
+  const hasRunning = tools.some((t: ToolInvocation) => t.status === 'running')
+  const hasPending = pendingCount > 0
+  const hasAny = toolCount > 0 || confs.length > 0
+
+  // 展开优先级：pending 强制展开 > 手动覆盖 > streaming/运行中 > 默认收起
+  // streaming：SSE 还在推送（isThinking && item.isLast），tool 逐个到达间隙不会有 running 的 tool，
+  // 但保持展开避免闪烁
+  const manualOverride = manualOverrideExpanded[item.id]
+  let shouldExpand: boolean
+  if (hasPending) {
+    shouldExpand = true
+  } else if (manualOverride !== undefined) {
+    shouldExpand = manualOverride
+  } else if (hasRunning || streaming) {
+    shouldExpand = true
+  } else {
+    shouldExpand = false
+  }
+  return { hasAny, hasPending, hasRunning, shouldExpand, toolCount, pendingCount }
+}
+
+function toggleBlockExpansion(itemId: string, hasPending: boolean) {
+  if (hasPending) return
+  if (manualOverrideExpanded[itemId] !== undefined) {
+    manualOverrideExpanded[itemId] = !manualOverrideExpanded[itemId]
+  } else {
+    manualOverrideExpanded[itemId] = false
+  }
+}
+
+function getBlockLabel(item: any): string {
+  const state = getMessageBlockState(item)
+  const parts: string[] = []
+  if (state.toolCount > 0) {
+    parts.push(`${state.toolCount} 次工具`)
+  }
+  if (state.pendingCount > 0) {
+    parts.push(`${state.pendingCount} 项待确认`)
+  }
+  return `调用详情（${parts.join(' + ')}）`
 }
 
 function openLatestLogViewer() {
@@ -682,10 +940,25 @@ async function handleDownload(format: 'md' | 'pdf', msg: Message) {
 
 async function copyContent(text: string) {
   try {
-    await navigator.clipboard.writeText(text)
-    MessagePlugin.success('已复制到剪贴板')
+    const ta = document.createElement('textarea')
+    ta.value = text
+    // 隐藏 textarea，避免页面闪一下
+    ta.style.position = 'fixed'
+    ta.style.top = '0'
+    ta.style.left = '0'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    if (ok) {
+      MessagePlugin.success('已复制到剪贴板')
+    } else {
+      MessagePlugin.error('复制失败，请手动选择文本')
+    }
   } catch {
-    MessagePlugin.error('复制失败')
+    MessagePlugin.error('复制失败，请手动选择文本')
   }
 }
 </script>
@@ -796,9 +1069,22 @@ async function copyContent(text: string) {
           </div>
 
           <div
-            v-for="conf in item.confirmations"
-            :key="conf.toolCallId"
-            class="confirmation-card"
+            v-if="item.role === 'assistant' && getMessageBlockState(item, isThinking && item.isLast).hasAny"
+            class="execution-block"
+          >
+            <div
+              class="execution-block-header"
+              :class="{ 'execution-block-header--disabled': getMessageBlockState(item, isThinking && item.isLast).hasPending }"
+              @click="toggleBlockExpansion(item.id, getMessageBlockState(item, isThinking && item.isLast).hasPending)"
+            >
+              <span class="execution-block-arrow">{{ getMessageBlockState(item, isThinking && item.isLast).shouldExpand ? '▾' : '▸' }}</span>
+              <span class="execution-block-label">{{ getBlockLabel(item) }}</span>
+            </div>
+            <div v-show="getMessageBlockState(item, isThinking && item.isLast).shouldExpand" class="execution-block-body">
+              <div
+                v-for="conf in item.confirmations"
+                :key="conf.toolCallId"
+                class="confirmation-card"
             :class="confirmationCardClass(conf)"
           >
             <div class="confirmation-header">
@@ -918,8 +1204,8 @@ async function copyContent(text: string) {
                   </div>
                   <a
                     :href="parseDownloadInfo(tool.result)!.url"
-                    target="_blank"
-                    rel="noopener"
+                    :download="parseDownloadInfo(tool.result)!.fileName"
+                    @click.prevent="handleToolDownload(parseDownloadInfo(tool.result)!)"
                     class="tool-download-btn"
                   >下载</a>
                 </div>
@@ -964,6 +1250,8 @@ async function copyContent(text: string) {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
             </div>
           </div>
 
@@ -1203,6 +1491,51 @@ async function copyContent(text: string) {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.execution-block {
+  border: 1px solid var(--td-border-level-2-color);
+  border-radius: var(--td-radius-medium);
+  overflow: hidden;
+}
+
+.execution-block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  cursor: pointer;
+  user-select: none;
+  background: var(--td-bg-color-secondarycontainer);
+  border-bottom: 1px solid var(--td-border-level-1-color);
+}
+
+.execution-block-header:hover {
+  background: var(--td-bg-color-container-hover);
+}
+
+.execution-block-header--disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.execution-block-header--disabled:hover {
+  background: var(--td-bg-color-secondarycontainer);
+}
+
+.execution-block-arrow {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.execution-block-label {
+  font-weight: 500;
+}
+
+.execution-block-body {
+  padding: 8px 12px;
 }
 
 .tool-status-list {
@@ -1529,6 +1862,7 @@ async function copyContent(text: string) {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: 8px;
   margin-bottom: 6px;
 }
 

@@ -294,22 +294,40 @@ public class Skill {
             java.util.Map<String, Object> cfg = om.readValue(config, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
             String kind = (String) cfg.get("kind");
 
-            // 1) API: from parameterContract.properties + required
+            // 1) API/Python: from parameterContract（支持两种格式）
+            //    A) JSON Schema 嵌套：{type:"object", properties:{k1:{...},k2:{...}}, required:[...]}
+            //    B) 简化键值对：{k1:"desc1", k2:"desc2"}（顶层 key 即参数名，value 是 description string）
+            //    这两种都会被提取到 schemaProperties，驱动 agent-core 的 Zod schema，让 LLM 知道要传什么参数。
             java.util.Map<String, Object> pc = (java.util.Map<String, Object>) cfg.get("parameterContract");
             if (pc != null) {
                 java.util.Map<String, Object> props = (java.util.Map<String, Object>) pc.get("properties");
+                boolean isFlatFormat = (props == null);
+                if (isFlatFormat) {
+                    props = pc;
+                }
                 java.util.List<String> requiredList = (java.util.List<String>) pc.get("required");
                 java.util.Set<String> requiredSet = requiredList != null
                         ? new java.util.HashSet<>(requiredList)
                         : java.util.Collections.emptySet();
                 if (props != null) {
                     for (java.util.Map.Entry<String, Object> entry : props.entrySet()) {
-                        if (entry.getValue() instanceof java.util.Map) {
-                            java.util.Map<String, Object> propMeta = new java.util.LinkedHashMap<>((java.util.Map<String, Object>) entry.getValue());
+                        if (isFlatFormat) {
+                            // 简化格式：value 是 description string
+                            java.util.Map<String, Object> propMeta = new java.util.LinkedHashMap<>();
+                            propMeta.put("type", "string");
+                            propMeta.put("description", entry.getValue() == null ? "" : String.valueOf(entry.getValue()));
                             if (requiredSet.contains(entry.getKey())) {
                                 propMeta.put("required", true);
                             }
                             result.put(entry.getKey(), propMeta);
+                        } else {
+                            if (entry.getValue() instanceof java.util.Map) {
+                                java.util.Map<String, Object> propMeta = new java.util.LinkedHashMap<>((java.util.Map<String, Object>) entry.getValue());
+                                if (requiredSet.contains(entry.getKey())) {
+                                    propMeta.put("required", true);
+                                }
+                                result.put(entry.getKey(), propMeta);
+                            }
                         }
                     }
                 }
