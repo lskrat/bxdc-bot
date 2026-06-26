@@ -109,6 +109,13 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
     private readonly openAiApiKey: string,
     private readonly llmConfig?: { modelName?: string; baseUrl?: string },
     private readonly userId?: string,
+    /**
+     * open spec: conversation-file-isolation
+     * 当前对话的 conversationId，必须传给子 Agent，否则子 Agent 调 file tool 时
+     * gateway 拿不到 X-Conversation-Id header，导致 enabled_files / conversationId
+     * 隔离完全失效。
+     */
+    private readonly conversationId?: string,
   ) {
     super({
       name: "execute_skill_with_context",
@@ -148,6 +155,10 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
               {
                 modelName: llmConfig?.modelName || "gpt-4",
                 baseUrl: llmConfig?.baseUrl,
+                // open spec: conversation-file-isolation — 把 conversationId 透传给子 Agent，
+                // 子 Agent 调 file tool 时会作为 X-Conversation-Id 传给 gateway，
+                // 否则子 Agent 调出来的临时文件 conversationId 都是 NULL
+                conversationId: this.conversationId,
               },
               userId
             );

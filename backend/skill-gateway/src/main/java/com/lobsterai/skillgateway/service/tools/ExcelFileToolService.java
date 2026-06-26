@@ -6,6 +6,7 @@ import com.lobsterai.skillgateway.dto.FileToolResponse;
 import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.config.FtpConfig;
+import com.lobsterai.skillgateway.service.FileToolConversationContext;
 import com.lobsterai.skillgateway.service.FileToolService;
 import com.lobsterai.skillgateway.service.FtpFileService;
 import org.apache.poi.hssf.usermodel.HSSFWorkbook;
@@ -189,6 +190,7 @@ public class ExcelFileToolService {
             tempUserFile.setFtpPath(ftpPath);
             tempUserFile.setSourceFileId(sourceFileId);
             tempUserFile.setIsToolGenerated(1);
+            tempUserFile.setConversationId(FileToolConversationContext.getConversationId());
             tempUserFile.setUploadTime(LocalDateTime.now());
             userFileMapper.insert(tempUserFile);
             
@@ -425,6 +427,7 @@ public class ExcelFileToolService {
                 newUserFile.setFtpPath(ftpPath);
                 newUserFile.setSourceFileId(null); // 新文件，不是临时文件
                 newUserFile.setIsToolGenerated(1); // tool 新建文件，查重/列表排除
+                newUserFile.setConversationId(FileToolConversationContext.getConversationId());
                 newUserFile.setUploadTime(LocalDateTime.now()); // 设置上传时间
                 userFileMapper.insert(newUserFile);
                 

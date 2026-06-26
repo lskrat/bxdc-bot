@@ -7,6 +7,7 @@ import com.lobsterai.skillgateway.entity.UserFile;
 import com.lobsterai.skillgateway.mapper.UserFileMapper;
 import com.lobsterai.skillgateway.service.FileParseService;
 import com.lobsterai.skillgateway.service.FileToolService;
+import com.lobsterai.skillgateway.service.FileToolConversationContext;
 import com.lobsterai.skillgateway.service.FtpFileService;
 import com.lobsterai.skillgateway.service.parser.FileParserRouter;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -205,6 +206,7 @@ public class WordToolService {
             newFile.setFtpPath(fullPath);
             newFile.setUploadTime(java.time.LocalDateTime.now());
             newFile.setIsToolGenerated(1);
+            newFile.setConversationId(FileToolConversationContext.getConversationId());
             if (userFile != null) {
                 newFile.setSourceFileId(userFile.getId());
             }
@@ -417,6 +419,7 @@ public class WordToolService {
             newFile.setUploadTime(java.time.LocalDateTime.now());
             newFile.setSourceFileId(userFile.getId());
             newFile.setIsToolGenerated(1);
+            newFile.setConversationId(FileToolConversationContext.getConversationId());
             userFileMapper.insert(newFile);
 
             // 写入绝对路径 downloadUrl 到 DB
@@ -521,6 +524,7 @@ public class WordToolService {
             newFile.setUploadTime(java.time.LocalDateTime.now());
             newFile.setSourceFileId(userFile.getId());
             newFile.setIsToolGenerated(1);
+            newFile.setConversationId(FileToolConversationContext.getConversationId());
             userFileMapper.insert(newFile);
 
             // 写入绝对路径 downloadUrl 到 DB

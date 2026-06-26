@@ -28,6 +28,9 @@ public class ConversationService {
     private static final int DEFAULT_LIMIT = 50;
     private static final int MAX_LIMIT = 100;
 
+    /** file-isolation-v2: enabled_files 上限 */
+    public static final int MAX_ENABLED_FILES = 5;
+
     /** 默认头像（用户头像缺失时回退），与 UserService 注册默认一致。 */
     private static final String DEFAULT_AVATAR = "👤";
 
@@ -92,6 +95,57 @@ public class ConversationService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found");
         }
         return conv;
+    }
+
+    /**
+     * file-isolation-v2: 安全查询会话的 enabled_file_ids，不抛异常。
+     * <p>
+     * 用于文件隔离校验的内部调用，与 {@link #getById(String, String)} 不同：
+     * 会话不存在、不属于当前用户、或 JSON 解析失败时返回空列表（而非 null、也非抛异常），
+     * 防止异常被上层 catch 吞掉导致隔离绕过。
+     * </p>
+     * <p>
+     * 返回 null 的唯一场景：会话属于当前用户 且 enabled_files 为 NULL（存量会话，向后兼容不启用过滤）。
+     * </p>
+     *
+     * @param conversationId 会话 UUID
+     * @param userId 当前用户 ID（用于校验会话归属）
+     * @return enabled_files 中的文件 ID 列表；
+     *         null 表示不启用过滤（会话属于当前用户但 enabled_files 为 NULL）；
+     *         空列表表示启用隔离但无可用文件（会话不存在/不属于当前用户/JSON 解析失败）
+     */
+    public List<Long> getEnabledFileIds(String conversationId, String userId) {
+        if (conversationId == null || conversationId.trim().isEmpty()) {
+            return Collections.emptyList(); // 无 conversationId → 启用隔离，返回空
+        }
+        Conversation conv = conversationMapper.selectByConversationId(conversationId.trim());
+        if (conv == null) {
+            log.debug("getEnabledFileIds: conversation not found for id={}", conversationId);
+            return Collections.emptyList(); // 会话不存在 → 启用隔离，拒绝所有
+        }
+        if (userId == null || !userId.equals(conv.getUserId())) {
+            log.warn("getEnabledFileIds: userId mismatch for conv={}, expected={}, got={}",
+                    conversationId, conv.getUserId(), userId);
+            return Collections.emptyList(); // 不属于当前用户 → 启用隔离，拒绝所有
+        }
+        String raw = conv.getEnabledFiles();
+        if (raw == null || raw.trim().isEmpty() || "null".equals(raw)) {
+            return null; // 会话属于当前用户 且 enabled_files 为 NULL → 不启用过滤（向后兼容）
+        }
+        try {
+            Long[] arr = objectMapper.readValue(raw, Long[].class);
+            if (arr == null || arr.length == 0) {
+                return Collections.emptyList(); // enabled_files 显式配置为空数组 → 无文件可操作
+            }
+            List<Long> result = new ArrayList<>();
+            for (Long id : arr) {
+                if (id != null) result.add(id);
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("getEnabledFileIds failed to parse enabled_files for conv={}: {}", conversationId, e.getMessage());
+            return Collections.emptyList(); // JSON 解析失败 → 启用隔离，拒绝所有
+        }
     }
 
     /**
@@ -201,12 +255,30 @@ public class ConversationService {
         Conversation conv = getById(conversationId, userId);
         List<Long> ids = parseFileIds(conv.getEnabledFiles());
         if (!ids.contains(fileId)) {
+            // file-isolation-v2: 上限校验
+            validateEnabledFilesSize(ids);
             ids.add(fileId);
             conv.setEnabledFiles(filesToJson(ids));
             conv.setUpdatedAt(LocalDateTime.now());
             conversationMapper.updateById(conv);
             log.info("appendEnabledFile: conv={}, fileId={}", conversationId, fileId);
         }
+    }
+
+    /**
+     * file-isolation-v2: 校验 enabled_files 是否已达上限。
+     */
+    private void validateEnabledFilesSize(List<Long> ids) {
+        if (ids.size() >= MAX_ENABLED_FILES) {
+            throw new IllegalArgumentException("enabled_files 最多 " + MAX_ENABLED_FILES + " 个文件");
+        }
+    }
+
+    /**
+     * file-isolation-v2: 公开校验入口（Controller 层直接调用）。
+     */
+    public void validateEnabledFilesSizeForUpdate(List<Long> ids) {
+        validateEnabledFilesSize(ids);
     }
 
     /**

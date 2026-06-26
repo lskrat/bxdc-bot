@@ -858,6 +858,9 @@ public class SkillExecutionService {
         if (response.getFileRef() != null) {
             result.put("fileRef", response.getFileRef());
         }
+        if (response.getAvailableFiles() != null && !response.getAvailableFiles().isEmpty()) {
+            result.put("availableFiles", response.getAvailableFiles());
+        }
         return result;
     }
 

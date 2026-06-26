@@ -82,6 +82,13 @@ public class ConversationController {
                     .collect(java.util.stream.Collectors.toList())
                 : Collections.emptyList();
 
+        // file-isolation-v2: enabled_files 上限校验
+        if (enabledFiles.size() > ConversationService.MAX_ENABLED_FILES) {
+            Map<String, Object> err = new LinkedHashMap<String, Object>();
+            err.put("error", "enabled_files 最多 " + ConversationService.MAX_ENABLED_FILES + " 个文件");
+            return ResponseEntity.badRequest().body(err);
+        }
+
         Conversation conv = conversationService.create(userId, name, enabledSkills, enabledFiles);
         return ResponseEntity.status(HttpStatus.CREATED).body(toConversationDto(conv));
     }
@@ -126,6 +133,13 @@ public class ConversationController {
                         .collect(java.util.stream.Collectors.toList())
                     : Collections.emptyList())
                 : null;
+
+        // file-isolation-v2: enabled_files 上限校验（仅当显式传入时校验）
+        if (enabledFiles != null && enabledFiles.size() > ConversationService.MAX_ENABLED_FILES) {
+            Map<String, Object> err = new LinkedHashMap<String, Object>();
+            err.put("error", "enabled_files 最多 " + ConversationService.MAX_ENABLED_FILES + " 个文件");
+            return ResponseEntity.badRequest().body(err);
+        }
 
         Conversation conv = conversationService.update(conversationId, userId, name, enabledSkills, enabledFiles);
         return ResponseEntity.ok(toConversationDto(conv));

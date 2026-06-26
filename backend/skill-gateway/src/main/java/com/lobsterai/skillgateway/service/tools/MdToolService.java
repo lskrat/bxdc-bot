@@ -381,6 +381,8 @@ public class MdToolService {
             tempUserFile.setFileType(userFile.getFileType());
             tempUserFile.setFtpPath(ftpPath);
             tempUserFile.setSourceFileId(sourceFileId);
+            tempUserFile.setIsToolGenerated(1);
+            tempUserFile.setConversationId(FileToolConversationContext.getConversationId());
             tempUserFile.setUploadTime(java.time.LocalDateTime.now());
             userFileMapper.insert(tempUserFile);
 
@@ -594,7 +596,7 @@ public class MdToolService {
             // userFile == null 表示全新文件（无源文件），不挂 sourceFileId
             tempUserFile.setSourceFileId(userFile == null ? null : userFile.getId());
             tempUserFile.setIsToolGenerated(1);
-            
+            tempUserFile.setConversationId(FileToolConversationContext.getConversationId());
             tempUserFile.setUploadTime(java.time.LocalDateTime.now());
             userFileMapper.insert(tempUserFile);
 
@@ -617,6 +619,16 @@ public class MdToolService {
             userFile.setFileSize((long) bytes.length);
             userFile.setFtpPath(ftpPath);
             userFile.setDownloadUrl(downloadUrl);
+            // file-isolation-v2: 修复旧临时文件（md_init_temp 历史遗漏的 is_tool_generated/conversationId）
+            if (userFile.getIsToolGenerated() == null || userFile.getIsToolGenerated() != 1) {
+                userFile.setIsToolGenerated(1);
+            }
+            if (userFile.getConversationId() == null || userFile.getConversationId().trim().isEmpty()) {
+                String ctxConvId = FileToolConversationContext.getConversationId();
+                if (ctxConvId != null && !ctxConvId.trim().isEmpty()) {
+                    userFile.setConversationId(ctxConvId);
+                }
+            }
             userFileMapper.updateById(userFile);
         }
 

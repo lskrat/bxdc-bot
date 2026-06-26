@@ -1,6 +1,7 @@
 package com.lobsterai.skillgateway.service;
 
 import com.lobsterai.skillgateway.config.FtpConfig;
+import com.lobsterai.skillgateway.dto.AvailableFile;
 import com.lobsterai.skillgateway.dto.ExcelOperationResult;
 import com.lobsterai.skillgateway.dto.FileToolRequest;
 import com.lobsterai.skillgateway.dto.FileToolResponse;
@@ -247,15 +248,39 @@ public class FileToolService {
             }
             // 设置当前会话 enabled_files 上下文（FileManageService 会读取并按会话过滤）
             List<Long> enabledFiles = resolveEnabledFiles(conversationId, userId);
-            FileToolConversationContext.set(enabledFiles);
+            // file-isolation-v2: 同时设置 conversationId，供 ToolService/FileManageService 按 conversationId 过滤临时文件
+            // 调试日志：file-isolation-v2 链路追踪
+            log.debug("FileToolService.execute: tool={}, userId={}, conversationId={}, enabledFiles.size={}, enabledFiles={}",
+                    toolName, userId, conversationId,
+                    enabledFiles == null ? -1 : enabledFiles.size(), enabledFiles);
+            FileToolConversationContext.set(enabledFiles, conversationId);
 
-            // open spec: conversation-file-isolation — 操作类工具统一校验：
-            // 非管理类工具（Excel/Word/Txt/MD 等必须有 userFile 的工具）需校验文件是否在 enabled_files 内
-            if (!isManagementTool(toolName) && enabledFiles != null && userFile != null
-                    && !enabledFiles.contains(userFile.getId())) {
-                return FileToolResponse.error(
-                        "文件(ID=" + userFile.getId() + ")不在当前会话权限内，请先确认文件已上传并在会话配置面板中勾选，或使用 file_list 查看可用文件",
-                        userFile.getOriginalFileName());
+            // open spec: file-isolation-v2 — 独立双路径校验：
+            // 用户上传 (is_tool_generated=0) → 必须在 enabled_files 中
+            // 工具生成 (is_tool_generated=1) → 只校验 conversationId，不看 enabled_files
+            if (!isManagementTool(toolName) && userFile != null) {
+                if (isUserUploadedFile(userFile)) {
+                    if (enabledFiles != null && !enabledFiles.contains(userFile.getId())) {
+                        return FileToolResponse.error(
+                                "文件(ID=" + userFile.getId() + ")不在当前会话权限内。请从下方可用文件列表中选择，或让用户先在会话配置面板勾选此文件。",
+                                userFile.getOriginalFileName(),
+                                buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                    }
+                } else if (isToolGeneratedFile(userFile)) {
+                    if (userFile.getConversationId() == null || userFile.getConversationId().trim().isEmpty()) {
+                        return FileToolResponse.error(
+                                "临时文件(ID=" + userFile.getId() + ")是无主临时文件（创建于文件隔离上线前），LLM 已无权操作。下载链接仍可正常使用，如需操作请让用户重新上传或通过工具新建。",
+                                userFile.getOriginalFileName(),
+                                buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                    }
+                    if (conversationId != null && !conversationId.trim().isEmpty()
+                            && !conversationId.equals(userFile.getConversationId())) {
+                        return FileToolResponse.error(
+                                "临时文件(ID=" + userFile.getId() + ")属于其它会话(conv=" + userFile.getConversationId() + ")。请改用当前会话的临时文件或新建临时文件。",
+                                userFile.getOriginalFileName(),
+                                buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                    }
+                }
             }
 
             try {
@@ -278,37 +303,22 @@ public class FileToolService {
             return FileToolResponse.error("Internal error: " + e.getMessage(), fileRef);
         }
     }
-
     /**
-     * 解析会话的 enabled_files。
+     * 解析会话的 enabled_files（file-isolation-v2）。
+     * <p>
+     * 委托 {@link ConversationService#getEnabledFileIds(String, String)}，
+     * 该方法不抛异常、校验会话归属（userId）：
      * <ul>
-     *   <li>conversationId 为 null → 返回 null（表示不启用过滤，向后兼容）</li>
-     *   <li>对话的 enabled_files 为 NULL → 返回 null（存量对话，向后兼容）</li>
-     *   <li>对话的 enabled_files 为空数组 [] → 返回空列表（启用隔离但权限为空）</li>
-     *   <li>解析为 JSON 数组 → 返回 Long 列表</li>
+     *   <li>会话属于当前用户 + enabled_files 有数据 → 返回 ID 列表</li>
+     *   <li>会话属于当前用户 + enabled_files 为 NULL → 返回 null（存量会话，不启用过滤）</li>
+     *   <li>会话不存在 / 不属于当前用户 / JSON 解析失败 → 返回空列表（启用隔离，拒绝所有）</li>
      * </ul>
+     * 相比旧实现调用 {@link ConversationService#getById(String, String)}，
+     * 避免了抛 ResponseStatusException 被 catch 吞掉导致返回 null 绕过隔离的问题。
+     * </p>
      */
     private List<Long> resolveEnabledFiles(String conversationId, String userId) {
-        if (conversationId == null || conversationId.trim().isEmpty()) {
-            return null;
-        }
-        try {
-            Conversation conv = conversationService.getById(conversationId, userId);
-            if (conv == null || conv.getEnabledFiles() == null || "null".equals(conv.getEnabledFiles())) {
-                return null;
-            }
-            Long[] arr = objectMapper.readValue(conv.getEnabledFiles(), Long[].class);
-            List<Long> result = new ArrayList<Long>();
-            if (arr != null) {
-                for (Long id : arr) {
-                    if (id != null) result.add(id);
-                }
-            }
-            return result;
-        } catch (Exception e) {
-            log.warn("resolveEnabledFiles failed for conv={}: {}", conversationId, e.getMessage());
-            return null;
-        }
+        return conversationService.getEnabledFileIds(conversationId, userId);
     }
 
     /**
@@ -337,6 +347,11 @@ public class FileToolService {
             try {
                 UserFile uf = userFileMapper.selectById(fileId);
                 if (uf != null && userId.equals(uf.getUserId())) {
+                    // file-isolation-v2: 工具生成的临时文件不绑定到 enabled_files
+                    if (isToolGeneratedFile(uf)) {
+                        log.debug("autoBindCreatedFiles: skip tool-generated fileId={} (conv={})", fileId, conversationId);
+                        continue;
+                    }
                     conversationService.appendEnabledFile(conversationId, userId, fileId);
                     log.debug("autoBindCreatedFiles: bound fileId={} to conv={}", fileId, conversationId);
                 }
@@ -463,6 +478,55 @@ public class FileToolService {
      */
     private boolean isOptionalFileIdTool(String toolName) {
         return "excel_write".equals(toolName) || "word_write".equals(toolName) || "md_write".equals(toolName) || "txt_write".equals(toolName);
+    }
+
+    /**
+     * file-isolation-v2: 判断文件是否由用户上传（而非工具生成）。
+     */
+    private boolean isUserUploadedFile(UserFile userFile) {
+        return userFile.getIsToolGenerated() == null || userFile.getIsToolGenerated() == 0;
+    }
+
+    /**
+     * file-isolation-v2: 判断文件是否由工具生成（而非用户上传）。
+     */
+    private boolean isToolGeneratedFile(UserFile userFile) {
+        return userFile.getIsToolGenerated() != null && userFile.getIsToolGenerated() == 1;
+    }
+
+    /**
+     * file-isolation-v2: 给 LLM 返回当前会话可操作的文件列表（id + fileName）。
+     * <p>
+     * 优先返回 enabled_files 内的用户上传文件 + 同会话临时文件；
+     * enabledFiles 为 null 时退化为返回全部用户上传文件（兼容存量会话）。
+     * </p>
+     */
+    public List<AvailableFile> buildAvailableFilesSnapshot(
+            String userId, String conversationId, List<Long> enabledFiles) {
+        List<AvailableFile> result = new ArrayList<>();
+        try {
+            List<UserFile> uploaded = userFileMapper.findByUserIdExcludeToolGenerated(userId);
+            Set<Long> allowed = enabledFiles != null ? new HashSet<Long>(enabledFiles) : null;
+            for (UserFile uf : uploaded) {
+                if (allowed != null && !allowed.contains(uf.getId())) continue;
+                result.add(new AvailableFile(uf.getId(), uf.getOriginalFileName()));
+            }
+            if (conversationId != null && !conversationId.trim().isEmpty()) {
+                List<UserFile> temps = userFileMapper.findByConversationId(conversationId, userId);
+                if (temps != null) {
+                    Set<Long> added = new HashSet<Long>();
+                    for (AvailableFile af : result) added.add(af.getId());
+                    for (UserFile tf : temps) {
+                        if (!added.contains(tf.getId())) {
+                            result.add(new AvailableFile(tf.getId(), tf.getOriginalFileName()));
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("buildAvailableFilesSnapshot failed: {}", e.getMessage());
+        }
+        return result;
     }
 
     /**
