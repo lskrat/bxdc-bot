@@ -17,7 +17,16 @@ public class LabelController {
     public LabelController(LabelService labelService) {
         this.labelService = labelService;
     }
-
+    /**
+     * http://localhost:18080/api/labels
+    POST JSON
+    参数：
+    header:
+    X-User-Id:123456
+    Content-Type:application/json
+    JSON:
+    {"name":"测试标签","type":"系统标签","intro":"这是一个测试标签"}
+    */
     @PostMapping
     public ResponseEntity<?> createLabel(
             @RequestBody SysLabel label,
@@ -30,14 +39,26 @@ public class LabelController {
         }
         return ResponseEntity.ok(labelService.createLabel(label, userId));
     }
-
+    /**
+     * http://localhost:18080/api/labels?page=0&size=20
+    GET
+    参数：
+    header:
+    Content-Type:application/json
+    */
     @GetMapping
     public ResponseEntity<IPage<SysLabel>> listLabels(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         return ResponseEntity.ok(labelService.listLabels(page, size));
     }
-
+    /**
+     * http://localhost:18080/api/labels/{id}
+    GET
+    参数：
+    header:
+    Content-Type:application/json
+    */
     @GetMapping("/{id}")
     public ResponseEntity<?> getLabelById(@PathVariable Long id) {
         SysLabel label = labelService.getLabelById(id);
@@ -46,7 +67,16 @@ public class LabelController {
         }
         return ResponseEntity.ok(label);
     }
-
+    /**
+     * http://localhost:18080/api/labels/{id}
+    PUT JSON
+    参数：
+    header:
+    X-User-Id:123456
+    Content-Type:application/json
+    JSON:
+    {"name":"更新后的标签","type":"用户标签","intro":"更新后的描述"}
+    */
     @PutMapping("/{id}")
     public ResponseEntity<?> updateLabel(
             @PathVariable Long id, 
@@ -64,7 +94,13 @@ public class LabelController {
         }
         return ResponseEntity.ok(updated);
     }
-
+    /**
+     * http://localhost:18080/api/labels/{id}
+    DELETE
+    参数：
+    header:
+    Content-Type:application/json
+    */
     @DeleteMapping("/{id}")
     public ResponseEntity<?> deleteLabel(@PathVariable Long id) {
         boolean deleted = labelService.deleteLabel(id);

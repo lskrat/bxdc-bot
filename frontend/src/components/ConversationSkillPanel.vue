@@ -150,9 +150,32 @@ const allFilesChecked = computed(() =>
   files.value.length > 0 && files.value.every((f) => f._checked),
 )
 
+/** file-isolation-v2: enabled_files 上限 */
+const MAX_ENABLED_FILES = 5
+const checkedFileCount = computed(() =>
+  files.value.filter((f) => f._checked).length,
+)
+const isFileLimitReached = computed(() =>
+  checkedFileCount.value >= MAX_ENABLED_FILES,
+)
+const fileLimitHint = computed(() =>
+  isFileLimitReached.value
+    ? `已达到上限（${MAX_ENABLED_FILES} 个），取消已选文件后可重新选择`
+    : `已选 ${checkedFileCount.value}/${MAX_ENABLED_FILES}`,
+)
+
 function toggleAllFiles() {
-  const newVal = !allFilesChecked.value
-  files.value.forEach((f) => (f._checked = newVal))
+  // file-isolation-v2：全选时最多选 5 个
+  if (!allFilesChecked.value) {
+    let count = 0
+    for (const f of files.value) {
+      if (count >= MAX_ENABLED_FILES) break
+      f._checked = true
+      count++
+    }
+  } else {
+    files.value.forEach((f) => (f._checked = false))
+  }
 }
 
 function formatSize(bytes: number | undefined): string {
@@ -283,6 +306,9 @@ watch(
               size="small"
               class="tab-search"
             />
+            <span class="file-limit-hint" :class="{ 'limit-reached': isFileLimitReached }">
+              {{ fileLimitHint }}
+            </span>
             <t-button size="small" variant="outline" @click="toggleAllFiles">
               {{ allFilesChecked ? '取消全选' : '全选' }}
             </t-button>
@@ -300,7 +326,10 @@ watch(
             <t-list-item v-for="file in filteredFiles" :key="file.id">
               <template #action>
                 <t-space :size="8" align="center">
-                  <t-checkbox v-model="file._checked" />
+                  <t-checkbox
+                    v-model="file._checked"
+                    :disabled="!file._checked && isFileLimitReached"
+                  />
                   <t-button
                     size="small"
                     variant="text"
@@ -372,6 +401,17 @@ watch(
 .tab-search {
   flex: 1;
   min-width: 0;
+}
+
+.file-limit-hint {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  white-space: nowrap;
+}
+
+.file-limit-hint.limit-reached {
+  color: var(--td-error-color);
+  font-weight: 500;
 }
 
 .panel-state {

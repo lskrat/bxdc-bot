@@ -1,5 +1,7 @@
 package com.lobsterai.skillgateway.dto;
 
+import java.util.List;
+
 /**
  * 文件工具响应 DTO（5.1.2 标准出参规范）。
  * <p>
@@ -20,6 +22,13 @@ public class FileToolResponse {
 
     /** 操作涉及的文件名（便于 LLM 识别上下文） */
     private String fileRef;
+
+    /**
+     * 当前会话可操作的文件列表（file-isolation-v2）。
+     * 仅在权限校验失败时填充：让 LLM 立刻知道有哪些可用文件，
+     * 无需再调 file_list 排查。
+     */
+    private List<AvailableFile> availableFiles;
 
     public static FileToolResponse ok(Object output, String fileRef) {
         FileToolResponse r = new FileToolResponse();
@@ -43,6 +52,15 @@ public class FileToolResponse {
 
     public static FileToolResponse error(String message) {
         return error(message, null);
+    }
+
+    /**
+     * file-isolation-v2: 权限拒绝时附带可操作文件列表。
+     */
+    public static FileToolResponse error(String message, String fileRef, List<AvailableFile> availableFiles) {
+        FileToolResponse r = error(message, fileRef);
+        r.availableFiles = availableFiles;
+        return r;
     }
 
     // ========== Getters & Setters ==========
@@ -77,5 +95,13 @@ public class FileToolResponse {
 
     public void setFileRef(String fileRef) {
         this.fileRef = fileRef;
+    }
+
+    public List<AvailableFile> getAvailableFiles() {
+        return availableFiles;
+    }
+
+    public void setAvailableFiles(List<AvailableFile> availableFiles) {
+        this.availableFiles = availableFiles;
     }
 }

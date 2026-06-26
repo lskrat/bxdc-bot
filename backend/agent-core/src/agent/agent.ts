@@ -152,7 +152,7 @@ export class AgentFactory {
       new ExecuteSkillWithContextTool(gatewayUrl, apiToken, openAiApiKey, {
         modelName: config?.modelName,
         baseUrl: config?.baseUrl,
-      }, userId),
+      }, userId, config?.conversationId),
       new JavaSkillGeneratorTool(gatewayUrl, apiToken, config?.conversationId, userId),
       new JavaComputeTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),

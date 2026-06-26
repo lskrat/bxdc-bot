@@ -223,7 +223,20 @@ public class SchemaMigrationRunner implements InitializingBean {
                 "ALTER TABLE user_files ADD COLUMN is_tool_generated TINYINT(1) NOT NULL DEFAULT 0 " +
                 "COMMENT '是否由工具生成（0=用户上传, 1=写文件/修改文件tool生成）'");
 
-        // 4. idx_user_files_conversation 索引
+        // 4. file-isolation-v2: 修正 is_tool_generated 列加得晚导致旧临时文件拿了 DEFAULT 0 的问题
+        //    source_file_id IS NOT NULL 的行一定是工具生成的临时副本
+        try (Statement st = conn.createStatement()) {
+            String sql = "UPDATE user_files SET is_tool_generated = 1 " +
+                    "WHERE is_tool_generated = 0 AND source_file_id IS NOT NULL";
+            int affected = st.executeUpdate(sql);
+            if (affected > 0) {
+                log.info("[SchemaMigration] user_files: corrected {} rows: is_tool_generated=0 → 1 (source_file_id IS NOT NULL)", affected);
+            }
+        } catch (Exception e) {
+            log.warn("[SchemaMigration] user_files: is_tool_generated correction skipped: {}", e.getMessage());
+        }
+
+        // 5. idx_user_files_conversation 索引
         ensureIndex(conn, table, "idx_user_files_conversation", existingIndexes,
                 "ALTER TABLE user_files ADD INDEX idx_user_files_conversation (conversation_id)");
     }

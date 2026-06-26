@@ -175,6 +175,12 @@ public class FileUploadController {
             // 只处理 createdAt/updatedAt，未注册 uploadTime 的 fill handler，
             // 故此处显式 set 兜底（避免 SQLIntegrityConstraintViolationException）
             userFile.setUploadTime(LocalDateTime.now());
+            // 显式标记为用户上传（0），避免仅依赖 DB DEFAULT 0 导致极端情况下值不确定
+            userFile.setIsToolGenerated(0);
+            // file-isolation-v2: 上传文件关联到所属会话
+            if (conversationId != null && !conversationId.trim().isEmpty()) {
+                userFile.setConversationId(conversationId);
+            }
 
             // 5. 写 DB（MyBatis-Plus AUTO id 写入后回填 userFile.getId()）
             userFileMapper.insert(userFile);

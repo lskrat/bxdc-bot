@@ -136,6 +136,7 @@ public class FileManageService {
             // open spec: conversation-file-isolation
             // 按当前会话 enabled_files 过滤（context 为 null 表示存量对话/未启用隔离，全量返回）
             List<Long> enabledFiles = FileToolConversationContext.get();
+            String conversationId = FileToolConversationContext.getConversationId();
             if (enabledFiles != null) {
                 Set<Long> allowed = new HashSet<Long>(enabledFiles);
                 List<UserFile> scoped = new ArrayList<UserFile>();
@@ -145,6 +146,16 @@ public class FileManageService {
                     }
                 }
                 allFiles = scoped;
+
+                // file-isolation-v2: 追加同会话的临时文件（is_tool_generated=1 且 conversationId 匹配）
+                if (conversationId != null && !conversationId.trim().isEmpty()) {
+                    List<UserFile> tempFiles = userFileMapper.findByConversationId(conversationId, userId);
+                    if (tempFiles != null && !tempFiles.isEmpty()) {
+                        allFiles = new ArrayList<UserFile>(allFiles);
+                        allFiles.addAll(tempFiles);
+                    }
+                }
+
                 if (allFiles.isEmpty()) {
                     Map<String, Object> emptyResult = new LinkedHashMap<String, Object>();
                     emptyResult.put("count", 0);
@@ -250,12 +261,37 @@ public class FileManageService {
      */
     public FileToolResponse fileDelete(UserFile userFile, Map<String, Object> params, String userId) {
         try {
-            // open spec: conversation-file-isolation — 校验当前文件是否在 enabled_files 中
+            // open spec: file-isolation-v2 — 独立双路径校验
+            // 用户上传 (is_tool_generated=0) → 必须在 enabled_files 中
+            // 工具生成 (is_tool_generated=1) → 只校验 conversationId，不看 enabled_files
             List<Long> enabledFiles = FileToolConversationContext.get();
-            if (enabledFiles != null && !enabledFiles.contains(userFile.getId())) {
-                return FileToolResponse.error(
-                        "文件(" + userFile.getId() + ")不在当前会话权限内，请使用 file_list 查看可用文件",
-                        userFile.getOriginalFileName());
+            String conversationId = FileToolConversationContext.getConversationId();
+            boolean isToolGen = userFile.getIsToolGenerated() != null && userFile.getIsToolGenerated() == 1;
+
+            if (!isToolGen) {
+                // 用户上传文件 → 必须在 enabled_files 中
+                if (enabledFiles != null && !enabledFiles.contains(userFile.getId())) {
+                    return FileToolResponse.error(
+                            "文件(ID=" + userFile.getId() + ")不在当前会话权限内。请从下方可用文件列表中选择，或让用户先在会话配置面板勾选此文件。",
+                            userFile.getOriginalFileName(),
+                            fileToolService.buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                }
+            } else {
+                // 工具生成文件 → 只校验 conversationId（不看 enabled_files）
+                if (userFile.getConversationId() == null || userFile.getConversationId().trim().isEmpty()) {
+                    // 旧数据：无 conversationId 的无主临时文件
+                    return FileToolResponse.error(
+                            "临时文件(ID=" + userFile.getId() + ")是无主临时文件（创建于文件隔离上线前），LLM 已无权操作。下载链接仍可正常使用，如需操作请让用户重新上传或通过工具新建。",
+                            userFile.getOriginalFileName(),
+                            fileToolService.buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                }
+                if (conversationId != null && !conversationId.trim().isEmpty()
+                        && !conversationId.equals(userFile.getConversationId())) {
+                    return FileToolResponse.error(
+                            "临时文件(ID=" + userFile.getId() + ")属于其它会话(conv=" + userFile.getConversationId() + ")，无法删除。请改用当前会话的临时文件或新建临时文件。",
+                            userFile.getOriginalFileName(),
+                            fileToolService.buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                }
             }
 
             boolean confirmed = readBoolParam(params, "confirmed", false);
@@ -316,19 +352,15 @@ public class FileManageService {
         try {
             List<UserFile> allFiles = userFileMapper.findByUserId(userId);
 
-            // open spec: conversation-file-isolation
-            // 仅清空当前会话 enabled_files 中的文件（context 为 null 时全量清空，向后兼容）
+            // open spec: conversation-file-isolation → file-isolation-v2
+            // 仅清空 enabled_files 中的用户上传文件 + conversationId 匹配的临时文件
             List<Long> enabledFiles = FileToolConversationContext.get();
+            String conversationId = FileToolConversationContext.getConversationId();
             List<UserFile> files = allFiles;
             String scopeLabel;
             if (enabledFiles == null) {
                 scopeLabel = "全部";
                 files = allFiles;
-            } else if (enabledFiles.isEmpty()) {
-                Map<String, Object> empty = new LinkedHashMap<String, Object>();
-                empty.put("message", "当前会话无文件，无需清空");
-                empty.put("fileCount", 0);
-                return FileToolResponse.ok(empty, "user:" + userId);
             } else {
                 Set<Long> allowed = new HashSet<Long>(enabledFiles);
                 files = new ArrayList<UserFile>();
@@ -336,6 +368,25 @@ public class FileManageService {
                     if (allowed.contains(uf.getId())) {
                         files.add(uf);
                     }
+                }
+                // file-isolation-v2: 追加同会话临时文件
+                if (conversationId != null && !conversationId.trim().isEmpty()) {
+                    List<UserFile> tempFiles = userFileMapper.findByConversationId(conversationId, userId);
+                    if (tempFiles != null) {
+                        Set<Long> added = new HashSet<Long>();
+                        for (UserFile f : files) added.add(f.getId());
+                        for (UserFile tf : tempFiles) {
+                            if (!added.contains(tf.getId())) {
+                                files.add(tf);
+                            }
+                        }
+                    }
+                }
+                if (files.isEmpty()) {
+                    Map<String, Object> empty = new LinkedHashMap<String, Object>();
+                    empty.put("message", "当前会话无文件，无需清空");
+                    empty.put("fileCount", 0);
+                    return FileToolResponse.ok(empty, "user:" + userId);
                 }
                 scopeLabel = "当前会话内";
             }
@@ -442,12 +493,36 @@ public class FileManageService {
                     return FileToolResponse.error("fileId, fileName, or fileRef is required for file_detail");
                 }
             }
-            // open spec: conversation-file-isolation — 校验文件是否在 enabled_files 中
+            // open spec: file-isolation-v2 — 独立双路径校验
+            // 用户上传 (is_tool_generated=0) → 必须在 enabled_files 中
+            // 工具生成 (is_tool_generated=1) → 只校验 conversationId，不看 enabled_files
             List<Long> enabledFiles = FileToolConversationContext.get();
-            if (enabledFiles != null && !enabledFiles.contains(userFile.getId())) {
-                return FileToolResponse.error(
-                        "文件(" + userFile.getId() + ")不在当前会话权限内，请使用 file_list 查看可用文件",
-                        userFile.getOriginalFileName());
+            String conversationId = FileToolConversationContext.getConversationId();
+            boolean isToolGen = userFile.getIsToolGenerated() != null && userFile.getIsToolGenerated() == 1;
+
+            if (!isToolGen) {
+                // 用户上传文件 → 必须在 enabled_files 中
+                if (enabledFiles != null && !enabledFiles.contains(userFile.getId())) {
+                    return FileToolResponse.error(
+                            "文件(ID=" + userFile.getId() + ")不在当前会话权限内。请从下方可用文件列表中选择。",
+                            userFile.getOriginalFileName(),
+                            fileToolService.buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                }
+            } else {
+                // 工具生成文件 → 只校验 conversationId（不看 enabled_files）
+                if (userFile.getConversationId() == null || userFile.getConversationId().trim().isEmpty()) {
+                    return FileToolResponse.error(
+                            "临时文件(ID=" + userFile.getId() + ")是无主临时文件（创建于文件隔离上线前），LLM 已无权操作。下载链接仍可正常使用，如需操作请让用户重新上传或通过工具新建。",
+                            userFile.getOriginalFileName(),
+                            fileToolService.buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                }
+                if (conversationId != null && !conversationId.trim().isEmpty()
+                        && !conversationId.equals(userFile.getConversationId())) {
+                    return FileToolResponse.error(
+                            "临时文件(ID=" + userFile.getId() + ")属于其它会话(conv=" + userFile.getConversationId() + ")，无法查看详情。请改用当前会话的临时文件。",
+                            userFile.getOriginalFileName(),
+                            fileToolService.buildAvailableFilesSnapshot(userId, conversationId, enabledFiles));
+                }
             }
             boolean includeParse = readBoolParam(params, "includeParseResult", true);
             int previewChars = readIntParam(params, "previewChars", 500);

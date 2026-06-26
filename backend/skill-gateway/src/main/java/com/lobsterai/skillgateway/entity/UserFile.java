@@ -65,6 +65,10 @@ public class UserFile {
     @TableField("is_tool_generated")
     private Integer isToolGenerated;
 
+    /** 文件所属会话 ID（NULL=无会话关联，全量可见；非 NULL=仅同会话的临时文件可见/可操作）。 */
+    @TableField("conversation_id")
+    private String conversationId;
+
     // ========== Getters & Setters ==========
 
     public Long getId() {
@@ -161,5 +165,13 @@ public class UserFile {
 
     public void setIsToolGenerated(Integer isToolGenerated) {
         this.isToolGenerated = isToolGenerated;
+    }
+
+    public String getConversationId() {
+        return conversationId;
+    }
+
+    public void setConversationId(String conversationId) {
+        this.conversationId = conversationId;
     }
 }

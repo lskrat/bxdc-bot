@@ -80,4 +80,15 @@ public interface UserFileMapper extends BaseMapper<UserFile> {
                 .eq(UserFile::getUserId, userId)
                 .eq(UserFile::getFileName, fileName)));
     }
+
+    /**
+     * file-isolation-v2: 按 conversationId + userId 查同会话的临时文件（is_tool_generated=1）。
+     */
+    default List<UserFile> findByConversationId(String conversationId, String userId) {
+        return selectList(new LambdaQueryWrapper<UserFile>()
+                .eq(UserFile::getConversationId, conversationId)
+                .eq(UserFile::getUserId, userId)
+                .eq(UserFile::getIsToolGenerated, 1)
+                .orderByDesc(UserFile::getUploadTime));
+    }
 }

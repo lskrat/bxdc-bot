@@ -1,21 +1,4 @@
-# temp-file-filtering Specification
-
-## Purpose
-TBD - created by archiving change temp-file-filtering. Update Purpose after archive.
-## Requirements
-### Requirement: 临时文件命名统一为 `_temp` 后缀
-
-写文件的 tool（`word_write`, `word_replace_text`, `word_template_fill`, 所有 Excel 写操作）生成的临时文件 `original_file_name` SHALL 为 `源文件名_temp.ext` 格式。
-
-#### Scenario: word_write 生成临时文件
-- **WHEN** 对 `report.docx` 调 `word_write` 生成新文档
-- **THEN** 新 `user_files` 行的 `original_file_name` 为 `report_temp.docx`
-- **AND** `source_file_id` = 源文件 ID
-
-#### Scenario: word_replace_text 生成临时文件
-- **WHEN** 对 `contract.docx` 调 `word_replace_text` 替换文本
-- **THEN** 新行的 `original_file_name` 为 `contract_temp.docx`
-- **AND** `source_file_id` = 源文件 ID
+## MODIFIED Requirements
 
 ### Requirement: Check-duplicate 排除临时文件
 
@@ -59,4 +42,3 @@ TBD - created by archiving change temp-file-filtering. Update Purpose after arch
 - **WHEN** 调用 `file_detail(fileId=99)`（文件为 `is_tool_generated=1`，但 fileId 已知）
 - **THEN** 返回其元数据
 - **AND** 由 `file-isolation-v2` 的 `enabledFiles`/`conversationId` 校验决定是否在调用前拒绝（不与本需求重复）
-
