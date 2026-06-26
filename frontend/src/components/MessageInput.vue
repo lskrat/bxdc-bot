@@ -1,33 +1,43 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ChatSender as TChatSender } from '@tdesign-vue-next/chat'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
 import { useChat } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
+import { useConversations } from '../composables/useConversations'
 import { useFileUpload } from '../composables/useFileUpload'
 import { FILE_INPUT_ACCEPT, FILE_TYPE_ICONS, FILE_TYPE_LABELS } from '../types/fileUpload'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
 
 const { sendMessage, isThinking, stop } = useChat()
 const { currentUser } = useUser()
+const { currentConversationId } = useConversations()
 const fileUpload = useFileUpload()
+
+// 会话切换时：① 同步 conversationId 给 useFileUpload（addFiles 自动标记），② 不 clearFiles（切回原会话仍可见）
+watch(currentConversationId, (cid) => {
+  fileUpload.setConversationId(cid ?? null)
+}, { immediate: true })
 const input = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 /** 等待解析时的 loading 状态（spinner） */
 const isWaitingForParse = ref(false)
 
-/** 扁平化所有已上传文件 */
+/** 扁平化所有已上传文件（按当前会话隔离：只展示属于当前会话或无会话标记的文件） */
 const allFiles = computed<UploadFileInfo[]>(() => {
   const groups = fileUpload.uploadedFiles.value
-  return [
+  const cid = currentConversationId.value
+  const all = [
     ...groups.word,
     ...groups.excel,
     ...groups.ppt,
     ...groups.txt,
     ...groups.image,
   ]
+  if (!cid) return all
+  return all.filter(f => !f.conversationId || f.conversationId === cid)
 })
 
 /** 文档分组（word/excel/ppt/txt） */

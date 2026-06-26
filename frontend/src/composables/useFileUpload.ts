@@ -234,6 +234,8 @@ export interface FileUploadState {
   onPaste: (e: ClipboardEvent) => Promise<void>
   /** 当前正在解析的文件数（用于 UI 显示并发状态） */
   parsingCount: Ref<number>
+  /** 设置当前会话 ID，后续 addFiles/onDrop/onPaste 自动标记文件所属会话 */
+  setConversationId: (cid: string | null) => void
 }
 
 const FileUploadKey: InjectionKey<FileUploadState> = Symbol('FileUploadKey')
@@ -274,8 +276,13 @@ export function provideFileUpload(): FileUploadState {
   const isUploading = ref(false)
   const uploadError = ref<string | null>(null)
   const parsingCount = ref(0)
+  const _conversationId = ref<string | null>(null)
   /** 每文件独立的 AbortController，用于 cancel 取消正在进行的解析 */
   const abortControllers = new Map<string, AbortController>()
+
+  function setConversationId(cid: string | null): void {
+    _conversationId.value = cid
+  }
 
   // ---- addFiles ----
   // 4 步校验（需求方案 A1 §2.2）：类型 → 大小 → 数量 → 重复
@@ -374,6 +381,7 @@ export function provideFileUpload(): FileUploadState {
         size: p.file.size,
         status: 'pending',
         uploadedAt: Date.now(),
+        conversationId: _conversationId.value || undefined,
         overwrite: willOverwrite || undefined,
       }
       if (p.fileType === 'image') {
@@ -682,6 +690,7 @@ export function provideFileUpload(): FileUploadState {
     onDrop: onDrop,
     onPaste: onPaste,
     parsingCount: parsingCount,
+    setConversationId: setConversationId,
   }
   provide(FileUploadKey, state)
   _fileUploadState = state
@@ -939,6 +948,7 @@ export function useFileUpload(): FileUploadState {
     onDrop: onDropStub,
     onPaste: onPasteStub,
     parsingCount: parsingCountStub,
+    setConversationId: (_cid: string | null) => { /* fallback: no-op */ },
   }
   // fallback 分支也存到模块级单例，下次 inject 失败直接返回这个
   _fileUploadState = state

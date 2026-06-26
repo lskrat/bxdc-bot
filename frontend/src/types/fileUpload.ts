@@ -68,6 +68,9 @@ export interface UploadFileInfo {
   /** 上传时间戳（毫秒），用于排序与超时判断 */
   uploadedAt: number;
 
+  /** 上传时的会话 ID，用于输入框隔离（null = 存量/直接上传，不受过滤） */
+  conversationId?: string | null;
+
   /**
    * open spec: overwrite-duplicate-upload — 重名覆盖标记
    * 用户在 TDesign 确认弹窗点"覆盖"后置 true，上传时会带 ?overwrite=true 让后端
