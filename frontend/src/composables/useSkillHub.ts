@@ -18,6 +18,20 @@ export interface Skill {
   createdBy?: string;
   /** 展示用 emoji；未设置时由 {@link extendedSkillEmoji} 按 id+名称派生 */
   avatar?: string;
+  /** 介绍（Markdown）。编辑页通过 /api/skills/updateIntroMd 单独更新。 */
+  introMd?: string | null;
+  /** 模板占位符列表。TEMPLATE 类型 Skill 用。 */
+  templatePlaceholders?: string[];
+  /** 参数 schema 描述快照（JSON 字符串）。后端 LLM 生成，LLM 推理时使用。 */
+  schemaPropertiesJson?: string;
+  /** 创建时间（后端导出用） */
+  createdAt?: string;
+  /** 更新时间（后端导出用） */
+  updatedAt?: string;
+  /** Skill Owner Type：1=用户技能 / 2=系统技能 */
+  skillOwnerType?: number;
+  /** 团队 ID（TEAM 可见性时使用） */
+  teamId?: string | null;
 }
 
 /** 与 SkillGateway `SKILL_PLATFORM_ADMIN_USER_ID` 一致；可管理 `createdBy=public` 的平台行 */
