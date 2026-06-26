@@ -26,6 +26,12 @@ export interface ConfigSchema {
 const props = defineProps<{
   configSchema: ConfigSchema;
   modelValue: Record<string, unknown>;
+  /**
+   * 只读模式：禁用所有交互（input/select/checkbox/radio/number/textarea），
+   * 隐藏 AI 优化按钮。emit 的 update:modelValue / optimize 仍然发但调用方应忽略。
+   * 主要给 SkillImportDialog 在"导入预览"展示用。
+   */
+  readonly?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -119,6 +125,7 @@ function handleOptimize(key: string) {
     <t-checkbox
       v-if="prop.ui === 'checkbox'"
       :checked="!!getFieldValue(key)"
+      :disabled="props.readonly"
       @change="(checked: boolean) => setFieldValue(key, checked)"
     >
       {{ prop.label }}
@@ -127,6 +134,7 @@ function handleOptimize(key: string) {
     <t-radio-group
       v-else-if="prop.ui === 'radio'"
       :model-value="String(getFieldValue(key) ?? prop.default ?? '')"
+      :disabled="props.readonly"
       @change="(val: string) => setFieldValue(key, val)"
     >
       <t-radio
@@ -142,7 +150,8 @@ function handleOptimize(key: string) {
       v-else-if="prop.ui === 'input'"
       :model-value="String(getFieldValue(key) ?? '')"
       :placeholder="prop.placeholder"
-      :readonly="prop.readonly"
+      :readonly="prop.readonly || props.readonly"
+      :disabled="props.readonly"
       @change="(val: string) => setFieldValue(key, val)"
     />
 
@@ -150,6 +159,7 @@ function handleOptimize(key: string) {
       v-else-if="prop.ui === 'select'"
       :model-value="String(getFieldValue(key) ?? '')"
       :options="(prop.enum ?? []).map(v => ({ value: v, label: v }))"
+      :disabled="props.readonly"
       @change="(val: string) => setFieldValue(key, val)"
     />
 
@@ -158,6 +168,7 @@ function handleOptimize(key: string) {
       :model-value="Number(getFieldValue(key) ?? prop.default ?? 0)"
       :min="prop.minimum"
       :max="prop.maximum"
+      :disabled="props.readonly"
       @change="(val: number) => setFieldValue(key, val)"
     />
 
@@ -167,10 +178,12 @@ function handleOptimize(key: string) {
         :placeholder="prop.placeholder"
         :autosize="{ minRows: 3, maxRows: 8 }"
         :maxlength="prop.ui === 'textarea' ? 1000000 : undefined"
+        :readonly="props.readonly"
+        :disabled="props.readonly"
         @change="(val: string) => prop.ui === 'jsonEditor' || prop.ui === 'keyValue' ? handleJsonChange(key, val) : setFieldValue(key, val)"
       />
       <t-button
-        v-if="prop.aiOptimize"
+        v-if="prop.aiOptimize && !props.readonly"
         size="small"
         variant="text"
         class="optimize-btn"
@@ -184,6 +197,8 @@ function handleOptimize(key: string) {
       v-else
       :model-value="String(getFieldValue(key) ?? '')"
       :placeholder="prop.placeholder"
+      :readonly="props.readonly"
+      :disabled="props.readonly"
       @change="(val: string) => setFieldValue(key, val)"
     />
   </t-form-item>

@@ -1,6 +1,8 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.dto.ParseFromDescriptionRequest;
+import com.lobsterai.skillgateway.dto.SkillImportRequest;
+import com.lobsterai.skillgateway.dto.SkillImportValidator;
 import com.lobsterai.skillgateway.dto.SkillParseResponse;
 import com.lobsterai.skillgateway.entity.Skill;
 import com.lobsterai.skillgateway.service.AsyncTaskPollingService;
@@ -199,13 +201,72 @@ public class SkillController {
      */
     @PostMapping
     public ResponseEntity<?> createSkill(
-            @RequestBody Skill skill,
+            @RequestBody com.lobsterai.skillgateway.dto.SkillImportWrapper wrapper,
             @RequestHeader(value = "X-User-Id", required = false) String userId
     ) {
+        if (wrapper == null) {
+            return ResponseEntity.badRequest().body(Collections.singletonMap("error", "request body is required"));
+        }
         try {
+            Skill skill = wrapper.toSkill();
+
+            // ---- 1.3：字段大小校验（name ≤ 100, description ≤ 2000, configuration ≤ 65536）----
+            validateImportFieldSizes(skill);
+
+            // ---- 导入分支（任务 2.1 / 2.2）----
+            SkillImportRequest importPayload = wrapper.getImportPayload();
+            if (importPayload != null) {
+                if (importPayload.getMetaSchemaVersion() == null
+                        || !SkillImportRequest.SUPPORTED_META_SCHEMA_VERSION.equals(importPayload.getMetaSchemaVersion())) {
+                    return ResponseEntity.badRequest().body(Collections.singletonMap(
+                            "error",
+                            "unsupported-meta-schema-version: supported = "
+                                    + SkillImportRequest.SUPPORTED_META_SCHEMA_VERSION
+                                    + ", got = " + importPayload.getMetaSchemaVersion()
+                    ));
+                }
+                if (importPayload.getPayload() == null) {
+                    return ResponseEntity.badRequest().body(Collections.singletonMap(
+                            "error", "importPayload.payload is required"
+                    ));
+                }
+
+                // 任务 2.1：拒绝覆盖 createdBy="public" 的系统种子（非 admin）
+                Skill payload = importPayload.getPayload();
+                if (SkillService.PLATFORM_PUBLIC_AUTHOR.equals(payload.getCreatedBy())
+                        && !SkillService.SKILL_PLATFORM_ADMIN_USER_ID.equals(userId)) {
+                    return ResponseEntity.status(403).body(Collections.singletonMap(
+                            "error",
+                            "importing a system seed Skill (createdBy=public) is not allowed for non-admin users"
+                    ));
+                }
+
+                // 任务 1.2：用 importPayload.payload 替换顶层 Skill 字段
+                skill = payload;
+                validateImportFieldSizes(skill);
+            }
+
             return ResponseEntity.ok(skillService.createSkill(skill, userId));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Collections.singletonMap("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 字段大小校验（任务 1.3）。超限抛 IllegalArgumentException，由 Controller 统一捕获返回 400。
+     */
+    private void validateImportFieldSizes(Skill skill) {
+        if (skill == null) {
+            throw new IllegalArgumentException("Skill payload is required");
+        }
+        if (skill.getName() != null && skill.getName().length() > 100) {
+            throw new IllegalArgumentException("name length must be <= 100, got " + skill.getName().length());
+        }
+        if (skill.getDescription() != null && skill.getDescription().length() > 2000) {
+            throw new IllegalArgumentException("description length must be <= 2000, got " + skill.getDescription().length());
+        }
+        if (skill.getConfiguration() != null && skill.getConfiguration().length() > 65536) {
+            throw new IllegalArgumentException("configuration length must be <= 65536, got " + skill.getConfiguration().length());
         }
     }
 

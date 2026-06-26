@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { AddIcon, DeleteIcon, EditIcon } from 'tdesign-icons-vue-next'
+import { AddIcon, DeleteIcon, EditIcon, DownloadIcon } from 'tdesign-icons-vue-next'
 import { useSkillHub, BUILT_IN_SKILLS, extendedSkillEmoji, getExecutionModeLabel, getConfigSummary, canManageGatewaySkill, type Skill } from '../composables/useSkillHub'
 import { useUser } from '../composables/useUser'
 import SkillManagementModal from './SkillManagementModal.vue'
+import SkillImportDialog from './SkillImportDialog.vue'
 import UserAvatar from './UserAvatar.vue'
+import { downloadSkillJson } from '../utils/skillExport'
 
 const {
   isSkillHubVisible,
@@ -22,6 +24,33 @@ const {
 const { currentUser } = useUser()
 
 const skillMgmtRef = ref<InstanceType<typeof SkillManagementModal> | null>(null)
+
+// 导入对话框状态（任务 5.4）
+const isImportDialogVisible = ref(false)
+function openImportDialog() { isImportDialogVisible.value = true }
+function closeImportDialog() { isImportDialogVisible.value = false }
+
+// 导出技能（任务 5.2）
+function handleExport(skill: Skill) {
+  try {
+    downloadSkillJson(skill, currentUser.value)
+    MessagePlugin.success(`Skill "${skill.name}" 已导出`)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : '未知错误'
+    MessagePlugin.error(`导出失败：${msg}`)
+  }
+}
+
+// 系统种子 Skill 不能导出（任务 5.3）
+function isSystemSeedSkill(skill: Skill): boolean {
+  return (skill.createdBy ?? '').trim() === 'public'
+}
+
+// 导入成功后刷新列表（任务 5.5）
+function onImported() {
+  closeImportDialog()
+  void refreshSkills()
+}
 
 function canManageRow(skill: Skill): boolean {
   return canManageGatewaySkill(skill, currentUser.value?.id)
@@ -134,6 +163,9 @@ watch(isSkillHubVisible, (v) => {
             <t-button size="small" theme="default" variant="outline" @click="refreshSkills">
               刷新
             </t-button>
+            <t-button size="small" theme="default" variant="outline" @click="openImportDialog">
+              导入 Skill
+            </t-button>
             <t-button size="small" theme="primary" @click="openCreateForm">
               <template #icon><AddIcon /></template>
               新增 Skill
@@ -192,6 +224,21 @@ watch(isSkillHubVisible, (v) => {
                   <span class="skill-name" :title="skill.name">{{ skill.name }}</span>
                 </div>
                 <div class="skill-row1-actions">
+                  <t-button
+                    v-if="canManageRow(skill) && !isSystemSeedSkill(skill)"
+                    variant="text"
+                    shape="square"
+                    size="small"
+                    title="导出 Skill 为 JSON 文件"
+                    @click.stop="handleExport(skill)"
+                  >
+                    <DownloadIcon :size="16" strokeColor="var(--td-text-color-primary, #0052d9)" />
+                  </t-button>
+                  <t-tooltip v-else-if="isSystemSeedSkill(skill)" content="系统种子 Skill 不可导出">
+                    <t-button variant="text" shape="square" size="small" disabled>
+                      <DownloadIcon :size="16" strokeColor="var(--td-text-color-disabled, #c5c5c5)" />
+                    </t-button>
+                  </t-tooltip>
                   <t-button
                     v-if="canManageRow(skill)"
                     variant="text"
@@ -273,6 +320,7 @@ watch(isSkillHubVisible, (v) => {
     </div>
   </t-drawer>
   <SkillManagementModal ref="skillMgmtRef" @saved="refreshSkills" />
+  <SkillImportDialog v-if="isImportDialogVisible" @close="closeImportDialog" @imported="onImported" />
 </template>
 
 <style scoped>
