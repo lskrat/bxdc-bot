@@ -3,14 +3,18 @@
  * Skill 导入对话框（20260625，add-skill-import-export 需求）。
  *
  * 三状态机：
- *   idle    - 待选文件（拖拽 + 选文件按钮）
- *   preview - 已解析待确认（展示 Skill 元信息 + 字段计数 + 名称可改名）
- *   conflict - 命名冲突（三选一：覆盖 / 重命名 / 取消）
+ *   idle       - 待选文件（拖拽 + 选文件按钮）
+ *   previewing - 已解析，等待用户点"预览"按钮
+ *   preview    - **全可编辑** Skill 表单（与编辑页 SkillManagementModal 结构一致；
+ *                用户可改名/改描述/改 configuration/改可见性/改 enabled 等，
+ *                改完点确认导入直接入库，不再要求用户手动改 JSON）
+ *   conflict   - 命名冲突（三选一：覆盖 / 重命名 / 取消）
  *
  * 流程：
- *   idle → 用户选文件 → parseSkillJson → 跳到 preview
- *   preview → 检查当前用户下是否已有同名 → 有冲突跳 conflict，无冲突直接调 createSkill
- *   conflict → 用户选 OVERWRITE/RENAME/CANCEL → 重新调 createSkill 或回 idle
+ *   idle → 选文件 → parseSkillJson → previewing
+ *   previewing → 点"预览" → preview
+ *   preview → 用户改字段（v-model 直接 patch 回 parsed.value） → 点"确认导入"
+ *           → createSkill({...改后的字段}) → 成功 toast + emit imported
  */
 import { ref, computed, onMounted } from 'vue';
 import { MessagePlugin } from 'tdesign-vue-next';
@@ -32,51 +36,65 @@ const emit = defineEmits<{
 
 const { skills, createSkill } = useSkillHub();
 
-// 状态机
-//   idle     - 待选文件
-//   previewing - 已选文件，展示元数据等待用户点"确认导入"（仅展示，不可改名）
-//   preview  - 改名 + 确认导入
-//   conflict - 命名冲突（三选一：覆盖 / 重命名 / 取消）
 type Phase = 'idle' | 'previewing' | 'preview' | 'conflict';
 const phase = ref<Phase>('idle');
 
-// 当前解析的 payload
 const parsed = ref<SkillExportPayload | null>(null);
-// 用户在 preview 阶段可能改的 skill 名称
-const editableName = ref('');
-// 冲突阶段用户选的策略
+
 type ConflictStrategy = 'OVERWRITE' | 'RENAME' | 'CANCEL';
 const conflictStrategy = ref<ConflictStrategy>('RENAME');
 const renamedName = ref('');
-// 是否正在提交
 const submitting = ref(false);
-// 文件输入 ref（重置 file input 用）
 const fileInputRef = ref<HTMLInputElement | null>(null);
 
-// preview 阶段展示的 Skill 只读数据（与 SkillManagementModal 字段一一对应）
-// t-form 需要 :data 引用一个 reactive 对象，否则 readonly 字段不会响应
-const formView = computed<Record<string, unknown>>(() => ({
-  name: parsed.value?.skill.name ?? '',
-  description: parsed.value?.skill.description ?? '',
-  type: parsed.value?.skill.type ?? '',
-  executionMode: parsed.value?.skill.executionMode ?? 'CONFIG',
-  visibility: parsed.value?.skill.visibility ?? 'PRIVATE',
-  configuration: formattedConfiguration.value,
-}));
+// ---------- 编辑：所有字段直接 patch 回 parsed.value ----------
 
-// configuration 美化（pretty print）。非法 JSON 则原样展示。
-// previewParseError 分支（无法映射到结构化表单时）渲染这个。
-const formattedConfiguration = computed<string>(() => {
-  const cfg = parsed.value?.skill.configuration;
-  if (!cfg) return '';
-  try {
-    return JSON.stringify(JSON.parse(cfg), null, 2);
-  } catch {
-    return cfg;
-  }
+/** 顶层 skill 字段（name/description/visibility/executionMode/enabled/requiresConfirmation 等）的统一 setter。
+ * 父组件的 t-input/t-radio-group/t-checkbox v-model 都走这里，确保改动持久化到 parsed.value.skill。 */
+function patchSkillField<K extends keyof SkillExportPayload['skill']>(
+  field: K,
+  value: SkillExportPayload['skill'][K],
+): void {
+  if (!parsed.value) return;
+  parsed.value = {
+    ...parsed.value,
+    skill: { ...parsed.value.skill, [field]: value },
+  };
+}
+
+/** description 顶层 patch（textarea 双向绑定） */
+const editableDescription = computed<string>({
+  get: () => parsed.value?.skill.description ?? '',
+  set: (v) => patchSkillField('description', v),
 });
 
-// ---------- preview 阶段：与编辑页 SkillManagementModal 一致的配置渲染 ----------
+/** enabled / requiresConfirmation checkbox v-model */
+const editableEnabled = computed<boolean>({
+  get: () => parsed.value?.skill.enabled !== false,
+  set: (v) => patchSkillField('enabled', v),
+});
+const editableRequiresConfirmation = computed<boolean>({
+  get: () => parsed.value?.skill.requiresConfirmation === true,
+  set: (v) => patchSkillField('requiresConfirmation', v),
+});
+
+/** visibility / executionMode radio-group v-model */
+const editableVisibility = computed<'PRIVATE' | 'PUBLIC'>({
+  get: () => (parsed.value?.skill.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE'),
+  set: (v) => patchSkillField('visibility', v),
+});
+
+/** introMd / templatePlaceholders：父组件双向绑定到 parsed.value.skill */
+const editableIntroMd = computed<string>({
+  get: () => parsed.value?.skill.introMd ?? '',
+  set: (v) => patchSkillField('introMd', v),
+});
+const editableTemplatePlaceholders = computed<string[]>({
+  get: () => parsed.value?.skill.templatePlaceholders ?? [],
+  set: (v) => patchSkillField('templatePlaceholders', v),
+});
+
+// ---------- configuration 子树编辑（patch 回 parsed.value.skill.configuration 字符串） ----------
 
 interface ExecutionType {
   type: string;
@@ -93,20 +111,14 @@ function fetchExecutionTypes() {
     .catch(() => { executionTypes.value = []; });
 }
 
-onMounted(() => {
-  // 进入对话框即拉一次，preview/previewing 阶段都会用到
-  fetchExecutionTypes();
-});
+onMounted(fetchExecutionTypes);
 
-// 编辑页在 fetchExecutionTypes 失败时仍允许编辑（schema 退化为 rawConfiguration）。
-// preview 同步：拉不到 schema 走 parseError 分支，渲染 rawConfiguration。
-
-// 当前 Skill 的 executionMode（CONFIG / OPENCLAW / undefined）
+// 当前 Skill 的 executionMode（CONFIG / OPENCLAW）
 const currentExecutionMode = computed<string>(() => {
   return parsed.value?.skill.executionMode || 'CONFIG';
 });
 
-// 当前 Skill 的 kind（api / ssh / template / python / undefined），从 configuration JSON 提取
+// 当前 Skill 的 kind（api / ssh / template / python），从 configuration JSON 提取
 const currentConfigKind = computed<string | undefined>(() => {
   const cfg = parsed.value?.skill.configuration;
   if (!cfg) return undefined;
@@ -127,12 +139,8 @@ const currentConfigSchema = computed<ConfigSchema | null>(() => {
   return currentExecutionType.value?.configSchema ?? null;
 });
 
-// configuration JSON 是否能映射到结构化 form。任一条件不满足走 parseError 分支。
-//   - executionMode 必须是 CONFIG
-//   - 找到匹配的 executionType
-//   - configuration 是合法 JSON
 const previewParseError = computed<string | null>(() => {
-  if (currentExecutionMode.value !== 'CONFIG') return null; // OPENCLAW 不走 parseError 分支
+  if (currentExecutionMode.value !== 'CONFIG') return null;
   if (!currentConfigKind.value) return 'configuration 缺少 kind 字段';
   if (!currentExecutionType.value) {
     return `未知的配置类型：${currentConfigKind.value}`;
@@ -147,8 +155,7 @@ const previewParseError = computed<string | null>(() => {
   return null;
 });
 
-// preview 阶段给 ConfigFormRenderer 的只读 form values。
-// 直接用 parsed.skill.configuration 解析后的对象（与 schema property key 一一对应即可）。
+/** 给 ConfigFormRenderer 的对象形式 form values */
 const configFormValues = computed<Record<string, unknown>>(() => {
   const cfg = parsed.value?.skill.configuration;
   if (!cfg) return {};
@@ -159,7 +166,33 @@ const configFormValues = computed<Record<string, unknown>>(() => {
   }
 });
 
-// OPENCLAW 模式下的展示数据（从 configuration JSON 提取）
+/** pretty-print 显示 configuration（parseError 分支用） */
+const formattedConfiguration = computed<string>(() => {
+  const cfg = parsed.value?.skill.configuration;
+  if (!cfg) return '';
+  try {
+    return JSON.stringify(JSON.parse(cfg), null, 2);
+  } catch {
+    return cfg;
+  }
+});
+
+/** parseError 分支下，用户可以直接编辑 configuration JSON 文本 */
+const editableRawConfiguration = computed<string>({
+  get: () => formattedConfiguration.value,
+  set: (v) => patchSkillField('configuration', v),
+});
+
+/** ConfigFormRenderer 更新时把对象序列化回 configuration 字符串 */
+function handleConfigUpdate(values: Record<string, unknown>) {
+  if (!parsed.value) return;
+  const current = configFormValues.value;
+  const merged = { ...current, ...values };
+  patchSkillField('configuration', JSON.stringify(merged));
+}
+
+// ---------- OPENCLAW 子字段（patch 回 configuration 内的 systemPrompt/orchestration/allowedTools） ----------
+
 const openClawPromptText = computed<string>(() => {
   if (currentExecutionMode.value !== 'OPENCLAW') return '';
   const cfg = parsed.value?.skill.configuration;
@@ -170,6 +203,23 @@ const openClawPromptText = computed<string>(() => {
   } catch {
     return '';
   }
+});
+const editableOpenClawPrompt = computed<string>({
+  get: () => openClawPromptText.value,
+  set: (v) => {
+    const cfg = parsed.value?.skill.configuration;
+    if (!cfg) {
+      patchSkillField('configuration', JSON.stringify({ systemPrompt: v }));
+      return;
+    }
+    try {
+      const obj = JSON.parse(cfg) as Record<string, unknown>;
+      obj.systemPrompt = v;
+      patchSkillField('configuration', JSON.stringify(obj));
+    } catch {
+      patchSkillField('configuration', JSON.stringify({ systemPrompt: v }));
+    }
+  },
 });
 
 const openClawOrchestrationMode = computed<string>(() => {
@@ -183,6 +233,23 @@ const openClawOrchestrationMode = computed<string>(() => {
     return 'serial';
   }
 });
+const editableOpenClawOrchestration = computed<string>({
+  get: () => openClawOrchestrationMode.value,
+  set: (v) => {
+    const cfg = parsed.value?.skill.configuration;
+    if (!cfg) {
+      patchSkillField('configuration', JSON.stringify({ orchestration: v }));
+      return;
+    }
+    try {
+      const obj = JSON.parse(cfg) as Record<string, unknown>;
+      obj.orchestration = v;
+      patchSkillField('configuration', JSON.stringify(obj));
+    } catch {
+      patchSkillField('configuration', JSON.stringify({ orchestration: v }));
+    }
+  },
+});
 
 const openClawAllowedTools = computed<string[]>(() => {
   if (currentExecutionMode.value !== 'OPENCLAW') return [];
@@ -190,16 +257,50 @@ const openClawAllowedTools = computed<string[]>(() => {
   if (!cfg) return [];
   try {
     const obj = JSON.parse(cfg) as Record<string, unknown>;
-    return Array.isArray(obj.allowedTools) ? obj.allowedTools.filter((t): t is string => typeof t === 'string') : [];
+    return Array.isArray(obj.allowedTools)
+      ? obj.allowedTools.filter((t): t is string => typeof t === 'string')
+      : [];
   } catch {
     return [];
   }
 });
+const editableOpenClawAllowedTools = computed<string[]>({
+  get: () => openClawAllowedTools.value,
+  set: (v) => {
+    const cfg = parsed.value?.skill.configuration;
+    if (!cfg) {
+      patchSkillField('configuration', JSON.stringify({ allowedTools: v }));
+      return;
+    }
+    try {
+      const obj = JSON.parse(cfg) as Record<string, unknown>;
+      obj.allowedTools = v;
+      patchSkillField('configuration', JSON.stringify(obj));
+    } catch {
+      patchSkillField('configuration', JSON.stringify({ allowedTools: v }));
+    }
+  },
+});
+
+function addTool() {
+  editableOpenClawAllowedTools.value = [...editableOpenClawAllowedTools.value, ''];
+}
+function removeTool(index: number) {
+  const next = [...editableOpenClawAllowedTools.value];
+  next.splice(index, 1);
+  editableOpenClawAllowedTools.value = next;
+}
+function updateTool(index: number, value: string) {
+  const next = [...editableOpenClawAllowedTools.value];
+  next[index] = value;
+  editableOpenClawAllowedTools.value = next;
+}
+
+// ---------- 文件选择 / 状态机切换 ----------
 
 function reset() {
   phase.value = 'idle';
   parsed.value = null;
-  editableName.value = '';
   conflictStrategy.value = 'RENAME';
   renamedName.value = '';
   submitting.value = false;
@@ -218,11 +319,7 @@ async function handleFile(file: File | null) {
   try {
     const payload = await parseSkillFile(file);
     parsed.value = payload;
-    editableName.value = payload.skill.name;
-    // 选完文件立刻拉一次 executionTypes（schema 列表），保证 preview 阶段 ConfigFormRenderer 能拿到 schema
-    // 而不必等 onMounted 的 fetch 回来（极端情况下用户已选完文件但 fetch 还没完成）
     fetchExecutionTypes();
-    // 先进入 previewing 阶段（只展示元数据），用户点"确认导入"再进入 preview 改名阶段
     phase.value = 'previewing';
   } catch (e) {
     phase.value = 'idle';
@@ -232,7 +329,6 @@ async function handleFile(file: File | null) {
     } else {
       MessagePlugin.error('导入失败：未知错误');
     }
-    // 重置 file input 允许重新选同一个文件
     if (fileInputRef.value) fileInputRef.value.value = '';
   }
 }
@@ -252,11 +348,9 @@ function onDragOver(ev: DragEvent) {
   ev.preventDefault();
 }
 
-// 用户从 previewing 阶段点"下一步"（进入可改名 + 确认阶段）
 function goPreview() {
   if (!parsed.value) return;
-  // 跳转前先检查同名校验（previewing 阶段不阻挡用户，但下一步时若同名会跳 conflict）
-  const sameName = skills.value.find((s) => s.name === parsed.value!.skill.name);
+  const sameName = skills.value.find(s => s.name === parsed.value!.skill.name);
   if (sameName) {
     renamedName.value = `${parsed.value.skill.name}-${formatHms(new Date())}`;
     phase.value = 'conflict';
@@ -265,25 +359,22 @@ function goPreview() {
   phase.value = 'preview';
 }
 
-// 用户从 preview 阶段点"确认导入"
 async function confirmImport() {
   if (!parsed.value) return;
-  const name = editableName.value.trim();
+  const name = (parsed.value.skill.name ?? '').trim();
   if (!name) {
     MessagePlugin.warning('请填写 Skill 名称');
     return;
   }
-  // preview 阶段再次检查冲突（用户可能改了名）
-  const sameName = skills.value.find((s) => s.name === name);
+  const sameName = skills.value.find(s => s.name === name);
   if (sameName) {
     renamedName.value = `${name}-${formatHms(new Date())}`;
     phase.value = 'conflict';
     return;
   }
-  await doCreate(name);
+  await doCreate();
 }
 
-// 冲突阶段用户选完策略后点"继续"
 async function resolveConflict() {
   if (!parsed.value) return;
   if (conflictStrategy.value === 'CANCEL') {
@@ -296,28 +387,23 @@ async function resolveConflict() {
       MessagePlugin.warning('请填写新名称');
       return;
     }
-    const dup = skills.value.find((s) => s.name === name);
+    const dup = skills.value.find(s => s.name === name);
     if (dup) {
       MessagePlugin.error(`名称 "${name}" 已存在，请换一个`);
       return;
     }
-    await doCreate(name);
+    patchSkillField('name', name);
+    await doCreate();
     return;
   }
-  // OVERWRITE: 第一版未实现删除旧 Skill（需要更复杂的事务），弹提示并降级为 RENAME
   MessagePlugin.warning('覆盖策略需要先删除旧 Skill，请改用"重命名"');
 }
 
-async function doCreate(name: string) {
+async function doCreate() {
   if (!parsed.value) return;
   submitting.value = true;
   try {
-    // 用改后的 name 覆盖 payload.skill.name
-    const finalPayload: SkillExportPayload = {
-      ...parsed.value,
-      skill: { ...parsed.value.skill, name },
-    };
-    const input = payloadToCreateInput(finalPayload);
+    const input = payloadToCreateInput(parsed.value);
     const created = await createSkill(input);
     MessagePlugin.success(`Skill "${created.name}" 导入成功`);
     emit('imported', created);
@@ -345,7 +431,7 @@ function formatHms(d: Date): string {
     @close="close"
     @update:visible="(v: boolean) => { if (!v) close() }"
   >
-    <!-- IDLE：待选文件 -->
+    <!-- IDLE -->
     <div v-if="phase === 'idle'" class="idle-zone" @drop="onDrop" @dragover="onDragOver">
       <div class="idle-icon"><UploadIcon size="48" /></div>
       <p class="idle-hint">将 JSON 文件拖拽到此区域，或点击下方按钮选择文件</p>
@@ -363,11 +449,33 @@ function formatHms(d: Date): string {
       </t-button>
     </div>
 
-    <!-- PREVIEWING：已解析，等待用户点"预览"按钮 -->
+    <!-- PREVIEWING -->
     <div v-else-if="phase === 'previewing' && parsed" class="previewing-zone">
       <p class="previewing-hint">
-        已成功解析导出的 JSON 文件，点击"预览"查看 Skill 详细信息。
+        已成功解析导出的 JSON 文件。点击"预览"进入可编辑表单，修改字段后点"确认导入"直接入库。
       </p>
+      <div class="previewing-summary">
+        <div class="preview-row">
+          <span class="preview-label">名称</span>
+          <span>{{ parsed.skill.name }}</span>
+        </div>
+        <div class="preview-row">
+          <span class="preview-label">类型</span>
+          <span>{{ parsed.skill.type }}</span>
+        </div>
+        <div class="preview-row">
+          <span class="preview-label">描述</span>
+          <span>{{ parsed.skill.description || '（无）' }}</span>
+        </div>
+        <div class="preview-row">
+          <span class="preview-label">可见性</span>
+          <span>{{ parsed.skill.visibility || 'PRIVATE' }}</span>
+        </div>
+        <div class="preview-row">
+          <span class="preview-label">Execution Mode</span>
+          <span>{{ currentExecutionMode }}</span>
+        </div>
+      </div>
 
       <div class="dialog-footer">
         <t-button variant="outline" @click="reset">取消</t-button>
@@ -378,26 +486,30 @@ function formatHms(d: Date): string {
       </div>
     </div>
 
-    <!-- PREVIEW：展示 Skill 详细信息（结构与编辑页 SkillManagementModal 完全一致） -->
+    <!-- PREVIEW：全可编辑（与编辑页 SkillManagementModal 结构一致） -->
     <div v-else-if="phase === 'preview' && parsed" class="preview-zone">
-      <t-form label-align="top" :data="formView" class="preview-form">
+      <t-form label-align="top" class="preview-form">
         <t-form-item label="名称" name="name">
-          <t-input v-model="editableName" placeholder="Skill 名称" :maxlength="100" />
+          <t-input
+            :model-value="parsed.skill.name"
+            @update:model-value="(v: string) => patchSkillField('name', v)"
+            placeholder="Skill 名称"
+            :maxlength="100"
+          />
         </t-form-item>
 
         <t-form-item label="技能介绍" name="description">
           <div class="optimize-textarea-wrap">
             <t-textarea
-              :model-value="parsed.skill.description || ''"
+              v-model="editableDescription"
               placeholder="（无描述）"
-              readonly
               :autosize="{ minRows: 2, maxRows: 4 }"
             />
           </div>
         </t-form-item>
 
         <t-form-item label="可见性" name="visibility">
-          <t-radio-group :model-value="parsed.skill.visibility || 'PRIVATE'" disabled>
+          <t-radio-group v-model="editableVisibility">
             <t-radio-button value="PRIVATE">私人（仅自己可管理）</t-radio-button>
             <t-radio-button value="PUBLIC">公共（全员可见）</t-radio-button>
           </t-radio-group>
@@ -411,11 +523,10 @@ function formatHms(d: Date): string {
         </t-form-item>
 
         <template v-if="previewParseError">
-          <t-alert theme="warning" :message="`该 Skill 的历史配置当前无法安全映射为结构化表单：${previewParseError}`" />
-          <t-form-item label="原始 Configuration（只读）" name="rawConfiguration">
+          <t-alert theme="warning" :message="`该 Skill 的历史配置当前无法安全映射为结构化表单：${previewParseError}。可手动编辑原始 JSON。`" />
+          <t-form-item label="原始 Configuration（可编辑）" name="rawConfiguration">
             <t-textarea
-              :model-value="formattedConfiguration"
-              readonly
+              v-model="editableRawConfiguration"
               :autosize="{ minRows: 6, maxRows: 12 }"
             />
           </t-form-item>
@@ -434,8 +545,7 @@ function formatHms(d: Date): string {
             v-if="currentConfigSchema"
             :config-schema="currentConfigSchema"
             :model-value="configFormValues"
-            :readonly="true"
-            @update:model-value="() => { /* 只读模式忽略变更 */ }"
+            @update:model-value="handleConfigUpdate"
           />
         </template>
 
@@ -443,64 +553,83 @@ function formatHms(d: Date): string {
           <t-form-item label="提示词（Markdown）" name="openclawPrompt">
             <div class="optimize-textarea-wrap">
               <t-textarea
-                :model-value="openClawPromptText"
-                readonly
+                v-model="editableOpenClawPrompt"
                 :autosize="{ minRows: 8, maxRows: 16 }"
                 placeholder="（无提示词）"
               />
             </div>
           </t-form-item>
           <t-form-item label="编排模式" name="openclawMode">
-            <t-input :model-value="openClawOrchestrationMode" readonly />
+            <t-select
+              v-model="editableOpenClawOrchestration"
+              :options="[
+                { value: 'serial', label: 'serial（顺序执行）' },
+                { value: 'parallel', label: 'parallel（并行执行）' },
+              ]"
+            />
           </t-form-item>
           <t-form-item label="允许工具列表" name="openclawAllowedTools">
             <div class="tool-list-editor">
               <div
-                v-for="(tool, index) in openClawAllowedTools"
+                v-for="(tool, index) in editableOpenClawAllowedTools"
                 :key="`tool-${index}`"
                 class="tool-row"
               >
-                <t-input :model-value="tool" readonly />
+                <t-input
+                  :model-value="tool"
+                  @update:model-value="(v: string) => updateTool(index, v)"
+                  placeholder="工具名"
+                />
+                <t-button variant="text" theme="danger" @click="removeTool(index)">删除</t-button>
               </div>
-              <span v-if="openClawAllowedTools.length === 0" class="tool-empty">（无）</span>
+              <t-button variant="outline" @click="addTool">+ 添加工具</t-button>
+              <span v-if="editableOpenClawAllowedTools.length === 0" class="tool-empty">（无）</span>
             </div>
           </t-form-item>
         </template>
 
-        <!-- 模板占位符：仅 TEMPLATE 类型 Skill 有；编辑页无对应展示，导入时搬运 -->
+        <!-- 模板占位符：仅 TEMPLATE 类型 Skill 有；编辑页无对应展示，导入时可编辑 -->
         <t-form-item
-          v-if="Array.isArray(parsed.skill.templatePlaceholders) && parsed.skill.templatePlaceholders.length > 0"
+          v-if="Array.isArray(parsed.skill.templatePlaceholders)"
           label="模板占位符"
           name="templatePlaceholders"
         >
           <div class="tool-list-editor">
             <div
-              v-for="(ph, index) in parsed.skill.templatePlaceholders"
+              v-for="(ph, index) in editableTemplatePlaceholders"
               :key="`ph-${index}`"
               class="tool-row"
             >
-              <t-input :model-value="ph" readonly />
+              <t-input
+                :model-value="ph"
+                @update:model-value="(v: string) => {
+                  const next = [...editableTemplatePlaceholders];
+                  next[index] = v;
+                  editableTemplatePlaceholders = next;
+                }"
+                placeholder="占位符名"
+              />
+              <t-button variant="text" theme="danger" @click="editableTemplatePlaceholders = editableTemplatePlaceholders.filter((_, i) => i !== index)">删除</t-button>
             </div>
+            <t-button variant="outline" @click="editableTemplatePlaceholders = [...editableTemplatePlaceholders, '']">+ 添加占位符</t-button>
           </div>
         </t-form-item>
 
-        <!-- 介绍（Markdown）：编辑页通过 /api/skills/updateIntroMd 单独更新，
-             导入时搬运展示 -->
+        <!-- 介绍（Markdown） -->
         <t-form-item
-          v-if="parsed.skill.introMd && parsed.skill.introMd.trim()"
           label="介绍（Markdown）"
           name="introMd"
         >
           <t-textarea
-            :model-value="parsed.skill.introMd"
-            readonly
+            v-model="editableIntroMd"
             :autosize="{ minRows: 3, maxRows: 10 }"
+            placeholder="（无）"
           />
         </t-form-item>
 
         <t-space>
-          <t-checkbox :checked="parsed.skill.enabled !== false" disabled>启用</t-checkbox>
-          <t-checkbox :checked="parsed.skill.requiresConfirmation === true" disabled>需要确认</t-checkbox>
+          <t-checkbox v-model="editableEnabled">启用</t-checkbox>
+          <t-checkbox v-model="editableRequiresConfirmation">需要确认</t-checkbox>
         </t-space>
       </t-form>
 
@@ -522,10 +651,10 @@ function formatHms(d: Date): string {
       </div>
     </div>
 
-    <!-- CONFLICT：命名冲突 -->
+    <!-- CONFLICT -->
     <div v-else-if="phase === 'conflict' && parsed" class="conflict-zone">
       <div class="conflict-warn">
-        ⚠ 你名下已存在同名 Skill「{{ editableName }}」
+        ⚠ 你名下已存在同名 Skill「{{ parsed.skill.name }}」
       </div>
       <t-radio-group v-model="conflictStrategy">
         <t-radio value="RENAME">
@@ -586,15 +715,20 @@ function formatHms(d: Date): string {
   color: #303133;
   text-align: center;
 }
+.previewing-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #fafbfc;
+  border-radius: 4px;
+}
 .preview-row {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-.preview-row-block { align-items: flex-start; }
-.preview-form {
-  width: 100%;
-}
+.preview-form { width: 100%; }
 .preview-form :deep(.optimize-textarea-wrap) {
   position: relative;
   width: 100%;
@@ -614,6 +748,12 @@ function formatHms(d: Date): string {
   color: #909399;
   font-size: 13px;
 }
+.preview-label {
+  width: 80px;
+  color: #606266;
+  font-size: 13px;
+  flex-shrink: 0;
+}
 .preview-export-info {
   display: flex;
   align-items: center;
@@ -622,12 +762,6 @@ function formatHms(d: Date): string {
   border-top: 1px dashed #ebeef5;
   font-size: 12px;
   color: #909399;
-}
-.preview-label {
-  width: 80px;
-  color: #606266;
-  font-size: 13px;
-  flex-shrink: 0;
 }
 .preview-meta {
   font-size: 12px;
@@ -647,19 +781,15 @@ function formatHms(d: Date): string {
   background: #fef0f0;
   border: 1px solid #fbc4c4;
   border-radius: 4px;
-  color: #f56c6c;
-  font-size: 13px;
-}
-.conflict-rename-input {
-  margin-top: 8px;
-  width: 100%;
 }
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #ebeef5;
+}
+.conflict-rename-input {
+  margin-top: 8px;
+  width: 100%;
 }
 </style>
