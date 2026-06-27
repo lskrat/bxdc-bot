@@ -58,6 +58,7 @@ export const Prompts = new Proxy({} as SystemPrompts, {
 export function buildStaticSystemPrompt(): string {
   return (
     Prompts.agentRolePrompt
+    + Prompts.skillDiscoveryPolicy
     + Prompts.skillGeneratorPolicy
     + Prompts.extendedSkillRoutingPolicy
     + Prompts.taskTrackingPolicy

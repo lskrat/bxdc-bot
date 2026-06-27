@@ -240,37 +240,25 @@ export class AgentFactory {
       streaming: agentStreaming,
     });
 
-    // 基础工具（子 Agent 需要基础工具）
-    const baseTools: BindableAgentTool[] = [
-      new JavaComputeTool(gatewayUrl, apiToken, { dispatch: getAgentBuiltinSkillDispatch() }),
-      new JavaServerLookupTool(gatewayUrl, apiToken, userId),
-      new ManageTasksTool(),
-    ];
-
-    // 从 skills 表加载指定的系统技能（skill_owner_type=2）
-    // 使用 enabledSkillIds 参数过滤，只加载指定 ID 的技能
+    // 子 Agent 只加载指定的技能，不加载基础工具
     const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
       plannerModel: model,
-      availableTools: baseTools,
+      availableTools: [],
       sessionId: config?.sessionId,
       conversationId: config?.conversationId,
       enabledSkillIds: skillIds,
       skillOwnerType: 2, // 系统技能
     });
 
-    // 合并工具
-    const tools = [
-      ...baseTools,
-      ...gatewayExtendedTools,
-    ];
+    const tools = gatewayExtendedTools;
 
-    // 创建子 Agent
+    // 创建子 Agent（独立 checkpointer，避免 token 泄露到主 Agent stream）
     const agent = createReactAgent({
       llm: model,
       tools,
       stateSchema: AgentAnnotation,
       preModelHook,
-      checkpointer: sharedAgentCheckpointer,
+      checkpointer: new MemorySaver(),
     });
 
     return { agent, plannerModel: model, tools };

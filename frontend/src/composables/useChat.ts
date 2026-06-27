@@ -45,6 +45,22 @@ export interface ToolInvocation {
   pollingStatus?: PollingStatus
 }
 
+/** Sub-agent think block — collapsible section showing sub-agent execution output. */
+export interface ThinkBlock {
+  id: string
+  parentToolId: string
+  parentToolName?: string
+  content: string
+  status: 'running' | 'completed' | 'failed'
+  startedAt: number
+  completedAt?: number
+}
+
+/** 正文段落：文字 或 think 块，按顺序穿插渲染 */
+export type ContentSegment =
+  | { type: 'text'; text: string }
+  | { type: 'think'; thinkId: string }
+
 export type { LlmLogEntry } from '../utils/llmLog'
 
 export type LogTimelineEntry =
@@ -98,6 +114,10 @@ export interface Message {
   parentToolId?: string | null
   /** BxdcbotRun：Bxdcbot 自规划 skillId */
   parentSkillId?: number | null
+  /** Sub-agent think blocks rendered as collapsible sections within execution block */
+  thinkBlocks?: ThinkBlock[]
+  /** 正文段落：文字和 think 块穿插排列，用于 inline 渲染 */
+  contentSegments?: ContentSegment[]
 }
 
 function asArray<T>(value: T | T[] | undefined | null): T[] {
@@ -141,7 +161,7 @@ export interface ChatState {
   /** Stop the current in-flight SSE stream (cancel button while agent is reasoning). */
   stop: () => void
   addMessage: (message: Message) => void
-  confirmSkillAction: (toolCallId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) => Promise<void>
+  confirmSkillAction: (toolCallId: string, sessionId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) => Promise<void>
   updateConfirmationArguments: (toolCallId: string, adjustedParams: Record<string, unknown>) => void
   /** Callback invoked after SSE stream completes; ChatView sets this to persist conversation messages */
   saveMessageCallback: ReturnType<typeof ref<((messages: Message[]) => void) | null>>
@@ -200,49 +220,59 @@ export function provideChat() {
     })
   }
 
+  /** Ensure the last segment is a text segment, or create one. Returns the segments array. */
+  function ensureLastTextSegment(last: Message): ContentSegment[] {
+    const segments = last.contentSegments && last.contentSegments.length > 0
+      ? [...last.contentSegments]
+      : (last.content ? [{ type: 'text' as const, text: last.content }] : [])
+    const lastSeg = segments[segments.length - 1]
+    if (!lastSeg || lastSeg.type !== 'text') {
+      // Only create empty text segment if there's existing content (avoid leading empty block)
+      if (segments.length > 0 && last.content) {
+        segments.push({ type: 'text', text: '' })
+      }
+    }
+    return segments
+  }
+
   function setLastMessage(content: string) {
-    updateLastAssistantMessage((last) => ({ ...last, content }))
+    updateLastAssistantMessage((last) => ({
+      ...last,
+      content,
+      // contentSegments 由 applyAssistantContent 和 think_start 维护，这里不重建
+    }))
   }
 
   function applyAssistantContent(rawContent: string) {
-    // 过滤 think 标签，确保思考内容不会显示给用户
     const content = removeThinkTags(rawContent)
-    
-    // 如果为空字符串，我们仍然可能需要处理（例如初始状态），但如果是纯空白字符通常可以忽略
-    // 但是对于流式传输，有时会收到空包
     if (!content && content !== '') return
 
     const last = messages.value[messages.value.length - 1]
     if (!last || last.role !== 'assistant') return
 
-    // 如果还没有内容，直接设置
     if (!last.content) {
       setLastMessage(content)
       return
     }
 
-    // 检查是否是重复内容（后端可能会重复发送相同内容）
-    if (last.content.endsWith(content)) {
-      return
-    }
-
-    // 如果新内容是旧内容的延续（以旧内容开头），只追加新部分
+    let newPart: string
     if (content.startsWith(last.content)) {
-      const newPart = content.slice(last.content.length)
-      if (newPart.length > 0) {
-        updateLastAssistantMessage((current) => ({
-          ...current,
-          content: current.content + newPart,
-        }))
-      }
-      return
+      newPart = content.slice(last.content.length)
+      if (newPart.length === 0) return
+    } else {
+      newPart = content
     }
 
-    // 否则直接追加（处理乱序或特殊情况）
-    updateLastAssistantMessage((current) => ({
-      ...current,
-      content: current.content + content,
-    }))
+    updateLastAssistantMessage((current) => {
+      const segments = ensureLastTextSegment(current)
+      const lastTextSeg = segments[segments.length - 1] as { type: 'text'; text: string }
+      lastTextSeg.text = lastTextSeg.text + newPart
+      return {
+        ...current,
+        content: current.content + newPart,
+        contentSegments: segments,
+      }
+    })
   }
 
   function getChunkMessages(data: any): any[] {
@@ -650,6 +680,11 @@ export function provideChat() {
       confirmations: (last.confirmations ?? []).map((c) =>
         c.status === 'pending' ? { ...c, status: 'expired' as ConfirmationStatus } : c,
       ),
+      thinkBlocks: (last.thinkBlocks ?? []).map((tb) => (
+        tb.status === 'running'
+          ? { ...tb, status, completedAt: Date.now() }
+          : tb
+      )),
     }))
   }
 
@@ -666,6 +701,42 @@ export function provideChat() {
     return data?.type === 'confirmation_request'
       && typeof data.sessionId === 'string'
       && typeof data.toolCallId === 'string'
+  }
+
+  function isThinkStartEvent(data: any): data is {
+    type: 'think_start'
+    thinkId: string
+    parentToolId: string
+    parentToolName: string
+    displayName: string
+  } {
+    return data?.type === 'think_start'
+      && typeof data.thinkId === 'string'
+      && typeof data.parentToolId === 'string'
+  }
+
+  function isAgentTextEvent(data: any): data is {
+    type: 'agent_text'
+    thinkId: string
+    role: 'sub_agent' | 'main_agent'
+    content: string
+    replace?: boolean
+  } {
+    return data?.type === 'agent_text'
+      && typeof data.thinkId === 'string'
+      && (data.role === 'sub_agent' || data.role === 'main_agent')
+      && typeof data.content === 'string'
+  }
+
+  function isThinkEndEvent(data: any): data is {
+    type: 'think_end'
+    thinkId: string
+    parentToolId: string
+    status: 'completed' | 'failed'
+  } {
+    return data?.type === 'think_end'
+      && typeof data.thinkId === 'string'
+      && typeof data.parentToolId === 'string'
   }
 
   function addConfirmationToLastAssistant(req: ConfirmationRequest) {
@@ -688,26 +759,29 @@ export function provideChat() {
     }))
   }
 
-  async function confirmSkillAction(toolCallId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) {
-    const sid = activeSessionId.value
-    if (!sid) return
+  async function confirmSkillAction(toolCallId: string, sessionId: string, confirmed: boolean, adjustedParams?: Record<string, unknown>) {
+    console.log(`[DEBUG-confirmation] confirmSkillAction called: toolCallId=${toolCallId}, sessionId=${sessionId}, confirmed=${confirmed}`);
 
     const newStatus: ConfirmationStatus = confirmed ? 'confirmed' : 'cancelled'
     updateConfirmationStatus(toolCallId, newStatus)
+    console.log(`[DEBUG-confirmation] updateConfirmationStatus called: toolCallId=${toolCallId}, newStatus=${newStatus}`);
 
     if (confirmed) {
       console.log(`[skill] confirmAction SEND: toolCallId=${toolCallId} confirmed=true`, {
         adjustedParams,
-        sessionId: sid,
+        sessionId,
       })
     } else {
       console.log(`[skill] confirmAction SEND: toolCallId=${toolCallId} confirmed=false`)
     }
 
     try {
-      await confirmAction(sid, toolCallId, confirmed, adjustedParams)
+      console.log(`[DEBUG-confirmation] calling confirmAction API: sessionId=${sessionId}, toolCallId=${toolCallId}, confirmed=${confirmed}`);
+      await confirmAction(sessionId, toolCallId, confirmed, adjustedParams)
+      console.log(`[DEBUG-confirmation] confirmAction API success: toolCallId=${toolCallId}`);
       console.log(`[skill] confirmAction OK: toolCallId=${toolCallId} confirmed=${confirmed}`)
     } catch (e) {
+      console.error(`[DEBUG-confirmation] confirmAction API failed:`, e);
       console.error(`[skill] confirmAction FAILED: toolCallId=${toolCallId}`, e)
       updateConfirmationStatus(toolCallId, 'pending')
       error.value = e instanceof Error ? e.message : 'Confirmation request failed'
@@ -922,8 +996,11 @@ export function provideChat() {
               try {
                 data = JSON.parse(jsonStr)
               } catch {
-                console.log('Received raw text:', jsonStr)
-                applyAssistantContent(jsonStr)
+                const hasRunningThink = (messages.value[messages.value.length - 1]?.thinkBlocks ?? [])
+                  .some((tb: any) => tb.status === 'running')
+                if (!hasRunningThink) {
+                  applyAssistantContent(jsonStr)
+                }
                 continue
               }
 
@@ -974,6 +1051,64 @@ export function provideChat() {
                 continue
               }
 
+              if (isThinkStartEvent(data)) {
+                console.log(`[ThinkBlock] Frontend received think_start: thinkId=${data.thinkId}, parentToolId=${data.parentToolId}`)
+                updateLastAssistantMessage((last) => {
+                  // Flush current text into segments, then insert think segment
+                  const segments = ensureLastTextSegment(last)
+                  segments.push({ type: 'think', thinkId: data.thinkId })
+                  return {
+                    ...last,
+                    contentSegments: segments,
+                    thinkBlocks: [
+                      ...(last.thinkBlocks ?? []),
+                      {
+                        id: data.thinkId,
+                        parentToolId: data.parentToolId,
+                        parentToolName: data.parentToolName,
+                        content: '',
+                        status: 'running' as const,
+                        startedAt: Date.now(),
+                      },
+                    ],
+                  }
+                })
+                continue
+              }
+
+              if (isAgentTextEvent(data)) {
+                updateLastAssistantMessage((last) => {
+                  const thinkBlocks = (last.thinkBlocks ?? []).map((tb) => {
+                    if (tb.id === data.thinkId) {
+                      if (data.replace) {
+                        return { ...tb, content: data.content }
+                      }
+                      return { ...tb, content: tb.content + data.content }
+                    }
+                    return tb
+                  })
+                  return { ...last, thinkBlocks }
+                })
+                continue
+              }
+
+              if (isThinkEndEvent(data)) {
+                updateLastAssistantMessage((last) => {
+                  const thinkBlocks = (last.thinkBlocks ?? []).map((tb) => {
+                    if (tb.id === data.thinkId) {
+                      return {
+                        ...tb,
+                        status: data.status,
+                        completedAt: Date.now(),
+                      }
+                    }
+                    return tb
+                  })
+                  return { ...last, thinkBlocks }
+                })
+                continue
+              }
+
               const rawToolInvocations = extractToolInvocationsFromChunk(data)
               if (rawToolInvocations.length > 0) {
                 rawToolInvocations.forEach((toolInvocation) => {
@@ -1006,10 +1141,16 @@ export function provideChat() {
                 continue
               }
 
+              // think 块运行时丢弃主文本（子 Agent token 已由 agent_text 事件独立投递到 think 块）
+              // 但如果内容以换行开头（通常是取消/完成提示），仍然应用
+              const hasRunningThink = (messages.value[messages.value.length - 1]?.thinkBlocks ?? [])
+                .some((tb) => tb.status === 'running')
+
               const extracted = extractMessageContent(data)
               if (extracted !== null) {
-                console.log('Extracted content:', extracted)
-                applyAssistantContent(extracted)
+                if (!hasRunningThink || extracted.trim() === '' || extracted.startsWith('\n')) {
+                  applyAssistantContent(extracted)
+                }
               } else {
                 console.log('No content extracted from data')
               }

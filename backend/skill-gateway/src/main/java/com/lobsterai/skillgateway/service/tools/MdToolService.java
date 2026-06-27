@@ -455,7 +455,11 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
+            String downloadUrl = userFile.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+            }
+            result.put("downloadUrl", downloadUrl);
             result.put("filePath", userFile.getFtpPath());
             result.put("fileName", userFile.getOriginalFileName());
             result.put("encoding", encoding);
@@ -671,7 +675,11 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
+            String downloadUrl = userFile.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+            }
+            result.put("downloadUrl", downloadUrl);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", images.size());
             result.put("images", images);
@@ -706,7 +714,11 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
+            String downloadUrl = userFile.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+            }
+            result.put("downloadUrl", downloadUrl);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", headings.size());
             result.put("headings", headings);
@@ -781,7 +793,11 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
+            String downloadUrl = userFile.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+            }
+            result.put("downloadUrl", downloadUrl);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", tables.size());
             result.put("tables", tables);
@@ -844,7 +860,11 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
+            String downloadUrl = userFile.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+            }
+            result.put("downloadUrl", downloadUrl);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", items.size());
             result.put("items", items);
@@ -909,7 +929,11 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
+            String downloadUrl = userFile.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+            }
+            result.put("downloadUrl", downloadUrl);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", tasks.size());
             result.put("tasks", tasks);
@@ -958,7 +982,11 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
+            String downloadUrl = userFile.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+            }
+            result.put("downloadUrl", downloadUrl);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("count", spans.size());
             result.put("spans", spans);
@@ -1001,7 +1029,11 @@ public class MdToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("fileId", userFile.getId());
-            result.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userId));
+            String downloadUrl = userFile.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userId);
+            }
+            result.put("downloadUrl", downloadUrl);
             result.put("fileName", userFile.getOriginalFileName());
             result.put("headingCount", flat.size());
             result.put("toc", toc);

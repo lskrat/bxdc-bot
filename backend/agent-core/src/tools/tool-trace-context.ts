@@ -17,11 +17,43 @@ export interface ToolTraceEvent {
   result?: string;
   executionMode?: string;
   executionLabel?: string;
+  role?: "sub_agent" | "main_agent";
 }
 
+/** Think block start event — frontend creates a collapsible think section for sub-agent output. */
+export interface ThinkStartEvent {
+  type: "think_start";
+  thinkId: string;
+  parentToolId: string;
+  parentToolName: string;
+  displayName: string;
+}
+
+/** Think block text event — streams sub-agent AI text into the think section. */
+export interface AgentTextEvent {
+  type: "agent_text";
+  thinkId: string;
+  role: "sub_agent" | "main_agent";
+  content: string;
+  /** If true, replace the entire think block content; otherwise append (default). */
+  replace?: boolean;
+}
+
+/** Think block end event — marks sub-agent execution complete. */
+export interface ThinkEndEvent {
+  type: "think_end";
+  thinkId: string;
+  parentToolId: string;
+  status: "completed" | "failed";
+}
+
+/** Union type for all SSE events emitted through the trace context. */
+export type SseEvent = ToolTraceEvent | ThinkStartEvent | AgentTextEvent | ThinkEndEvent;
+
 interface ToolTraceContextValue {
-  emit: (event: ToolTraceEvent) => void;
+  emit: (event: SseEvent) => void;
   activeParentToolIds: Map<string, string>;
+  activeThinkIds: Map<string, string>;
 }
 
 const toolTraceContext = new AsyncLocalStorage<ToolTraceContextValue>();
@@ -79,13 +111,28 @@ export function sanitizeToolResultForTrace(text: string): string {
 }
 
 export async function runWithToolTraceContext<T>(
-  emit: (event: ToolTraceEvent) => void,
+  emit: (event: SseEvent) => void,
   work: () => Promise<T>,
 ): Promise<T> {
-  return await toolTraceContext.run({ emit, activeParentToolIds: new Map() }, work);
+  return await toolTraceContext.run({ emit, activeParentToolIds: new Map(), activeThinkIds: new Map() }, work);
 }
 
 export function emitToolTraceEvent(event: ToolTraceEvent): void {
+  toolTraceContext.getStore()?.emit(event);
+}
+
+/** Emit a think_start event to signal the frontend to create a collapsible think block. */
+export function emitThinkStartEvent(event: ThinkStartEvent): void {
+  toolTraceContext.getStore()?.emit(event);
+}
+
+/** Emit a sub-agent text chunk into the active think block. */
+export function emitAgentTextEvent(event: AgentTextEvent): void {
+  toolTraceContext.getStore()?.emit(event);
+}
+
+/** Emit a think_end event to signal the think block is complete. */
+export function emitThinkEndEvent(event: ThinkEndEvent): void {
   toolTraceContext.getStore()?.emit(event);
 }
 
@@ -107,4 +154,17 @@ export function clearActiveParentToolId(toolName: string, toolId?: string): void
 
 export function getActiveParentToolId(toolName: string): string | undefined {
   return toolTraceContext.getStore()?.activeParentToolIds.get(toolName);
+}
+
+export function setActiveThinkId(parentToolId: string, thinkId: string): void {
+  if (!parentToolId || !thinkId) return;
+  toolTraceContext.getStore()?.activeThinkIds.set(parentToolId, thinkId);
+}
+
+export function getActiveThinkId(parentToolId: string): string | undefined {
+  return toolTraceContext.getStore()?.activeThinkIds.get(parentToolId);
+}
+
+export function clearActiveThinkId(parentToolId: string): void {
+  toolTraceContext.getStore()?.activeThinkIds.delete(parentToolId);
 }

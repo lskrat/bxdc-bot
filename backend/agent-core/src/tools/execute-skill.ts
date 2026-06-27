@@ -1,20 +1,26 @@
 /**
  * 技能执行工具模块
- * 
+ *
  * 模块职责：
  * - 根据搜索结果创建子 Agent 并执行特定技能
  * - 子 Agent 加载指定的技能列表进行执行
  * - 支持多步操作，复用子 Agent 实例，保持对话状态
  * - 执行完成后返回结果给主 Agent
  * - 支持流式返回每一步工具调用结果
- * 
+ * - 流式推送子 Agent 的 AI 文本到前端作为 think 块展示
+ *
  * 设计说明：
  * - 接收技能 ID 列表和用户输入
  * - 创建子 Agent 实例并缓存，支持多步复用
  * - 使用流式执行子 Agent，实时返回每步结果
  * - 返回格式化的执行结果给主 Agent
  * - 缓存的子 Agent 有过期时间，自动清理
- * 
+ *
+ * Think 块机制：
+ * - 子 Agent 开始执行时发射 think_start 事件，前端创建可折叠的 think 区域
+ * - 子 Agent 的 AI 文本通过 agent_text 事件流式推送到 think 块中
+ * - 子 Agent 完成时发射 think_end 事件，前端标记 think 块完成并可折叠
+ *
  * @module ExecuteSkill
  * @author Agent Core Team
  * @since 1.0.0
@@ -28,7 +34,13 @@ import { buildStaticSystemPrompt } from "../prompts";
 import { unwrapLangGraphStreamPayload } from "../controller/agent.controller";
 import {
   emitToolTraceEvent,
+  emitThinkStartEvent,
+  emitAgentTextEvent,
+  emitThinkEndEvent,
   getActiveParentToolId,
+  getActiveThinkId,
+  setActiveThinkId,
+  clearActiveThinkId,
   sanitizeToolTraceArguments,
   sanitizeToolResultForTrace,
   type ToolTraceStatus,
@@ -39,6 +51,20 @@ import { interrupt, isGraphInterrupt, INTERRUPT } from "@langchain/langgraph";
 /**
  * 从 payload 中提取中断条目
  */
+function asArray2<T>(value: T | T[] | undefined | null): T[] {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function getMessagesFromPayload(payload: any): any[] {
+  if (!payload || typeof payload !== 'object') return [];
+  return [
+    ...asArray2(payload.agent?.messages),
+    ...asArray2(payload.tools?.messages),
+    ...asArray2(payload.messages),
+  ];
+}
+
 function extractInterruptEntries(payload: unknown): Array<{ value?: unknown }> {
   if (!payload || typeof payload !== 'object') return [];
   const p = payload as Record<string, unknown>;
@@ -97,10 +123,12 @@ setInterval(cleanupExpiredAgents, 60 * 1000);
 
 /**
  * 技能执行工具（内置名：`execute_skill_with_context`）
- * 
+ *
  * 根据指定的技能 ID 列表创建子 Agent，并执行用户任务。
  * 子 Agent 支持多步操作，会自动缓存和复用，保持对话状态。
  * 支持流式返回每一步工具调用结果。
+ *
+ * Think 块：子 Agent 执行期间，AI 文本通过 agent_text 事件流式推送到前端 think 块中展示。
  */
 export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof executeSkillInputSchema> {
   constructor(
@@ -134,6 +162,9 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
         "only pass it without a file id when none is genuinely available.",
       schema: executeSkillInputSchema,
       func: async (args) => {
+        // thinkId / thinkStarted 声明在 try 外部，供 catch 块引用
+        let thinkId = '';
+        let thinkStarted = false;
         try {
           const { skillIds, userInput, continueConversation } = args;
           const cacheKey = getCacheKey(skillIds, userId);
@@ -202,8 +233,37 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
           const parentToolId = getActiveParentToolId('execute_skill_with_context');
           const parentToolName = parentToolId ? 'execute_skill_with_context' : undefined;
 
-          const stream = await agent.stream({ messages });
+          const stream = await agent.stream(
+            { messages },
+            { streamMode: ["updates", "messages"] as any },
+          );
           const iterator = stream[Symbol.asyncIterator]();
+
+          // Think 块：生成唯一 ID，用于关联前后端的 think 生命周期
+          const parentToolIdKey = parentToolId || 'execute_skill_with_context';
+          const existingThinkId = getActiveThinkId(parentToolIdKey);
+          if (existingThinkId) {
+            thinkId = existingThinkId;
+            console.log(`[ThinkBlock] Reusing existing thinkId=${thinkId} for parentToolId=${parentToolIdKey}`);
+          } else {
+            thinkId = `think_${parentToolId || 'exec'}_${Date.now()}`;
+          }
+          thinkStarted = !!existingThinkId;
+          let subAgentTextAccum = '';
+
+          // 仅在没有现有思考块时发射 think_start 事件
+          if (!thinkStarted) {
+            console.log(`[ThinkBlock] Emitting think_start: thinkId=${thinkId}, parentToolId=${parentToolIdKey}`);
+            emitThinkStartEvent({
+              type: 'think_start',
+              thinkId,
+              parentToolId: parentToolIdKey,
+              parentToolName: 'execute_skill_with_context',
+              displayName: '子Agent 执行过程',
+            });
+            thinkStarted = true;
+            setActiveThinkId(parentToolIdKey, thinkId);
+          }
 
           while (true) {
             let raw: any;
@@ -212,25 +272,55 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
               if (result.done) break;
               raw = result.value;
             } catch (error) {
-              // 检测 LangGraph 中断信号，重新抛出以便主 Agent 处理
               if (isGraphInterrupt(error) || (error && typeof error === 'object' && '__interrupt__' in error)) {
                 throw error;
               }
               throw error;
             }
 
+            // 区分 stream mode：["messages"] 是 token 级增量，["nodeName"] 是 updates
+            const isMessagesMode = Array.isArray(raw) && raw.length >= 2 && raw[0] === 'messages';
+
+            if (isMessagesMode) {
+              // ── messages 模式：token 级流式文本 ──
+              const chunks = raw[1];
+              const chunkArray = Array.isArray(chunks) ? chunks : [chunks];
+              for (const chunk of chunkArray) {
+                const cType = chunk._getType?.() ?? chunk.type ?? '';
+                if (cType !== 'ai' && cType !== 'AIMessageChunk' && !String(chunk.constructor?.name ?? '').includes('AIMessage')) continue;
+
+                // 提取 delta：支持 string 和数组格式
+                let delta = '';
+                if (typeof chunk.content === 'string') {
+                  delta = chunk.content;
+                } else if (Array.isArray(chunk.content)) {
+                  delta = chunk.content.map((p: any) => typeof p === 'string' ? p : p?.text ?? '').join('');
+                }
+                if (!delta) continue;
+
+                subAgentTextAccum += delta;
+                console.log(`[ThinkBlock] Token delta: thinkId=${thinkId}, delta_len=${delta.length}, accum=${subAgentTextAccum.length}`);
+                emitAgentTextEvent({
+                  type: 'agent_text',
+                  thinkId,
+                  role: 'sub_agent',
+                  content: delta,
+                });
+              }
+              continue;
+            }
+
+            // ── updates 模式：完整消息（工具调用 / 工具结果 / 中断 / 文本）──
             const payload = unwrapLangGraphStreamPayload(raw);
             lastPayload = payload;
-            
+
             // 检测子 Agent 发送的中断信号
             const interruptEntries = extractInterruptEntries(payload);
             if (interruptEntries.length > 0) {
               const interruptData = interruptEntries[0]?.value;
               if (interruptData && typeof interruptData === 'object') {
-                // 记录中断的 toolCallId，用于后续工具状态事件匹配
                 const pendingInterruptToolCallId = (interruptData as any).toolCallId;
                 if (pendingInterruptToolCallId && typeof pendingInterruptToolCallId === 'string') {
-                  // 将中断的 toolCallId 保存到对应的工具调用记录中
                   const toolName = (interruptData as any).toolName;
                   if (toolName) {
                     const pendingCall = toolCalls.find(tc => tc.toolName === toolName && tc.output === "");
@@ -239,7 +329,6 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
                     }
                   }
                 }
-                // 重新抛出中断信号，让主 Agent 处理
                 throw interrupt({
                   kind: (interruptData as any).kind || 'extended_skill_confirmation',
                   toolName: `subagent_${(interruptData as any).toolName || 'unknown'}`,
@@ -253,11 +342,18 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
                 });
               }
             }
-            
-            const streamMessages = payload?.messages || [];
+
+            // 从 updates 模式 payload 中提取消息（兼容 {agent:{messages:[]}} / {tools:{messages:[]}} / {messages:[]} 三种结构）
+            const streamMessages: any[] = [
+              ...asArray2((payload as any)?.agent?.messages),
+              ...asArray2((payload as any)?.tools?.messages),
+              ...asArray2((payload as any)?.messages),
+            ];
+            console.log(`[ThinkBlock] Sub-agent updates chunk: msgs=${streamMessages.length}, keys=${payload ? Object.keys(payload).join(',') : 'null'}`);
 
             for (const msg of streamMessages) {
               const type = msg._getType?.() ?? (msg as any).type ?? "";
+              console.log(`[ThinkBlock] Sub-agent msg type=${type}, toolCalls=${(msg as any).tool_calls?.length || 0}, contentLen=${typeof msg.content === 'string' ? msg.content.length : 'non-string'}`);
 
               if (type === "ai" || type === "AIMessageChunk") {
                 const calls = (msg as any).tool_calls ?? [];
@@ -308,8 +404,8 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
                 const status: ToolTraceStatus =
                   toolOutput.includes('CANCELLED') || toolOutput.includes('Error') ? 'failed' : 'completed';
 
-                console.log(`[DEBUG] emitToolTraceEvent: toolId=${toolId}, toolName=${toolName}, status=${status}, lastCall?.toolId=${lastCall?.toolId}, toolCallId=${toolCallId}`);
-                
+                console.log(`[DEBUG] emitToolTraceEvent: toolId=${toolId}, toolName=${toolName}, status=${status}`);
+
                 emitToolTraceEvent({
                   type: 'tool_status',
                   toolId,
@@ -327,25 +423,50 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
                 });
               }
 
-              // 子 Agent 的 AI 文本不向前台转发（总结由主 Agent 负责）
-              if ((type === "ai" || type === "AIMessageChunk") && !((msg as any).tool_calls?.length > 0)) {
-                // 中间 AI 文本不输出到前台，避免干扰主 Agent 的总结
+              // 子 Agent 的完整 AI 文本：仅在没有 messages 流式模式时使用（非流式回退）
+              // 如果 messages 模式已推送过文本，这里跳过避免重复
+              if (subAgentTextAccum.length > 0) {
+                // messages 模式已推送，updates 模式跳过文本处理
+              } else if ((type === "ai" || type === "AIMessageChunk")) {
+                const hasToolCalls = ((msg as any).tool_calls?.length > 0);
+                let textContent: string;
+                if (typeof msg.content === 'string' && msg.content.trim()) {
+                  textContent = msg.content;
+                } else if (Array.isArray(msg.content)) {
+                  textContent = msg.content.map((p: any) => typeof p === 'string' ? p : p?.text ?? '').join('').trim();
+                } else if (hasToolCalls) {
+                  const toolNames = (msg as any).tool_calls.map((tc: any) => tc.name || 'unknown').join(', ');
+                  textContent = `🔧 执行工具: ${toolNames}`;
+                } else {
+                  textContent = '';
+                }
+                if (textContent) {
+                  subAgentTextAccum = textContent;
+                  console.log(`[ThinkBlock] Emitting agent_text (updates fallback): thinkId=${thinkId}, len=${textContent.length}`);
+                  emitAgentTextEvent({
+                    type: 'agent_text',
+                    thinkId,
+                    role: 'sub_agent',
+                    content: textContent,
+                    replace: true,
+                  });
+                }
               }
             }
           }
 
-          if (lastPayload?.messages) {
+          const finalMessages = getMessagesFromPayload(lastPayload);
+
+          if (finalMessages.length > 0) {
             subAgentCache.set(cacheKey, {
               agent,
-              messages: lastPayload.messages as BaseMessage[],
+              messages: finalMessages as BaseMessage[],
               createdAt: Date.now(),
               skillIds,
             });
           }
-
-          const finalMessages = lastPayload?.messages || [];
           const lastMessage = finalMessages[finalMessages.length - 1];
-          
+
           if (lastMessage) {
             if (typeof lastMessage.content === "string") {
               output = lastMessage.content;
@@ -369,6 +490,15 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             }
           }
 
+          // 发射 think_end 事件，标记 think 块完成
+          emitThinkEndEvent({
+            type: 'think_end',
+            thinkId,
+            parentToolId: parentToolId || 'execute_skill_with_context',
+            status: 'completed',
+          });
+          clearActiveThinkId(parentToolId || 'execute_skill_with_context');
+
           // 只返回精简结果给主 Agent——详细工具执行过程已通过 tool_status 事件流式推送到前台
           return JSON.stringify({
             status: "SUCCESS",
@@ -379,13 +509,25 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
           });
         } catch (error) {
           // 检测 LangGraph 中断信号，重新抛出以便主 Agent 处理确认请求
+          // 注意：这里不发射 think_end，保持思考块活跃，确认后继续使用同一个思考块
           if (isGraphInterrupt(error) || (error && typeof error === 'object' && '__interrupt__' in error)) {
             throw error;
           }
-          
+
           const errMsg = `Error executing skill: ${error instanceof Error ? error.message : String(error)}`;
+          console.log(`[ThinkBlock] Sub-agent error: ${errMsg}, thinkStarted=${thinkStarted}`);
           try {
             const parentToolId = getActiveParentToolId('execute_skill_with_context');
+            // 发射 think_end 通知前端 think 块失败
+            if (thinkStarted) {
+              emitThinkEndEvent({
+                type: 'think_end',
+                thinkId,
+                parentToolId: parentToolId || 'execute_skill_with_context',
+                status: 'failed',
+              });
+              clearActiveThinkId(parentToolId || 'execute_skill_with_context');
+            }
             emitToolTraceEvent({
               type: 'tool_status',
               toolId: `sub_error_${Date.now()}`,

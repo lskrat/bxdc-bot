@@ -63,8 +63,23 @@ Extension skills marked as requiring confirmation and high-risk SSH commands are
 `;
 
 /**
+ * 策略提示词：技能发现策略
+ *
+ * 强制通过 search_tools 查找技能，禁止凭记忆或历史对话使用技能
+ */
+const skillDiscoveryPolicy = `[Skill discovery]
+When your built-in tools (search_tools, execute_skill_with_context, skill_generator, compute, server_lookup, manage_tasks) cannot directly complete the user's task, you MUST follow this workflow:
+1. First call search_tools with the user's task description as the query to retrieve the current list of available skills.
+2. Extract the "id" fields from the skills array returned by search_tools, and pass them as skillIds to execute_skill_with_context.
+3. Do NOT rely on memory, conversation history, or context to guess skill IDs — the system's skill registry changes over time, and historical information is unreliable.
+4. Do NOT skip search_tools and call execute_skill_with_context directly, even if a skill was used in a previous conversation turn.
+5. If search_tools returns no matching skills, tell the user "No matching skill is available. Consider creating a new skill." Do NOT pick an unrelated skill or fabricate a skill ID.
+
+`;
+
+/**
  * 策略提示词：扩展技能路由策略
- * 
+ *
  * 优先使用扩展技能而非内置工具，规范参数传递方式
  */
 const extendedSkillRoutingPolicy = `[Extended skill routing]
@@ -124,6 +139,7 @@ function buildTasksSummary(tasks: TasksStatusMap): string {
  */
 export const EnglishPrompts: SystemPrompts = {
   agentRolePrompt,
+  skillDiscoveryPolicy,
   skillGeneratorPolicy,
   taskTrackingPolicy,
   confirmationUIPolicy,

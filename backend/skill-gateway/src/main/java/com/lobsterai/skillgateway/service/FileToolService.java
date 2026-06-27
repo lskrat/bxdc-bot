@@ -415,8 +415,12 @@ public class FileToolService {
             item.put("fileSize", uf.getFileSize());
             item.put("fileType", uf.getFileType());
             item.put("uploadTime", uf.getUploadTime() != null ? uf.getUploadTime().toString() : null);
-            // 始终用 ftpConfig 现生成带 token 的 URL（避免历史数据 / 旧 upload 写入没 token 的 downloadUrl）
-            item.put("downloadUrl", ftpConfig.buildDownloadUrl(uf.getId(), uf.getUserId()));
+            // 优先使用数据库中存储的 downloadUrl（已带有效 token），仅当数据库中未存储时才重新生成
+            String downloadUrl = uf.getDownloadUrl();
+            if (downloadUrl == null || downloadUrl.isEmpty()) {
+                downloadUrl = ftpConfig.buildDownloadUrl(uf.getId(), uf.getUserId());
+            }
+            item.put("downloadUrl", downloadUrl);
             item.put("parsed", fileParseService.isParseComplete(uf));
             fileList.add(item);
         }
@@ -454,8 +458,12 @@ public class FileToolService {
         detail.put("fileSize", userFile.getFileSize());
         detail.put("fileType", userFile.getFileType());
         detail.put("uploadTime", userFile.getUploadTime() != null ? userFile.getUploadTime().toString() : null);
-        // 始终用 ftpConfig 现生成带 token 的 URL
-        detail.put("downloadUrl", ftpConfig.buildDownloadUrl(userFile.getId(), userFile.getUserId()));
+        // 优先使用数据库中存储的 downloadUrl（已带有效 token），仅当数据库中未存储时才重新生成
+        String downloadUrl = userFile.getDownloadUrl();
+        if (downloadUrl == null || downloadUrl.isEmpty()) {
+            downloadUrl = ftpConfig.buildDownloadUrl(userFile.getId(), userFile.getUserId());
+        }
+        detail.put("downloadUrl", downloadUrl);
         detail.put("parsed", fileParseService.isParseComplete(userFile));
 
         if (fileParseService.isParseComplete(userFile)) {

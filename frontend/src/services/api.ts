@@ -51,18 +51,41 @@ export async function confirmAction(
   confirmed: boolean,
   adjustedParams?: Record<string, unknown>,
 ): Promise<void> {
-  const response = await fetch(agentUrl('/agent/confirm'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, toolCallId, confirmed, adjustedParams }),
-  })
+  const url = agentUrl('/agent/confirm');
+  console.log(`[DEBUG-confirmation] confirmAction fetch: url=${url}, sessionId=${sessionId}, toolCallId=${toolCallId}, confirmed=${confirmed}`);
+  console.log(`[DEBUG-confirmation] agentBaseUrl: ${import.meta.env.VITE_AGENT_URL}`);
+  console.log(`[DEBUG-confirmation] apiBaseUrl: ${import.meta.env.VITE_API_URL}`);
+  
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    console.error(`[DEBUG-confirmation] confirmAction TIMEOUT: url=${url}`);
+    abortController.abort();
+  }, 10000);
 
-  if (!response.ok) {
-    const detail =
-      response.status === 404
-        ? 'No pending confirmation (session may have expired).'
-        : `Confirm request failed (${response.status})`
-    throw new Error(detail)
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, toolCallId, confirmed, adjustedParams }),
+      signal: abortController.signal,
+    })
+
+    clearTimeout(timeoutId);
+    console.log(`[DEBUG-confirmation] confirmAction response: status=${response.status}, ok=${response.ok}, url=${response.url}`);
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error(`[DEBUG-confirmation] confirmAction response body: ${text}`);
+      const detail =
+        response.status === 404
+          ? 'No pending confirmation (session may have expired).'
+          : `Confirm request failed (${response.status})`
+      throw new Error(detail)
+    }
+  } catch (e) {
+    clearTimeout(timeoutId);
+    console.error(`[DEBUG-confirmation] confirmAction ERROR:`, e);
+    throw e;
   }
 }
 

@@ -63,8 +63,23 @@ const confirmationUIPolicy = `[确认策略]
 `;
 
 /**
+ * 策略提示词：技能发现策略
+ *
+ * 强制通过 search_tools 查找技能，禁止凭记忆或历史对话使用技能
+ */
+const skillDiscoveryPolicy = `[技能发现策略]
+当你自身内置工具（search_tools、execute_skill_with_context、skill_generator、compute、server_lookup、manage_tasks）无法直接完成用户任务时，必须严格遵循以下流程：
+1. 先调用 search_tools，用用户的任务描述作为 query 参数去检索当前系统中可用的技能列表。
+2. 从 search_tools 返回的 skills 数组中提取 id 字段，作为 skillIds 传给 execute_skill_with_context。
+3. 禁止凭记忆、历史对话中的技能信息或上下文推测 skillId——系统中的技能随时可能被增删改，历史信息不可靠。
+4. 禁止跳过 search_tools 直接调用 execute_skill_with_context，即使历史对话中曾使用过某个技能。
+5. 如果 search_tools 返回的技能列表中没有能匹配用户需求的技能，应如实告知用户"当前没有对应技能，建议创建新技能"，而不是随意选一个不相关的技能或编造 skillId。
+
+`;
+
+/**
  * 策略提示词：扩展技能路由策略
- * 
+ *
  * 优先使用扩展技能而非内置工具，规范参数传递方式
  */
 const extendedSkillRoutingPolicy = `[扩展技能路由策略]
@@ -83,8 +98,8 @@ const extendedSkillRoutingPolicy = `[扩展技能路由策略]
  */
 const downloadUrlPolicy = `[下载链接策略]
 涉及文件下载链接（downloadUrl）和文件 ID（fileId）时，你必须严格遵守：
-1. downloadUrl 和 fileId 只能逐字（原样照抄）使用本轮对话中工具实际返回结果里的值。
-2. 严禁自行构造、拼接、递增、推测或猜测任何 downloadUrl 或 fileId（例如基于上文 fileId=80 就编造 fileId=81，或自己拼出 /api/files/download/xx?token=xx 这类链接）——这类编造的链接 token 无效、文件不存在，用户点击必然失败。
+1. downloadUrl 和 fileId 只能逐字（原样照抄）使用本轮对话中工具实际返回结果里的值。链接中的主机名、端口号、路径、token 参数等每一个字符都必须完全一致，不允许做任何修改（包括端口号 18080 不能写成 180、token 值必须原样保留）。
+2. 严禁自行构造、拼接、递增、推测或猜测任何 downloadUrl 或 fileId（例如基于上文 fileId=80 就编造 fileId=81，或自己拼出 /api/files/download/xx?token=xx 这类链接，或将 18080 端口写成 180）——这类编造的链接 token 无效、文件不存在，用户点击必然失败。
 3. 如果本轮没有工具返回可用的 downloadUrl/fileId，而用户需要下载，应先调用相应工具（如 file_list、file_detail 或重新生成文件的工具）获取真实链接；若仍无法获取，应如实告知用户"当前没有可用的下载链接/该文件不存在"，而不是编造一个。
 4. 记忆或历史消息中出现过的旧 downloadUrl/fileId 不能直接当作本轮结果使用——需要时重新调用工具获取最新真实值。
 
@@ -134,6 +149,7 @@ function buildTasksSummary(tasks: TasksStatusMap): string {
  */
 export const ChinesePrompts: SystemPrompts = {
   agentRolePrompt,
+  skillDiscoveryPolicy,
   skillGeneratorPolicy,
   taskTrackingPolicy,
   confirmationUIPolicy,

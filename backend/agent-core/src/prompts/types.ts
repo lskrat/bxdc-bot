@@ -43,15 +43,22 @@ export interface SystemPrompts {
   agentRolePrompt: string;
 
   /**
+   * 策略提示词：技能发现策略
+   *
+   * 强制通过 search_tools 查找技能，禁止凭记忆或历史对话使用技能
+   */
+  skillDiscoveryPolicy: string;
+
+  /**
    * 策略提示词：技能生成策略
-   * 
+   *
    * 限制 skill_generator 工具的使用条件，避免重复创建技能
    */
   skillGeneratorPolicy: string;
 
   /**
    * 策略提示词：任务跟踪策略
-   * 
+   *
    * 指导 Agent 在多任务场景下跟踪和管理子任务状态
    */
   taskTrackingPolicy: string;

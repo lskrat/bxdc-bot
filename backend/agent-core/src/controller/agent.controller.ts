@@ -51,10 +51,13 @@ import { LoggerService } from '../utils/logger.service';
 import { describeGatewayExtendedTool } from '../tools/java-skills';
 import {
   clearActiveParentToolId,
+  getActiveParentToolId,
   runWithToolTraceContext,
   sanitizeToolTraceArguments,
   sanitizeToolResultForTrace,
   setActiveParentToolId,
+  getActiveThinkId,
+  emitThinkEndEvent,
   type ToolTraceEvent,
 } from '../tools/tool-trace-context';
 import { pickMergedLlm } from '../utils/llm-merge';
@@ -781,13 +784,19 @@ export class AgentController {
 
           outer: while (true) {
             const { value: raw, done } = await iterator.next();
-            if (done) break;
+            if (done) {
+              break;
+            }
 
             // Token 级流式：messages 模式 chunk 携带 LLM 逐 token 内容
             const tokenText = extractMessageStreamToken(raw);
             if (tokenText.length > 0) {
-              messagesModeAccum += tokenText;
-              subject.next({ data: JSON.stringify({ role: 'assistant', content: tokenText }) });
+              // 若 execute_skill_with_context 正在运行，跳过主 token 发射
+              // （子 Agent token 已通过 agent_text 事件独立推送）
+              if (!getActiveParentToolId('execute_skill_with_context')) {
+                messagesModeAccum += tokenText;
+                subject.next({ data: JSON.stringify({ role: 'assistant', content: tokenText }) });
+              }
               continue;
             }
 
@@ -826,6 +835,7 @@ export class AgentController {
 
                 const confirmedResult = await new Promise<{ confirmed: boolean; adjustedParams?: Record<string, unknown> }>((resolve) => {
                   const key = confirmationKey(sessionId, v.toolCallId);
+                  console.log(`[DEBUG-confirmation] Creating pending confirmation for key=${key}`);
                   const timer = setTimeout(() => {
                     pendingConfirmations.delete(key);
                     console.log(`[Confirmation] Timeout for ${key}, auto-cancelling`);
@@ -840,13 +850,17 @@ export class AgentController {
                     timer,
                   });
                 });
+                console.log(`[DEBUG-confirmation] Promise resolved, confirmed=${confirmedResult.confirmed}, adjustedParams=${JSON.stringify(confirmedResult.adjustedParams)}`);
 
                 if (!confirmedResult.confirmed) {
+                  console.log(`[DEBUG-confirmation] ==================== USER CANCELLED ====================`);
+                  console.log(`[DEBUG-confirmation] User cancelled, creating cancelResumeStream`);
                   const ac = new AbortController();
                   const cancelResumeStream = await agent.stream(
                     new Command({ resume: { confirmed: false } }),
                     { configurable: { thread_id: sessionId }, signal: ac.signal, streamMode: ["updates", "messages"] as any },
                   );
+                  console.log(`[DEBUG-confirmation] cancelResumeStream created, getting iterator`);
                   let cancelIter = cancelResumeStream[Symbol.asyncIterator]();
                   const MAX_CANCEL_CHUNKS = 24;
                   for (let step = 0; step < MAX_CANCEL_CHUNKS; step += 1) {
@@ -872,10 +886,20 @@ export class AgentController {
                       subject.next({ data: JSON.stringify(forward) });
                       this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId, allowedDownloadUrls);
                       if (typeof forward === 'object') {
-                        const lastAssistantMessage = getChunkMessages(forward)
-                          .filter((message) => isAssistantMessage(message))
-                          .at(-1);
-                        const nextContent = getMessageContent(lastAssistantMessage);
+                        const forwardObj = forward as Record<string, unknown>;
+                        let nextContent: string | null = null;
+
+                        if (typeof forwardObj.content === 'string') {
+                          nextContent = forwardObj.content;
+                        }
+
+                        if (!nextContent) {
+                          const lastAssistantMessage = getChunkMessages(forward)
+                            .filter((message) => isAssistantMessage(message))
+                            .at(-1);
+                          nextContent = getMessageContent(lastAssistantMessage);
+                        }
+
                         if (nextContent && nextContent.length > 0) {
                           const newContent = fullAssistantResponse.length > 0 && nextContent.startsWith(fullAssistantResponse)
                             ? nextContent.slice(fullAssistantResponse.length)
@@ -895,16 +919,36 @@ export class AgentController {
                   if (!ac.signal.aborted) {
                     ac.abort();
                   }
-                  fullAssistantResponse = `已取消执行「${skillName}」。`;
-                  subject.next({ data: JSON.stringify({ role: 'assistant', content: fullAssistantResponse }) });
+                  const parentToolId = getActiveParentToolId('execute_skill_with_context');
+                  const activeThinkId = getActiveThinkId(parentToolId || 'execute_skill_with_context');
+                  if (activeThinkId) {
+                    emitThinkEndEvent({
+                      type: 'think_end',
+                      thinkId: activeThinkId,
+                      parentToolId: parentToolId || v.toolCallId,
+                      status: 'completed',
+                    });
+                  }
+                  const cancelMessage = `已取消执行「${skillName}」。`;
+                  if (fullAssistantResponse.length > 0 && !fullAssistantResponse.endsWith(cancelMessage)) {
+                    fullAssistantResponse = fullAssistantResponse + '\n\n' + cancelMessage;
+                    subject.next({ data: JSON.stringify({ role: 'assistant', content: '\n\n' + cancelMessage }) });
+                  } else {
+                    fullAssistantResponse = cancelMessage;
+                    subject.next({ data: JSON.stringify({ role: 'assistant', content: cancelMessage }) });
+                  }
+                  console.log(`[DEBUG-confirmation] User cancelled, breaking outer loop`);
                   break outer;
                 }
 
+                console.log(`[DEBUG-confirmation] User confirmed, creating resumeStream with adjustedParams=${JSON.stringify(confirmedResult.adjustedParams)}`);
                 const resumeStream = await agent.stream(
                   new Command({ resume: { confirmed: true, adjustedParams: confirmedResult.adjustedParams } }),
                   { ...graphConfig, recursionLimit: 50 },
                 );
+                console.log(`[DEBUG-confirmation] resumeStream created, replacing iterator`);
                 iterator = resumeStream[Symbol.asyncIterator]();
+                console.log(`[DEBUG-confirmation] continue outer loop`);
                 continue outer;
               }
             }
@@ -976,8 +1020,6 @@ export class AgentController {
             if (guarded.changed) {
               console.warn(`[DownloadGuard] Stripped fabricated download link(s) from response. session=${sessionId}`);
               fullAssistantResponse = guarded.text;
-              // 发整段修正覆盖（replace=true 提示前端替换已渲染内容）
-              subject.next({ data: JSON.stringify({ role: 'assistant', content: guarded.text, replace: true }) });
             }
           }
 

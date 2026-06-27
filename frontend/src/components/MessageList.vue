@@ -24,6 +24,7 @@ const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
 const downloadLoading = ref(false)
+const expandedThinkBlockKeys = ref(new Set<string>())
 
 // Scroll-to-top pagination for conversation history
 const messageListRef = ref<HTMLElement | null>(null)
@@ -274,35 +275,9 @@ function rewriteDownloadAnchors(root: Element): void {
   for (const a of anchors) {
     const href = a.getAttribute('href') || ''
     if (!/\/api\/files\/download\/\d+/.test(href)) continue
-    // target 每次都删（幂等）：渲染器可能在节点插入后又补加 target，
-    // 不能因为"已处理过"就跳过删除，否则新加的 target 残留导致开新页签。
+    // 走浏览器原生下载，只去掉 target=_blank
     if (a.hasAttribute('target')) a.removeAttribute('target')
-    // click 监听只绑一次（用标记防重复绑定）
-    if (a.dataset.dlRewritten !== '1') {
-      a.dataset.dlRewritten = '1'
-      a.addEventListener('click', onDownloadAnchorClick, true)
-    }
   }
-}
-
-/** 下载链接点击处理：阻止默认跳转，走 blob 下载。Shadow DOM 兼容。 */
-function onDownloadAnchorClick(e: MouseEvent): void {
-  if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
-  const path = e.composedPath ? e.composedPath() : [e.currentTarget as Element]
-  let href = ''
-  for (const node of path) {
-    if (node && (node as Element).tagName === 'A') {
-      const a = node as HTMLAnchorElement
-      href = a.getAttribute('href') || a.href || ''
-      if (href) break
-    }
-  }
-  if (!href) return
-  const m = href.match(/\/api\/files\/download\/(\d+)/)
-  if (!m) return
-  e.preventDefault()
-  e.stopImmediatePropagation()
-  void downloadFileById(Number(m[1]))
 }
 
 /**
@@ -330,24 +305,8 @@ function handleDownloadLinkCapture(e: MouseEvent): void {
   if (!href) return
   const m = href.match(/\/api\/files\/download\/(\d+)/)
   if (!m) return // 非文件下载链接（普通外链）→ 不干预，正常打开
-  e.preventDefault()
-  e.stopImmediatePropagation()
-  void downloadFileById(Number(m[1]))
-}
-
-/**
- * 复用文件管理页 fileService.downloadFile，走 blob 下载（无新页签）。
- */
-async function downloadFileById(fileId: number): Promise<void> {
-  if (downloadLoading.value) return
-  downloadLoading.value = true
-  try {
-    await fileService.downloadFile(fileId)
-  } catch (e: any) {
-    MessagePlugin.error(e?.message || '下载失败')
-  } finally {
-    downloadLoading.value = false
-  }
+  // 走浏览器原生下载（Content-Disposition: attachment），不再用 fetch+blob 拦截
+  return
 }
 
 function formatSize(bytes?: number): string {
@@ -422,32 +381,51 @@ interface BlockState {
   shouldExpand: boolean
   toolCount: number
   pendingCount: number
+  thinkBlockCount: number
 }
 
 function getMessageBlockState(item: any, streaming: boolean = false): BlockState {
   const tools = (item.toolInvocations ?? []) as ToolInvocation[]
   const confs = (item.confirmations ?? []) as ConfirmationRequest[]
+  const thinkBlocks = (item.thinkBlocks ?? [])
   const toolCount = tools.length
   const pendingCount = confs.filter((c: ConfirmationRequest) => c.status === 'pending').length
   const hasRunning = tools.some((t: ToolInvocation) => t.status === 'running')
+    || thinkBlocks.some((tb: any) => tb.status === 'running')
   const hasPending = pendingCount > 0
-  const hasAny = toolCount > 0 || confs.length > 0
+  const hasThinkBlocks = thinkBlocks.length > 0
+  const hasAny = toolCount > 0 || confs.length > 0 || hasThinkBlocks
 
-  // 展开优先级：pending 强制展开 > 手动覆盖 > streaming/运行中 > 默认收起
-  // streaming：SSE 还在推送（isThinking && item.isLast），tool 逐个到达间隙不会有 running 的 tool，
-  // 但保持展开避免闪烁
+  // 展开优先级：pending 强制展开 > 手动覆盖 > streaming/运行中 > 有think块 > 默认收起
   const manualOverride = manualOverrideExpanded[item.id]
   let shouldExpand: boolean
   if (hasPending) {
     shouldExpand = true
   } else if (manualOverride !== undefined) {
     shouldExpand = manualOverride
-  } else if (hasRunning || streaming) {
+  } else if (hasRunning || streaming || hasThinkBlocks) {
     shouldExpand = true
   } else {
     shouldExpand = false
   }
-  return { hasAny, hasPending, hasRunning, shouldExpand, toolCount, pendingCount }
+  return { hasAny, hasPending, hasRunning, shouldExpand, toolCount, pendingCount, thinkBlockCount: thinkBlocks.length }
+}
+
+// ── Think block 折叠控制 ──
+function isThinkBlockExpanded(thinkBlockId: string, status: string): boolean {
+  if (status === 'running') return true
+  return expandedThinkBlockKeys.value.has(thinkBlockId)
+}
+
+function toggleThinkBlockExpansion(thinkBlockId: string, status: string) {
+  if (status === 'running') return
+  const next = new Set(expandedThinkBlockKeys.value)
+  if (next.has(thinkBlockId)) {
+    next.delete(thinkBlockId)
+  } else {
+    next.add(thinkBlockId)
+  }
+  expandedThinkBlockKeys.value = next
 }
 
 function toggleBlockExpansion(itemId: string, hasPending: boolean) {
@@ -464,6 +442,9 @@ function getBlockLabel(item: any): string {
   const parts: string[] = []
   if (state.toolCount > 0) {
     parts.push(`${state.toolCount} 次工具`)
+  }
+  if (state.thinkBlockCount > 0) {
+    parts.push(`${state.thinkBlockCount} 段思考`)
   }
   if (state.pendingCount > 0) {
     parts.push(`${state.pendingCount} 项待确认`)
@@ -802,7 +783,11 @@ function normalizeAdjustedParams(
   return out
 }
 
-function handleConfirmation(toolCallId: string, confirmed: boolean) {
+function handleConfirmation(conf: ConfirmationRequest, confirmed: boolean) {
+  const toolCallId = conf.toolCallId;
+  const sessionId = conf.sessionId;
+  console.log(`[DEBUG-confirmation] handleConfirmation called: toolCallId=${toolCallId}, confirmed=${confirmed}, sessionId=${sessionId}`);
+  
   if (confirmed) {
     const formState = formStates[toolCallId]
     if (formState) {
@@ -826,11 +811,11 @@ function handleConfirmation(toolCallId: string, confirmed: boolean) {
         })
       }
       updateConfirmationArguments(toolCallId, adjustedParams)
-      confirmSkillAction(toolCallId, true, adjustedParams)
+      confirmSkillAction(toolCallId, sessionId, true, adjustedParams)
       return
     }
   }
-  confirmSkillAction(toolCallId, confirmed)
+  confirmSkillAction(toolCallId, sessionId, confirmed)
 }
 
 function formatConfirmationArguments(args?: unknown): string {
@@ -893,6 +878,8 @@ const chatItems = computed(() =>
     confirmations: message.confirmations ?? [],
     toolInvocations: message.toolInvocations ?? [],
     llmLogs: message.llmLogs ?? [],
+    thinkBlocks: (message as any).thinkBlocks ?? [],
+    contentSegments: (message as any).contentSegments,
     sessionId: message.sessionId,
     showThinking: message.role === 'assistant' && isThinking.value && index === list.length - 1,
     isLast: index === list.length - 1,
@@ -1053,6 +1040,25 @@ async function copyContent(text: string) {
               :tool-invocations="item.toolInvocations"
               @open-log="openLogViewer"
             />
+            <!-- 内嵌段落：文字与 think 块按顺序穿插 -->
+            <template v-else-if="item.role === 'assistant' && item.contentSegments && item.contentSegments.length > 0">
+              <template v-for="(seg, si) in item.contentSegments" :key="si">
+                <TChatContent v-if="seg.type === 'text'" role="assistant" :content="{ type: 'markdown', data: seg.text }" />
+                <div v-else-if="seg.type === 'think'" class="think-block think-block--inline" :class="`think-block--${item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status || 'completed'}`">
+                  <div class="think-block-header" @click="toggleThinkBlockExpansion(seg.thinkId, item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status || 'completed')">
+                    <span class="think-block-arrow">{{ isThinkBlockExpanded(seg.thinkId, item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status || 'completed') ? '▾' : '▸' }}</span>
+                    <span class="think-block-label">思考</span>
+                    <span v-if="item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status === 'running'" class="think-block-status think-block-status--running">running</span>
+                    <span v-else-if="item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status === 'completed'" class="think-block-status">done</span>
+                    <span v-else class="think-block-status think-block-status--failed">failed</span>
+                  </div>
+                  <div v-show="isThinkBlockExpanded(seg.thinkId, item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status || 'completed')" class="think-block-body">
+                    <TChatContent v-if="item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.content" role="assistant" :content="{ type: 'markdown', data: item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.content }" />
+                    <div v-else class="think-block-empty">等待子Agent输出...</div>
+                  </div>
+                </div>
+              </template>
+            </template>
             <TChatContent
               v-else
               :role="item.role"
@@ -1066,6 +1072,7 @@ async function copyContent(text: string) {
               v-if="item.role === 'assistant' && isThinking && item.isLast && item.rawContent && item.source !== 'ASYNC_TASK_RESULT' && item.source !== 'BXDCBOT_RUN_RESULT'"
               class="typewriter-cursor"
             />
+
           </div>
 
           <div
@@ -1121,8 +1128,8 @@ async function copyContent(text: string) {
               </template>
             </div>
             <div v-if="conf.status === 'pending'" class="confirmation-actions">
-              <t-button theme="default" variant="outline" @click="handleConfirmation(conf.toolCallId, false)">取消</t-button>
-              <t-button theme="primary" @click="handleConfirmation(conf.toolCallId, true)">确认执行</t-button>
+              <t-button theme="default" variant="outline" @click="handleConfirmation(conf, false)">取消</t-button>
+              <t-button theme="primary" @click="handleConfirmation(conf, true)">确认执行</t-button>
             </div>
             <div v-else class="confirmation-status-badge">
               <span
@@ -1250,6 +1257,7 @@ async function copyContent(text: string) {
                   </div>
                 </div>
               </div>
+
             </div>
           </div>
             </div>
@@ -1707,6 +1715,103 @@ async function copyContent(text: string) {
   width: 100%;
   max-width: 520px;
 }
+
+/* ── Think block 样式 ── */
+
+/* Standalone think blocks (kept for backward compat) */
+.think-blocks-standalone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+/* Inline think block — interspersed in text flow */
+.think-block--inline {
+  margin: 10px 0;
+}
+
+.tool-think-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--td-component-stroke);
+  width: 100%;
+}
+
+.think-block {
+  border: 1px solid var(--td-component-stroke);
+  border-radius: var(--td-radius-medium);
+  overflow: hidden;
+  background: var(--td-bg-color-secondarycontainer);
+  margin: 4px 0;
+  display: inline-block;
+  min-width: 260px;
+  max-width: 100%;
+}
+
+.think-block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  cursor: pointer;
+  user-select: none;
+  background: var(--td-bg-color-secondarycontainer);
+}
+
+.think-block-header:hover {
+  background: var(--td-bg-color-container-hover);
+}
+
+.think-block-arrow {
+  font-size: 10px;
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.think-block-label {
+  font-weight: 400;
+  color: var(--td-text-color-secondary);
+  flex: 1;
+}
+
+.think-block-status {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+}
+
+.think-block-status--running {
+  color: var(--td-brand-color);
+}
+
+.think-block-status--failed {
+  color: var(--td-error-color);
+}
+
+.think-block-body {
+  padding: 4px 12px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.think-block-body :deep(*) {
+  font-size: 11px !important;
+  color: var(--td-text-color-placeholder) !important;
+  line-height: 1.5 !important;
+}
+
+.think-block-empty {
+  color: var(--td-text-color-placeholder);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+/* inline think block inherits base styles */
 
 .tool-status-main {
   display: inline-flex;
