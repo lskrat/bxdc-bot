@@ -70,8 +70,8 @@ public class FileToolSeeder implements ApplicationRunner {
         rollbackWordOpsIntegration();
 
         // ===== TXT/MD 操作（5.4）=====
-        seedFileOperate("txt_read", "读取 TXT/MD 文本文件（支持指定编码、行范围）", txtReadSchema());
-        seedFileOperate("txt_write", "向 TXT/MD 文本文件写入内容：① 覆盖/追加已有文件（必传 fileId/fileRef）② 创建全新文件（createNew=true + originalFileName，可不传 fileId），生成的新文件通过 downloadUrl 提供下载", txtWriteSchema());
+        seedFileOperate("txt_read", "读取 TXT 文本文件（支持指定编码、行范围）", txtReadSchema());
+        seedFileOperate("txt_write", "向 TXT 文本文件写入内容：① 覆盖/追加已有文件（必传 fileId/fileRef）② 创建全新文件（createNew=true + originalFileName，可不传 fileId），生成的新文件通过 downloadUrl 提供下载", txtWriteSchema());
         seedFileOperate("txt_keyword_lines", "提取包含关键词的所有行（可选上下文行）", txtKeywordLinesSchema());
         seedFileOperate("txt_regex", "用正则表达式匹配文本行，返回捕获组", txtRegexSchema());
         seedFileOperate("txt_line_range", "提取指定行范围（1-based）", txtLineRangeSchema());
@@ -84,9 +84,9 @@ public class FileToolSeeder implements ApplicationRunner {
         // ===== MD 扩展操作（5.5 / 模块四 §4）=====
         seedFileOperate("md_init_temp", "初始化 Markdown 临时文件：根据源文件创建临时文件副本，后续所有 md_read/md_write/md_filter_section 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",
                 fileRefSchema());
-        seedFileOperate("md_read", "读取 Markdown 文件全文内容。返回 fileId、downloadUrl、filePath、content（全文）、totalChars、totalLines。支持 maxChars 参数限制返回字符数。",
+        seedFileOperate("md_read", "读取 Markdown(.md) 文件全文内容。这是 Markdown 文件的专用读取工具，支持 .md 文件，返回 fileId、downloadUrl、filePath、content（全文 Markdown）、totalChars、totalLines。支持 maxChars 参数限制返回字符数。处理 .md 文件时请使用此工具而非 txt_read。",
                 mdReadSchema());
-        seedFileOperate("md_write", "创建或覆盖 Markdown 文件。两种场景：1) 传入 fileId 时在临时文件上覆盖写入内容（fileId 不变，结果在原文件就地覆盖）；2) 不传 fileId 时创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新 fileId 供后续操作使用。返回 fileId、downloadUrl、filePath、lineCount、totalChars。需提供 content（Markdown 文本内容，必填）。",
+        seedFileOperate("md_write", "写入/创建 Markdown(.md) 文件。这是 Markdown 文件的专用写入工具，支持两种场景：1) 传入 fileRef 时在临时文件上覆盖写入 Markdown 内容（fileId 不变，结果在原文件就地覆盖）；2) 不传 fileRef 时创建全新 .md 文件，自动上传到 FTP 并插入 userfile 表，返回新 fileId 供后续操作使用。返回 fileId、downloadUrl、filePath、lineCount、totalChars。需提供 content（Markdown 文本内容，必填）。处理 .md 文件的写入操作时请使用此工具而非 txt_write。",
                 mdWriteSchema());
         seedFileOperate("md_images", "提取 Markdown 文件所有图片引用（内联 / 引用式）");
         seedFileOperate("md_headings", "提取 Markdown 文件全层级标题（ATX + Setext）");
