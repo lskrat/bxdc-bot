@@ -379,8 +379,15 @@ function handleDownloadLinkCapture(e: MouseEvent): void {
   if (!href) return
   const m = href.match(/\/api\/files\/download\/(\d+)/)
   if (!m) return // 非文件下载链接（普通外链）→ 不干预，正常打开
-  // 走浏览器原生下载（Content-Disposition: attachment），不再用 fetch+blob 拦截
-  return
+  // 文件下载链接：preventDefault 阻止浏览器导航，用 blob 下载，不离开当前页面
+  e.preventDefault()
+  e.stopPropagation()
+  const fileId = parseInt(m[1]!, 10)
+  if (!isNaN(fileId)) {
+    fileService.downloadFile(fileId).catch((err: any) => {
+      MessagePlugin.error(err?.message || '下载失败')
+    })
+  }
 }
 
 function formatSize(bytes?: number): string {
