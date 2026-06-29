@@ -11,6 +11,19 @@ interface BackendFileItem {
   uploadTime: string | null
 }
 
+/** GET /api/files/{id} 返回的完整文件信息 */
+export interface FileDetail {
+  fileId: number
+  fileName: string
+  fileType: string
+  size: number
+  uploadTime: string | null
+  downloadUrl: string
+  status: string
+  /** 解析后的 JSON 摘要（解析完成时填充） */
+  parsedSummary?: string
+}
+
 export const fileService = {
   async listFiles(): Promise<UserFileRecord[]> {
     const res = await fetch(apiUrl('/api/files'), {
@@ -27,6 +40,15 @@ export const fileService = {
       fileType: f.fileType,
       uploadTime: f.uploadTime || '',
     }))
+  },
+
+  /** 获取单个文件详情（含 parsedSummary） */
+  async getFileDetail(id: number): Promise<FileDetail> {
+    const res = await fetch(apiUrl(`/api/files/${id}`), {
+      headers: { 'X-User-Id': userId() || '' }
+    })
+    if (!res.ok) throw new Error(`获取文件详情失败: ${res.status}`)
+    return res.json()
   },
 
   async downloadFile(id: number): Promise<void> {

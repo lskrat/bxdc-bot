@@ -7,6 +7,8 @@ import { useChat } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { useConversations } from '../composables/useConversations'
 import { useFileUpload } from '../composables/useFileUpload'
+import { fileService } from '../services/fileService'
+import { apiUrl } from '../services/config'
 import { FILE_INPUT_ACCEPT, FILE_TYPE_ICONS, FILE_TYPE_LABELS } from '../types/fileUpload'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
 
@@ -15,15 +17,235 @@ const { currentUser } = useUser()
 const { currentConversationId } = useConversations()
 const fileUpload = useFileUpload()
 
-// 会话切换时：① 同步 conversationId 给 useFileUpload（addFiles 自动标记），② 不 clearFiles（切回原会话仍可见）
+// 会话切换时：同步 conversationId + 清空文件（每个会话独立选择，首次挂载不清空）
+let _watchSessionInitial = true
 watch(currentConversationId, (cid) => {
   fileUpload.setConversationId(cid ?? null)
+  if (!_watchSessionInitial) {
+    fileUpload.clearFiles()
+  }
+  _watchSessionInitial = false
 }, { immediate: true })
 const input = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
 /** 等待解析时的 loading 状态（spinner） */
 const isWaitingForParse = ref(false)
+
+// ========== 引用文件（从 enabled_files 中选择） ==========
+
+interface EnabledFileItem {
+  id: number
+  fileName: string
+  fileType: string
+  fileSize: number
+}
+
+/** 「+」按钮菜单可见状态 */
+const showAttachMenu = ref(false)
+/** 引用文件弹窗可见 */
+const showRefFilePopup = ref(false)
+/** 当前会话的 enabled_files 文件列表 */
+const refFileList = ref<EnabledFileItem[]>([])
+/** 正在加载文件列表 */
+const isLoadingRefFiles = ref(false)
+/** 加载/获取文件列表时的错误信息 */
+const refFileError = ref<string | null>(null)
+
+/** 点击外部关闭「+」菜单 */
+function onDocumentClickForAttachMenu(e: MouseEvent) {
+  if (!showAttachMenu.value) return
+  const target = e.target as HTMLElement | null
+  if (target && target.closest('.attach-menu-container')) return
+  showAttachMenu.value = false
+}
+onMounted(() => document.addEventListener('click', onDocumentClickForAttachMenu))
+onBeforeUnmount(() => document.removeEventListener('click', onDocumentClickForAttachMenu))
+
+/** 「+」菜单 → 上传新文件 */
+function onAttachMenuUpload() {
+  showAttachMenu.value = false
+  triggerFilePicker()
+}
+
+/** 「+」菜单 → 引用已启用文件 */
+function onAttachMenuRefFile() {
+  showAttachMenu.value = false
+  openRefFilePicker()
+}
+
+/** 打开引用文件弹窗：获取当前会话的 enabled_files 列表 */
+async function openRefFilePicker() {
+  const cid = currentConversationId.value
+  if (!cid) {
+    MessagePlugin.warning('请先选择一个会话')
+    return
+  }
+  showRefFilePopup.value = true
+  isLoadingRefFiles.value = true
+  refFileError.value = null
+  try {
+    // 1. 获取会话的 enabled_files
+    const headers: Record<string, string> = {}
+    if (currentUser.value?.id) headers['X-User-Id'] = String(currentUser.value.id)
+    const convRes = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(cid)}`), { headers })
+    if (!convRes.ok) throw new Error('无法获取会话信息')
+    const convData = await convRes.json()
+    const raw: string | null = convData?.conversation?.enabled_files ?? null
+    const enabledIds: number[] = raw && raw !== 'null' ? JSON.parse(raw) : []
+
+    if (enabledIds.length === 0) {
+      refFileList.value = []
+      return
+    }
+
+    // 2. 获取全量文件列表，按 enabled_ids 过滤
+    const allFiles = await fileService.listFiles()
+    const idSet = new Set(enabledIds)
+    refFileList.value = allFiles
+      .filter(f => idSet.has(f.id))
+      .map(f => ({ id: f.id, fileName: f.originalFileName || f.fileName, fileType: f.fileType, fileSize: f.fileSize }))
+  } catch (e: any) {
+    refFileError.value = e.message || '加载文件列表失败'
+    refFileList.value = []
+  } finally {
+    isLoadingRefFiles.value = false
+  }
+}
+
+/** 弹窗内暂存的多选文件 ID */
+const pendingRefIds = ref<Set<number>>(new Set())
+
+/** 弹窗内点击文件：切换选中状态 */
+function toggleRefFileSelection(file: EnabledFileItem) {
+  const s = new Set(pendingRefIds.value)
+  if (s.has(file.id)) {
+    s.delete(file.id)
+  } else {
+    s.add(file.id)
+  }
+  pendingRefIds.value = s
+}
+
+/** 确认引用选中文件：将每个文件注入 uploadedFiles.txt，让现有文件列表 UI 统一展示 */
+async function confirmRefFileSelections() {
+  if (pendingRefIds.value.size === 0) return
+  // 安全兜底：排除已通过「引用」加入的重复文件
+  const ids = Array.from(pendingRefIds.value).filter(id => !refFileIdsAlreadyAdded.value.has(id))
+  if (ids.length === 0) {
+    pendingRefIds.value = new Set()
+    showRefFilePopup.value = false
+    return
+  }
+  const now = Date.now()
+
+  for (const id of ids) {
+    const file = refFileList.value.find(f => f.id === id)
+    if (!file) continue
+
+    let parsedText = `[文件: ${file.fileName}] (暂无解析摘要)`
+    try {
+      const detail = await fileService.getFileDetail(id)
+      if (detail.parsedSummary) {
+        parsedText = formatParsedSummaryForLlm(file.fileName, detail.parsedSummary)
+      }
+    } catch (e: any) {
+      parsedText = `[文件: ${file.fileName}] (获取摘要失败: ${e.message})`
+    }
+
+    const info: UploadFileInfo = {
+      id: `ref-${file.id}-${now}`,
+      file: new File([], file.fileName),
+      fileName: file.fileName,
+      fileType: 'txt' as FileType,
+      size: file.fileSize,
+      status: 'parsed' as const,
+      parsedText,
+      uploadedAt: now,
+    }
+    fileUpload.uploadedFiles.value.txt.push(info)
+  }
+
+  pendingRefIds.value = new Set()
+  showRefFilePopup.value = false
+}
+
+/** 将 parsedSummary JSON 字符串转换为 LLM 可读的纯文本 */
+function formatParsedSummaryForLlm(fileName: string, raw: string): string {
+  let summary: Record<string, unknown>
+  try {
+    summary = JSON.parse(raw)
+  } catch {
+    return `[文件: ${fileName}]\n${raw.substring(0, 800)}`
+  }
+
+  const lines: string[] = [`[引用的文件: ${fileName}]`]
+  const ft = String(summary.fileType || '')
+  let typeLabel = ft
+  if (ft === 'docx' || ft === 'word') typeLabel = 'Word 文档'
+  else if (ft === 'xlsx' || ft === 'excel') typeLabel = 'Excel 表格'
+  else if (ft === 'csv') typeLabel = 'CSV 文件'
+  else if (ft === 'txt' || ft === 'md' || ft === 'py') typeLabel = '文本文件'
+  lines.push(`类型: ${typeLabel}`)
+
+  // Word 类文件
+  if (summary.pageEstimate != null) lines.push(`预估页数: ${summary.pageEstimate}`)
+  if (summary.paragraphCount != null) lines.push(`段落数: ${summary.paragraphCount}`)
+  if (summary.tableCount != null) lines.push(`表格数: ${summary.tableCount}`)
+  if (summary.imageCount != null) lines.push(`图片数: ${summary.imageCount}`)
+
+  // 大纲
+  const outline = summary.outline as Array<{ level?: number; text?: string; children?: unknown[] }> | undefined
+  if (outline && outline.length > 0) {
+    lines.push('大纲:')
+    for (const item of outline.slice(0, 15)) {
+      const indent = '  '.repeat(Math.max(0, (item.level || 1) - 1))
+      lines.push(`${indent}- ${item.text || '(无标题)'}`)
+    }
+    if (outline.length > 15) lines.push(`  ... 共 ${outline.length} 项`)
+  }
+
+  // Excel 类文件
+  if (summary.sheetCount != null) lines.push(`Sheet 数量: ${summary.sheetCount}`)
+  const sheets = summary.sheets as Array<{ name?: string; rowCount?: number; colCount?: number; headerText?: string[] }> | undefined
+  if (sheets && sheets.length > 0) {
+    lines.push('Sheet 列表:')
+    for (const s of sheets) {
+      const header = s.headerText?.length ? `, 标题: ${s.headerText.join(', ')}` : ''
+      lines.push(`  - ${s.name || '(未命名)'} (${s.rowCount ?? '?'} 行 × ${s.colCount ?? '?'} 列${header})`)
+    }
+  }
+
+  // 文本类文件
+  if (summary.lineCount != null) lines.push(`总行数: ${summary.lineCount}`)
+
+  // 表格信息（Word 中的表格）
+  const tables = summary.tables as Array<{ tableIndex?: number; rowCount?: number; colCount?: number; headerText?: string[]; locationDescription?: string }> | undefined
+  if (tables && tables.length > 0) {
+    lines.push(`表格详情:`)
+    for (const t of tables.slice(0, 5)) {
+      const header = t.headerText?.length ? ` 标题: ${t.headerText.join(' | ')}` : ''
+      const loc = t.locationDescription ? ` 位置: ${t.locationDescription}` : ''
+      lines.push(`  表${t.tableIndex ?? ''}: ${t.rowCount ?? '?'}行×${t.colCount ?? '?'}列${header}${loc}`)
+    }
+  }
+
+  // 内容预览（TXT/MD 等）
+  const preview = summary.contentPreview as string | undefined
+  if (preview) {
+    const truncated = preview.length > 600 ? preview.substring(0, 600) + '...' : preview
+    lines.push(`\n[内容预览]\n${truncated}`)
+  }
+
+  // 全量内容（仅当无 preview 且有 fullContent 时）
+  const full = summary.fullContent as string | undefined
+  if (!preview && full) {
+    const truncated = full.length > 1000 ? full.substring(0, 1000) + '...' : full
+    lines.push(`\n[文件内容]\n${truncated}`)
+  }
+
+  return lines.join('\n')
+}
 
 /** 扁平化所有已上传文件（按当前会话隔离：只展示属于当前会话或无会话标记的文件） */
 const allFiles = computed<UploadFileInfo[]>(() => {
@@ -38,6 +260,26 @@ const allFiles = computed<UploadFileInfo[]>(() => {
   ]
   if (!cid) return all
   return all.filter(f => !f.conversationId || f.conversationId === cid)
+})
+
+/** 已通过「引用」或「上传」加入的文件 ID 集合，用于 ref 弹窗禁用已选/已传文件 */
+const refFileIdsAlreadyAdded = computed(() => {
+  const ids = new Set<number>()
+  const names = new Set<string>()
+  for (const f of allFiles.value) {
+    const match = f.id.match(/^ref-(\d+)-/)
+    if (match) {
+      ids.add(Number(match[1]))
+    }
+    names.add(f.fileName)
+  }
+  // 文件名交叉去重：已上传的文件名若出现在 ref 列表中也禁用
+  for (const f of refFileList.value) {
+    if (names.has(f.fileName)) {
+      ids.add(f.id)
+    }
+  }
+  return ids
 })
 
 /** 文档分组（word/excel/ppt/txt） */
@@ -154,6 +396,11 @@ function getFileLabel(type: FileType, fileName?: string): string {
   return FILE_TYPE_LABELS[type]
 }
 
+/** 获取文件图标（支持非 FileType 字符串，兜底 📄） */
+function getFileIcon(type: string): string {
+  return (FILE_TYPE_ICONS as Record<string, string>)[type] || '📄'
+}
+
 /** 把所有处于 parsing 状态的文件标记为 skipped */
 function skipParsingFiles() {
   for (const f of allFiles.value) {
@@ -166,6 +413,7 @@ function skipParsingFiles() {
 /** 实际执行 sendMessage（统一入口，处理 parsing 决策后调用） */
 async function doSendMessage(text: string) {
   input.value = ''
+
   const files = allFiles.value
   if (files.length > 0) {
     await sendMessage(text, currentUser.value?.id, files)
@@ -375,7 +623,7 @@ async function handleSend(value: string) {
       </div>
     </div>
 
-    <!-- 文本输入区 + 上传按钮 -->
+    <!-- 文本输入区 + 按钮组 -->
     <div class="chat-sender-row" data-ref="chat-input-area">
       <TChatSender
         v-model="input"
@@ -385,17 +633,92 @@ async function handleSend(value: string) {
         :textarea-props="{ autosize: { minRows: 1, maxRows: 6 } }"
         @send="handleSend"
         @stop="onStop"
-      />
-      <t-tooltip content="上传文件">
-        <button
-          type="button"
-          class="upload-btn"
-          :disabled="isThinking || isWaitingForParse"
-          @click="triggerFilePicker"
-        >
-          <span class="upload-emoji">📎</span>
-        </button>
-      </t-tooltip>
+      >
+        <template #footer-prefix>
+          <!-- 「+」按钮：合并"上传"与"引用"两个入口，与发送按钮同处 footer 一行 -->
+          <div class="attach-menu-container">
+            <button
+              type="button"
+              class="attach-btn"
+              :class="{ 'is-open': showAttachMenu }"
+              :disabled="isThinking || isWaitingForParse"
+              :aria-expanded="showAttachMenu"
+              aria-label="附件菜单"
+              @click="showAttachMenu = !showAttachMenu"
+            >
+              <span class="attach-btn-icon">+</span>
+            </button>
+
+            <!-- 「+」菜单 -->
+            <div v-if="showAttachMenu" class="attach-menu">
+              <button class="attach-menu-item" @click="onAttachMenuUpload">
+                <span class="attach-menu-item-icon">📎</span>
+                <span class="attach-menu-item-label">上传新文件</span>
+                <span class="attach-menu-item-hint">本会话解析后参与对话</span>
+              </button>
+              <button class="attach-menu-item" @click="onAttachMenuRefFile">
+                <span class="attach-menu-item-icon">📂</span>
+                <span class="attach-menu-item-label">引用已启用文件</span>
+                <span class="attach-menu-item-hint">来自左侧会话配置中启用的文件</span>
+              </button>
+            </div>
+          </div>
+        </template>
+      </TChatSender>
+
+      <!-- 引用文件选择弹窗 -->
+      <div v-if="showRefFilePopup" class="ref-file-popup-overlay" @click.self="showRefFilePopup = false">
+        <div class="ref-file-popup">
+          <div class="ref-file-popup-header">
+            <span>选择要引用的文件</span>
+            <t-button size="small" variant="text" theme="default" @click="showRefFilePopup = false">✕</t-button>
+          </div>
+          <div v-if="isLoadingRefFiles" class="ref-file-popup-state">
+            <t-loading text="加载文件列表..." />
+          </div>
+          <div v-else-if="refFileError" class="ref-file-popup-state">
+            <p class="ref-file-popup-error">{{ refFileError }}</p>
+          </div>
+          <div v-else-if="refFileList.length === 0" class="ref-file-popup-state">
+            <p>当前会话没有已启用的文件</p>
+            <p class="ref-file-popup-hint">请在「会话配置 → 文件」中勾选文件</p>
+          </div>
+          <div v-else class="ref-file-popup-list">
+            <div
+              v-for="file in refFileList"
+              :key="file.id"
+              class="ref-file-popup-item"
+              :class="{
+                'is-selected': pendingRefIds.has(file.id),
+                'is-disabled': refFileIdsAlreadyAdded.has(file.id),
+              }"
+              @click="refFileIdsAlreadyAdded.has(file.id) ? undefined : toggleRefFileSelection(file)"
+            >
+              <span class="ref-file-popup-checkbox">
+                <span v-if="pendingRefIds.has(file.id)" class="ref-file-popup-checkbox-check">✓</span>
+              </span>
+              <span class="ref-file-popup-item-icon">{{ getFileIcon(file.fileType) }}</span>
+              <div class="ref-file-popup-item-info">
+                <div class="ref-file-popup-item-name">{{ file.fileName }}</div>
+                <div class="ref-file-popup-item-meta">
+                  {{ file.fileType }} · {{ formatSize(file.fileSize) }}
+                  <span v-if="refFileIdsAlreadyAdded.has(file.id)" class="ref-file-popup-item-already">已添加</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-if="refFileList.length > 0" class="ref-file-popup-footer">
+            <t-button
+              theme="primary"
+              size="small"
+              :disabled="pendingRefIds.size === 0"
+              @click="confirmRefFileSelections"
+            >
+              确认引用 ({{ pendingRefIds.size }})
+            </t-button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <p class="input-disclaimer">AI 生成内容可能有误，请注意甄别。</p>
@@ -580,33 +903,268 @@ async function handleSend(value: string) {
   width: 100%;
 }
 
-.upload-btn {
-  position: absolute;
-  right: 52px;
-  bottom: 7px;
+/* ---------- 左侧「+」按钮 + 菜单（位于 TChatSender 的 footer-prefix 插槽内，与发送按钮同行） ---------- */
+.attach-menu-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.attach-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   background: transparent;
   border: 0;
-  border-radius: 8px;
+  border-radius: 50%;
   color: var(--td-text-color-secondary);
   cursor: pointer;
-  z-index: 2;
-  transition: background-color 0.15s, color 0.15s;
+  transition: background-color 0.18s ease, color 0.18s ease;
 }
 
-.upload-btn:hover:not(:disabled) {
+.attach-btn:hover:not(:disabled) {
   background-color: var(--td-bg-color-container-hover);
   color: var(--td-text-color-primary);
 }
 
-.upload-btn:disabled {
+.attach-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.attach-btn.is-open {
+  background-color: var(--td-brand-color-light, rgba(0, 96, 175, 0.08));
+  color: var(--td-brand-color);
+}
+
+.attach-btn-icon {
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 300;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+/* 「+」菜单：从按钮上方弹出 */
+.attach-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 220px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-border-level-1-color, #e7e7e7);
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+}
+
+.attach-menu-item {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.12s;
+}
+
+.attach-menu-item:hover {
+  background-color: var(--td-bg-color-container-hover);
+}
+
+.attach-menu-item-icon {
+  grid-row: 1 / span 2;
+  font-size: 20px;
+  line-height: 1;
+  text-align: center;
+}
+
+.attach-menu-item-label {
+  grid-column: 2;
+  grid-row: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+}
+
+.attach-menu-item-hint {
+  grid-column: 2;
+  grid-row: 2;
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+  margin-top: 1px;
+}
+
+/* ---------- 引用文件弹窗 ---------- */
+.ref-file-popup-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ref-file-popup {
+  background: var(--td-bg-color-container);
+  border-radius: 12px;
+  width: 400px;
+  max-width: 90vw;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+}
+
+.ref-file-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+  border-bottom: 1px solid var(--td-border-level-1-color);
+}
+
+.ref-file-popup-state {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--td-text-color-secondary);
+  font-size: 13px;
+}
+
+.ref-file-popup-error {
+  color: var(--td-error-color);
+}
+
+.ref-file-popup-hint {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+  margin-top: 6px;
+}
+
+.ref-file-popup-list {
+  overflow-y: auto;
+  max-height: calc(60vh - 52px);
+  padding: 4px 0;
+}
+
+.ref-file-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.ref-file-popup-item:hover {
+  background-color: var(--td-bg-color-container-hover);
+}
+
+.ref-file-popup-item--fetching {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.ref-file-popup-item-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.ref-file-popup-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ref-file-popup-item-name {
+  font-size: 13px;
+  color: var(--td-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ref-file-popup-item-meta {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+  margin-top: 2px;
+}
+
+.ref-file-popup-item.is-selected {
+  background-color: var(--td-brand-color-light, rgba(0, 96, 175, 0.06));
+  box-shadow: inset 3px 0 0 var(--td-brand-color);
+}
+
+.ref-file-popup-item.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  background-color: var(--td-bg-color-secondarycontainer);
+}
+
+.ref-file-popup-item.is-disabled:hover {
+  background-color: var(--td-bg-color-secondarycontainer);
+}
+
+.ref-file-popup-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid var(--td-border-level-2-color, #dcdcdc);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.15s, background-color 0.15s;
+}
+
+.is-selected .ref-file-popup-checkbox {
+  background-color: var(--td-brand-color);
+  border-color: var(--td-brand-color);
+}
+
+.ref-file-popup-checkbox-check {
+  font-size: 12px;
+  line-height: 1;
+  color: #fff;
+  font-weight: 700;
+}
+
+.ref-file-popup-item-already {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 3px;
+  background-color: var(--td-success-color-1, #e6f7e6);
+  color: var(--td-success-color, #2ba471);
+  white-space: nowrap;
+}
+
+.ref-file-popup-footer {
+  padding: 10px 16px;
+  border-top: 1px solid var(--td-border-level-1-color);
+  display: flex;
+  justify-content: flex-end;
 }
 
 .upload-emoji {
