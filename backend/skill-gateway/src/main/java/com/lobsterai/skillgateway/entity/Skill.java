@@ -246,10 +246,10 @@ public class Skill {
     }
 
     /**
-     * Transient Map getter for API serialization.
      * Priority: deserialize from `schemaPropertiesJson` (DB), fallback to compute from `configuration`.
      */
     @TableField(exist = false)
+    @com.fasterxml.jackson.annotation.JsonProperty("schemaProperties")
     private transient java.util.Map<String, java.util.Map<String, Object>> schemaProperties;
 
     @SuppressWarnings("unchecked")
@@ -257,20 +257,25 @@ public class Skill {
         if (schemaProperties != null) {
             return schemaProperties;
         }
-        // 1) Try persisted JSON first
+        // 1) Try persisted JSON first (seeded by FileToolSeeder etc.)
         if (schemaPropertiesJson != null && !schemaPropertiesJson.isEmpty()) {
             try {
                 com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
                 schemaProperties = om.readValue(schemaPropertiesJson,
                     new com.fasterxml.jackson.core.type.TypeReference<java.util.LinkedHashMap<String, java.util.Map<String, Object>>>() {});
-                return schemaProperties;
             } catch (Exception e) {
                 // fall through to compute
             }
         }
-        // 2) Fallback: compute from configuration (backward compatibility)
+        // 2) Augment with computed properties from configuration (SSH variables, template placeholders, etc.)
         if (configuration != null && !configuration.isEmpty()) {
-            schemaProperties = computeSchemaProperties(configuration);
+            java.util.Map<String, java.util.Map<String, Object>> computed = computeSchemaProperties(configuration);
+            if (schemaProperties == null) {
+                schemaProperties = computed;
+            } else if (!computed.isEmpty()) {
+                // Merge computed props into persisted props (computed wins on conflict)
+                schemaProperties.putAll(computed);
+            }
         }
         return schemaProperties != null ? schemaProperties : java.util.Collections.emptyMap();
     }
@@ -351,13 +356,28 @@ public class Skill {
                 }
             }
 
-            // 3) SSH: if has lookup, expose id
-            if ("ssh".equals(kind) && cfg.get("lookup") != null) {
-                if (!result.containsKey("id")) {
+            // 3) SSH: if has lookup, expose id; extract variables from command template
+            if ("ssh".equals(kind)) {
+                if (cfg.get("lookup") != null && !result.containsKey("id")) {
                     java.util.Map<String, Object> meta = new java.util.LinkedHashMap<>();
                     meta.put("type", "number");
                     meta.put("description", "服务器台账 ID（来自 server_lookup 结果，精确匹配）");
                     result.put("id", meta);
+                }
+                // Extract variables from command template ({{placeholder}} format)
+                String command = (String) cfg.get("command");
+                if (command != null) {
+                    java.util.regex.Pattern p = java.util.regex.Pattern.compile("\\{\\{([^{}]+)\\}\\}");
+                    java.util.regex.Matcher m = p.matcher(command);
+                    while (m.find()) {
+                        String key = m.group(1);
+                        if (!result.containsKey(key)) {
+                            java.util.Map<String, Object> meta = new java.util.LinkedHashMap<>();
+                            meta.put("type", "string");
+                            meta.put("description", "命令模板变量 {" + key + "}，完整命令: " + command);
+                            result.put(key, meta);
+                        }
+                    }
                 }
             }
         } catch (Exception ignored) {}

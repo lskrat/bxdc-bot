@@ -12,7 +12,7 @@ import MessageList from '../components/MessageList.vue'
 import MessageInput from '../components/MessageInput.vue'
 import ApiDetailView from '../components/ApiDetailView.vue'
 
-const { error, messages, saveMessageCallback } = provideChat()
+const { error, messages, saveMessageCallback, clearError } = provideChat()
 // provideConversations must be called before useConversations (parent proviides to Layout child)
 provideConversations()
 const conversations = useConversations()
@@ -319,6 +319,8 @@ onErrorCaptured((err) => {
           class="chat-error"
           theme="error"
           :message="error"
+          close
+          @close="clearError"
         />
         <div class="chat-input-area">
           <MessageInput />
