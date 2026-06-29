@@ -157,6 +157,7 @@ export interface ChatState {
   messages: ReturnType<typeof ref<Message[]>>
   isThinking: ReturnType<typeof ref<boolean>>
   error: ReturnType<typeof ref<string | null>>
+  clearError: () => void
   sendMessage: (content: string, userId?: string, attachedFiles?: UploadFileInfo[]) => Promise<void>
   /** Stop the current in-flight SSE stream (cancel button while agent is reasoning). */
   stop: () => void
@@ -181,6 +182,10 @@ export function provideChat() {
   let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = null
   const { createSession, processStreamEvent, completeSession } = useThinkingMode()
   const fileUpload = useFileUpload()
+
+  function clearError() {
+    error.value = null
+  }
 
   function generateConversationSessionId(): string {
     // 为每条消息生成唯一的 sessionId，确保每条消息有独立的思考状态
@@ -1227,6 +1232,7 @@ export function provideChat() {
     messages,
     isThinking,
     error,
+    clearError,
     sendMessage,
     stop,
     addMessage,

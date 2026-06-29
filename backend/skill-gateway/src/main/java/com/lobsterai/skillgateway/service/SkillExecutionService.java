@@ -370,19 +370,9 @@ public class SkillExecutionService {
 
     @SuppressWarnings("unchecked")
     private Object executeSshSkill(Skill skill, Map<String, Object> config, Object parameters, String userId) throws IOException {
-        String command = (String) config.get("command");
-        if (command == null || StringUtils.isBlank(command)) {
+        String commandTemplate = (String) config.get("command");
+        if (commandTemplate == null || StringUtils.isBlank(commandTemplate)) {
             throw new IllegalArgumentException("SSH skill missing command");
-        }
-        if (!securityFilterService.isCommandSafe(command)) {
-            gatewayOutboundAuditService.recordSsh(
-                    userId, "unknown", 22, command,
-                    false, "Command blocked by security policy",
-                    "skill.execute", null, skill.getId()
-            );
-            Map<String, Object> error = new LinkedHashMap<>();
-            error.put("error", "Command blocked by security policy");
-            return error;
         }
 
         Map<String, Object> paramMap = asMap(parameters);
@@ -413,7 +403,7 @@ public class SkillExecutionService {
         Optional<ServerLedger> ledgerOpt = serverLedgerService.getServerLedgerByName(userId, hostOrName.trim());
         if (!ledgerOpt.isPresent()) {
             gatewayOutboundAuditService.recordSsh(
-                    userId, hostOrName.trim(), 22, command,
+                    userId, hostOrName.trim(), 22, commandTemplate,
                     false, "Server not found in user ledger: " + hostOrName,
                     "skill.execute", null, skill.getId()
             );
@@ -426,6 +416,21 @@ public class SkillExecutionService {
         int port = ledger.getPort() != null && ledger.getPort() > 0 ? ledger.getPort() : 22;
         String host = ledger.getHost() != null && !StringUtils.isBlank(ledger.getHost())
                 ? ledger.getHost().trim() : hostOrName.trim();
+
+        // Render command template with parameters
+        String command = renderTemplate(commandTemplate, paramMap);
+
+        // Security check after template rendering
+        if (!securityFilterService.isCommandSafe(command)) {
+            gatewayOutboundAuditService.recordSsh(
+                    userId, host, port, command,
+                    false, "Command blocked by security policy",
+                    "skill.execute", null, ledger.getId()
+            );
+            Map<String, Object> error = new LinkedHashMap<>();
+            error.put("error", "Command blocked by security policy");
+            return error;
+        }
 
         try {
             String output = linuxScriptExecutionService.executeFromLedger(ledger, command);

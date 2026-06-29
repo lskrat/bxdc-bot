@@ -1804,7 +1804,8 @@ async function copyContent(text: string) {
   overflow: hidden;
   background: var(--td-bg-color-secondarycontainer);
   margin: 4px 0;
-  display: inline-block;
+  display: block;
+  width: fit-content;
   min-width: 260px;
   max-width: 100%;
 }

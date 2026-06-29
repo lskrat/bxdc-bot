@@ -347,7 +347,8 @@ public class SystemSkillController {
         command.put("label", "Shell 命令");
         command.put("required", true);
         command.put("ui", "textarea");
-        command.put("aiHint", "在目标服务器上执行的 Shell 命令，会经过安全策略过滤");
+        command.put("placeholder", "例如：ls -la {{path}}");
+        command.put("aiHint", "在目标服务器上执行的 Shell 命令。支持使用 {{占位符}} 标记变量，执行时自动替换。命令会经过安全策略过滤。");
         props.put("command", command);
 
         Map<String, Object> iface = new LinkedHashMap<>();
