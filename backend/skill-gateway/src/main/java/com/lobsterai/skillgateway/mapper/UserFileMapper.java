@@ -91,4 +91,25 @@ public interface UserFileMapper extends BaseMapper<UserFile> {
                 .eq(UserFile::getIsToolGenerated, 1)
                 .orderByDesc(UserFile::getUploadTime));
     }
+
+    /**
+     * 追加续接：按 userId + sourceFileId（最初的原始文件 ID）查同会话的最新临时文件（is_tool_generated=1），
+     * 用于 txt_write append=true 时自动续接到上一轮追加的结果，避免"列表展示 1+2+3+4+5 行但下载只有 1+2+3+5 行"的不一致。
+     *
+     * <p>约定：临时文件的 {@code source_file_id} 始终指向最初的原始源文件（不会被改写成上一轮临时文件的 ID），
+     * 所以这个查询能"按源文件聚合"找出该会话里所有相关的临时文件，取最新一个就是续接点。
+     *
+     * <p>注意：要求传入的 conversationId 不为 null/空，否则返回空 list（无 conversation 不续接）。
+     */
+    default List<UserFile> findLatestTempBySourceFileId(String conversationId, String userId, Long sourceFileId) {
+        if (conversationId == null || conversationId.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        return selectList(new LambdaQueryWrapper<UserFile>()
+                .eq(UserFile::getConversationId, conversationId)
+                .eq(UserFile::getUserId, userId)
+                .eq(UserFile::getSourceFileId, sourceFileId)
+                .eq(UserFile::getIsToolGenerated, 1)
+                .orderByDesc(UserFile::getUploadTime));
+    }
 }

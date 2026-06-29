@@ -219,12 +219,16 @@ public class WordToolService {
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
             result.put("message", "Word document created");
+            result.put("fileId", newFile.getId());
+            result.put("fileName", originalFileName);
+            result.put("fileSize", (long) bytes.length);
+            result.put("lineCount", content.split("\n", -1).length);
+            result.put("totalChars", content.length());
             result.put("originalFileId", userFile != null ? userFile.getId() : null);
             result.put("newFileId", newFile.getId());
             result.put("newFileName", actualFileName);
             result.put("originalFileName", originalFileName);
             result.put("downloadUrl", downloadUrl);
-            result.put("size", bytes.length);
             result.put("paragraphs", content.split("\n", -1).length);
             return FileToolResponse.ok(result, originalFileName);
         } catch (Exception e) {

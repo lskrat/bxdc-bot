@@ -209,13 +209,38 @@ async function save() {
   isSaving.value = true
   const selectedSkillIds = skills.value.filter((s) => s._checked).map((s) => s.id)
   const selectedFileIds = files.value.filter((f) => f._checked).map((f) => f.id)
+
+  // 当有文件被选中时，自动将系统文件工具（txt_write/word_write/md_write 等）加入 enabled_skills，
+  // 确保主 Agent 可以直接调用这些工具，无需通过 search_tools 绕道子 Agent
+  let finalSkillIds = selectedSkillIds
+  if (selectedFileIds.length > 0) {
+    try {
+      const res = await fetch(apiUrl('/api/skills/by-owner-type?ownerType=2'), {
+        headers: { 'X-User-Id': currentUser.value.id },
+      })
+      if (res.ok) {
+        const systemSkills = await res.json()
+        const fileToolIds: number[] = (systemSkills as any[])
+          .filter((s: any) => {
+            if (!s.enabled) return false
+            if (!s.configuration) return false
+            try {
+              const cfg = JSON.parse(s.configuration)
+              return cfg.kind === 'file_tool'
+            } catch { return false }
+          })
+          .map((s: any) => s.id)
+        finalSkillIds = [...new Set([...selectedSkillIds, ...fileToolIds])]
+      }
+    } catch { /* 非关键路径，静默忽略 */ }
+  }
   try {
     await updateConversation(
       currentUser.value.id,
       props.conversationId,
-      { enabled_skills: selectedSkillIds, enabled_files: selectedFileIds },
+      { enabled_skills: finalSkillIds, enabled_files: selectedFileIds },
     )
-    emit('saved', selectedSkillIds, selectedFileIds)
+    emit('saved', finalSkillIds, selectedFileIds)
     emit('close')
   } catch (e) {
     error.value = e instanceof Error ? e.message : '保存失败'
