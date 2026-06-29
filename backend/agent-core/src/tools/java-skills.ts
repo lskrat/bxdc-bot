@@ -1148,6 +1148,11 @@ export async function loadGatewayExtendedTools(
         toolDescription +=
           " If this skill requires confirmation, approval happens via the chat UI buttons only; do not instruct the user to type \"confirm\" or to send JSON with confirmed:true.";
       }
+      const isSshSkill = (config.kind || "").toLowerCase() === "ssh";
+      if (isSshSkill) {
+        toolDescription +=
+          " |SECURITY| The following commands are STRICTLY FORBIDDEN on the remote server and will be blocked: rm -rf / rm -r / rm -fr, mkfs / mkswap / wipefs / dd of=/dev/sd, fdisk / parted, shutdown / reboot / halt / poweroff / init 0/6 / systemctl halt|poweroff|reboot, kill -9 / killall -9 / pkill -9, curl ...|sh / wget ...|sh, chmod 777 / chown -R / chattr -i, useradd / userdel / usermod -aG wheel|sudo|root, passwd, iptables -F / iptables -P / ufw disable, crontab -e/-r, fork bomb, modprobe / insmod / sysctl -w. Do NOT attempt to construct, suggest, or include these patterns in any arguments — the server-side filter will block execution.";
+      }
 
       const zodSchema = buildSkillZodSchema(config, skill.schemaProperties);
       const structuredTool = new DynamicStructuredTool({
@@ -1220,13 +1225,15 @@ export async function loadGatewayExtendedTools(
               : {};
             if (
               parameters
-              && Object.keys(parameters).length === 1
               && "payload" in parameters
               && parameters.payload
               && typeof parameters.payload === "object"
               && !Array.isArray(parameters.payload)
             ) {
-              parameters = parameters.payload as Record<string, unknown>;
+              const wrapped = parameters.payload as Record<string, unknown>;
+              // Retain top-level keys other than "payload" (e.g. "confirmed")
+              const { payload: _p, ...rest } = parameters;
+              parameters = { ...wrapped, ...rest };
             }
 
             const executePayload = { skillId: currentSkill.id, parameters };

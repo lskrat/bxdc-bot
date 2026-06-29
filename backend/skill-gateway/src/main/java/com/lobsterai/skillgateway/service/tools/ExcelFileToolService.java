@@ -627,7 +627,7 @@ public class ExcelFileToolService {
             result.put("message", "Filter completed");
             result.putAll(saveResult);
             result.put("headers", headers);
-            result.put("rows", filteredRows);
+            result.put("rows", limitRows(filteredRows));
             result.put("totalRows", filteredRows.size());
 
             return FileToolResponse.ok(result, tempFileName);
@@ -734,7 +734,7 @@ public class ExcelFileToolService {
             result.put("message", "Sort completed");
             result.putAll(saveResult);
             result.put("headers", headers);
-            result.put("rows", rows);
+            result.put("rows", limitRows(rows));
             result.put("totalRows", rows.size());
 
             return FileToolResponse.ok(result, tempFileName);
@@ -1086,7 +1086,7 @@ public class ExcelFileToolService {
             result.put("message", "Calculation completed");
             result.putAll(saveResult);
             result.put("headers", headers);
-            result.put("rows", rows);
+            result.put("rows", limitRows(rows));
             result.put("totalRows", rows.size());
 
             return FileToolResponse.ok(result, tempFileName);
@@ -1183,7 +1183,7 @@ public class ExcelFileToolService {
             result.put("message", "Column selection completed");
             result.putAll(saveResult);
             result.put("headers", headers);
-            result.put("rows", rows);
+            result.put("rows", limitRows(rows));
             result.put("totalRows", rows.size());
 
             return FileToolResponse.ok(result, tempFileName);
@@ -1296,7 +1296,7 @@ public class ExcelFileToolService {
             result.put("message", "Data cleaning completed");
             result.putAll(saveResult);
             result.put("headers", headers);
-            result.put("rows", rows);
+            result.put("rows", limitRows(rows));
             result.put("totalRows", rows.size());
 
             return FileToolResponse.ok(result, tempFileName);
@@ -1740,6 +1740,15 @@ public class ExcelFileToolService {
     private String readStringParam(Map<String, Object> params, String key, String defaultValue) {
         Object value = params.get(key);
         return value instanceof String ? (String) value : defaultValue;
+    }
+
+    private static final int MAX_RESULT_ROWS = 20;
+
+    private List<List<Object>> limitRows(List<List<Object>> rows) {
+        if (rows == null || rows.size() <= MAX_RESULT_ROWS) {
+            return rows;
+        }
+        return new ArrayList<List<Object>>(rows.subList(0, MAX_RESULT_ROWS));
     }
 
     private byte[] downloadBytes(UserFile userFile) throws Exception {
