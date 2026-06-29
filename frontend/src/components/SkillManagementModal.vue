@@ -48,6 +48,7 @@ const { currentUser } = useUser();
 
 const isFormVisible = ref(false);
 const isEditMode = ref(false);
+const isViewMode = ref(false);
 const currentId = ref<number | null>(null);
 const parseError = ref<string | null>(null);
 const rawConfiguration = ref('{}');
@@ -313,6 +314,7 @@ function resetForm() {
 
 function openCreateForm() {
   isEditMode.value = false;
+  isViewMode.value = false;
   resetForm();
   if (executionTypes.value.length === 0) fetchExecutionTypes();
   fetchPythonSandboxes();
@@ -326,6 +328,35 @@ async function openEditForm(skillSummary: Skill) {
     fetchPythonSandboxes();
     const skill = await fetchSkill(skillSummary.id);
     isEditMode.value = true;
+    isViewMode.value = false;
+    currentId.value = skill.id;
+    formData.name = skill.name;
+    formData.description = skill.description || '';
+    formData.visibility = skill.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE';
+    formData.executionMode = skill.executionMode ?? 'CONFIG';
+    formData.enabled = skill.enabled;
+    formData.requiresConfirmation = skill.requiresConfirmation ?? false;
+    rawConfiguration.value = skill.configuration || '{}';
+    const parsed = parseSkillDraft(formData.executionMode, rawConfiguration.value);
+    parseError.value = parsed.error;
+    configDraft.value = parsed.draft ?? createDefaultSkillDraft(formData.executionMode);
+    syncDraftToConfigForm();
+    isFormVisible.value = true;
+  } catch (e) {
+    MessagePlugin.error(`Failed to load skill details: ${e instanceof Error ? e.message : 'Unknown error'}`);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+async function openViewForm(skillSummary: Skill) {
+  try {
+    isLoading.value = true;
+    if (executionTypes.value.length === 0) await fetchExecutionTypes();
+    fetchPythonSandboxes();
+    const skill = await fetchSkill(skillSummary.id);
+    isEditMode.value = false;
+    isViewMode.value = true;
     currentId.value = skill.id;
     formData.name = skill.name;
     formData.description = skill.description || '';
@@ -431,36 +462,38 @@ async function handleDelete(id: number) {
   }
 }
 
-defineExpose({ openCreateForm, openEditForm, handleDelete })
+defineExpose({ openCreateForm, openEditForm, openViewForm, handleDelete })
 </script>
 
 <template>
   <t-dialog
     v-model:visible="isFormVisible"
-    :header="isEditMode ? '编辑 Skill' : '新增 Skill'"
+    :header="isViewMode ? '查看 Skill' : (isEditMode ? '编辑 Skill' : '新增 Skill')"
     width="860px"
+    :confirmBtn="isViewMode ? null : undefined"
+    :cancelBtn="isViewMode ? '关闭' : undefined"
     @confirm="handleSubmit"
   >
     <t-form :data="formData" label-align="top">
       <t-form-item label="名称" name="name">
-        <t-input v-model="formData.name" placeholder="例如：获取时间" />
+        <t-input v-model="formData.name" placeholder="例如：获取时间" :readonly="isViewMode" :disabled="isViewMode" />
       </t-form-item>
       <t-form-item label="技能介绍" name="description">
         <div class="optimize-textarea-wrap">
-          <t-textarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" />
-          <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('description', '技能介绍', formData.description)">
+          <t-textarea v-model="formData.description" :autosize="{ minRows: 2, maxRows: 4 }" :readonly="isViewMode" :disabled="isViewMode" />
+          <t-button v-if="!isViewMode" size="small" variant="text" class="optimize-btn" @click="openTextOptimize('description', '技能介绍', formData.description)">
             ✨ AI 优化
           </t-button>
         </div>
       </t-form-item>
       <t-form-item label="可见性" name="visibility">
-        <t-radio-group v-model="formData.visibility">
+        <t-radio-group v-model="formData.visibility" :disabled="isViewMode">
           <t-radio-button value="PRIVATE">私人（仅自己可管理）</t-radio-button>
           <t-radio-button value="PUBLIC">公共（全员可见）</t-radio-button>
         </t-radio-group>
       </t-form-item>
       <t-form-item label="Execution Mode" name="executionMode">
-        <t-radio-group :model-value="formData.executionMode" @update:model-value="handleExecutionModeChange">
+        <t-radio-group :model-value="formData.executionMode" @update:model-value="handleExecutionModeChange" :disabled="isViewMode">
           <t-radio-button value="CONFIG">预配置</t-radio-button>
           <t-radio-button value="OPENCLAW">自主规划</t-radio-button>
         </t-radio-group>
@@ -482,6 +515,7 @@ defineExpose({ openCreateForm, openEditForm, handleDelete })
           <t-select
             :model-value="currentConfigKind"
             :options="configKindOptions"
+            :disabled="isViewMode"
             @change="handleConfigKindChange"
           />
         </t-form-item>
@@ -490,6 +524,7 @@ defineExpose({ openCreateForm, openEditForm, handleDelete })
           v-if="currentConfigSchema"
           :config-schema="currentConfigSchema"
           :model-value="configFormValues"
+          :readonly="isViewMode"
           @update:model-value="(val: Record<string, unknown>) => configFormValues = val"
           @optimize="(fieldId: string, fieldLabel: string, currentValue: string) => { optimizeFieldId = fieldId; optimizeFieldLabel = fieldLabel; optimizeOriginalText = currentValue; optimizeContext = `Skill 名称: ${formData.name}`; optimizeVisible = true; }"
         />
@@ -502,8 +537,10 @@ defineExpose({ openCreateForm, openEditForm, handleDelete })
               v-model="openClawDraft.systemPromptMarkdown"
               :autosize="{ minRows: 8, maxRows: 16 }"
               placeholder="直接输入 Markdown 格式提示词，保存时会写入 systemPrompt。"
+              :readonly="isViewMode"
+              :disabled="isViewMode"
             />
-            <t-button size="small" variant="text" class="optimize-btn" @click="openTextOptimize('openclaw_prompt', '自主规划提示词', openClawDraft!.systemPromptMarkdown)">
+            <t-button v-if="!isViewMode" size="small" variant="text" class="optimize-btn" @click="openTextOptimize('openclaw_prompt', '自主规划提示词', openClawDraft!.systemPromptMarkdown)">
               ✨ AI 优化
             </t-button>
           </div>
@@ -518,14 +555,14 @@ defineExpose({ openCreateForm, openEditForm, handleDelete })
               :key="`tool-${index}`"
               class="tool-row"
             >
-              <t-input v-model="openClawDraft.allowedTools[index]" placeholder="例如：compute" />
-              <t-button variant="outline" theme="danger" @click="removeAllowedTool(index)">删除</t-button>
+              <t-input v-model="openClawDraft.allowedTools[index]" placeholder="例如：compute" :readonly="isViewMode" :disabled="isViewMode" />
+              <t-button v-if="!isViewMode" variant="outline" theme="danger" @click="removeAllowedTool(index)">删除</t-button>
             </div>
-            <t-button variant="dashed" @click="addAllowedTool">
+            <t-button v-if="!isViewMode" variant="dashed" @click="addAllowedTool">
               <template #icon><AddIcon /></template>
               添加工具
             </t-button>
-            <div class="tool-suggestions">
+            <div v-if="!isViewMode" class="tool-suggestions">
               <span class="tool-suggestions-label">常用工具：</span>
               <t-space>
                 <t-button
@@ -544,8 +581,8 @@ defineExpose({ openCreateForm, openEditForm, handleDelete })
       </template>
 
       <t-space>
-        <t-checkbox v-model="formData.enabled">启用</t-checkbox>
-        <t-checkbox v-model="formData.requiresConfirmation">需要确认</t-checkbox>
+        <t-checkbox v-model="formData.enabled" :disabled="isViewMode">启用</t-checkbox>
+        <t-checkbox v-model="formData.requiresConfirmation" :disabled="isViewMode">需要确认</t-checkbox>
       </t-space>
     </t-form>
   </t-dialog>

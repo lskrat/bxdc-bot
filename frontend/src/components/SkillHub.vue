@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { AddIcon, DeleteIcon, EditIcon, DownloadIcon } from 'tdesign-icons-vue-next'
-import { useSkillHub, BUILT_IN_SKILLS, extendedSkillEmoji, getExecutionModeLabel, getConfigSummary, canManageGatewaySkill, type Skill } from '../composables/useSkillHub'
+import { AddIcon, DeleteIcon, EditIcon, DownloadIcon, BrowseIcon } from 'tdesign-icons-vue-next'
+import { useSkillHub, BUILT_IN_SKILLS, extendedSkillEmoji, getExecutionModeLabel, getConfigSummary, canManageGatewaySkill, canViewButNotManageSkill, type Skill } from '../composables/useSkillHub'
 import { useUser } from '../composables/useUser'
 import SkillManagementModal from './SkillManagementModal.vue'
 import SkillImportDialog from './SkillImportDialog.vue'
@@ -137,6 +137,14 @@ function openEditForm(skill: Skill) {
   skillMgmtRef.value?.openEditForm(skill)
 }
 
+function openViewForm(skill: Skill) {
+  skillMgmtRef.value?.openViewForm(skill)
+}
+
+function canViewRow(skill: Skill): boolean {
+  return canViewButNotManageSkill(skill, currentUser.value?.id)
+}
+
 // Reset filters when drawer closes
 watch(isSkillHubVisible, (v) => {
   if (v) {
@@ -240,10 +248,21 @@ watch(isSkillHubVisible, (v) => {
                     </t-button>
                   </t-tooltip>
                   <t-button
+                    v-if="canViewRow(skill)"
+                    variant="text"
+                    shape="square"
+                    size="small"
+                    title="查看 Skill 详情"
+                    @click.stop="openViewForm(skill)"
+                  >
+                    <BrowseIcon />
+                  </t-button>
+                  <t-button
                     v-if="canManageRow(skill)"
                     variant="text"
                     shape="square"
                     size="small"
+                    title="编辑 Skill"
                     @click.stop="openEditForm(skill)"
                   >
                     <EditIcon />
@@ -264,6 +283,7 @@ watch(isSkillHubVisible, (v) => {
                     </t-button>
                   </t-popconfirm>
                   <t-switch
+                    v-if="canManageRow(skill)"
                     :value="skill.enabled"
                     :loading="toggleStates[skill.id]"
                     size="small"

@@ -49,6 +49,10 @@ export function canManageGatewaySkill(skill: Skill, userId: string | number | un
   return uid === SKILL_PLATFORM_ADMIN_USER_ID && createdBy === 'public';
 }
 
+export function canViewButNotManageSkill(skill: Skill, userId: string | number | undefined | null): boolean {
+  return !canManageGatewaySkill(skill, userId);
+}
+
 interface ConfigSummary {
   kindLabel: string | null;
 }
