@@ -468,8 +468,19 @@ public class FileUploadController {
         }
 
         try {
-            java.io.InputStream in = ftpFileService.openForDownload(userId, uf.getFileName());
-            long size = uf.getFileSize() == null ? -1L : uf.getFileSize();
+            // 兜底：如果历史数据的 fileName 与 ftp_path 不一致（修复前的旧 bug 产物），
+            // 从 ftp_path 解析正确的 FTP 存储名，避免下载到旧内容。
+            String storageName = uf.getFileName();
+            String ftpPath = uf.getFtpPath();
+            if (ftpPath != null && ftpPath.contains("/")) {
+                String pathName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
+                if (!pathName.equals(storageName)) {
+                    log.warn("downloadFile: fileName={} != ftp_path storage={}, using ftp_path", storageName, pathName);
+                    storageName = pathName;
+                }
+            }
+            byte[] bytes = ftpFileService.downloadFile(userId, storageName).toByteArray();
+            long size = bytes.length;
 
             HttpHeaders headers = new HttpHeaders();
             String downloadName = uf.getOriginalFileName() != null ? uf.getOriginalFileName() : uf.getFileName();
@@ -479,13 +490,16 @@ public class FileUploadController {
                             .build());
             MediaType ct = resolveContentType(uf);
             headers.setContentType(ct);
-            if (size > 0) {
-                headers.setContentLength(size);
-            }
+            headers.setContentLength(size);
+            // 同 fileId 多次写入后 content 已变，但 downloadUrl（含 token）不变，
+            // 浏览器/代理可能命中 HTTP 缓存返回旧内容，必须强制禁止缓存。
+            headers.setCacheControl("no-store, no-cache, must-revalidate, max-age=0");
+            headers.setPragma("no-cache");
+            headers.setExpires(0);
 
             return ResponseEntity.ok()
                     .headers(headers)
-                    .body(new InputStreamResource(in));
+                    .body(bytes);
         } catch (java.io.IOException e) {
             log.error("File download failed: user={}, fileId={}, name={}", userId, id, uf.getFileName(), e);
             return error(HttpStatus.INTERNAL_SERVER_ERROR, "DOWNLOAD_FAILED", "Download failed: " + e.getMessage());

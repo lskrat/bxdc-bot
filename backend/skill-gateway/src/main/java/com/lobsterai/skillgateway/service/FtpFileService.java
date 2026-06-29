@@ -390,6 +390,7 @@ public class FtpFileService {
         }
         ftp.enterLocalPassiveMode();
         ftp.setFileType(FTP.BINARY_FILE_TYPE);
+        ftp.setControlEncoding("UTF-8");
         return ftp;
     }
 

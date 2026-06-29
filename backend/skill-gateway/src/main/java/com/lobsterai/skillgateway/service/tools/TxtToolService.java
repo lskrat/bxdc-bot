@@ -84,6 +84,12 @@ public class TxtToolService {
                 return txtRead(userFile, params, userId);
             }
         });
+        fileToolService.registerHandler("txt_init_temp", new FileToolService.ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
+                return txtInitTemp(userFile, params, userId);
+            }
+        });
         fileToolService.registerHandler("txt_write", new FileToolService.ToolHandler() {
             @Override
             public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
@@ -188,6 +194,121 @@ public class TxtToolService {
     // ================================================================
     // 5.4.2 txt_write — 写 TXT/MD 文件
     // ================================================================
+    // txt_init_temp — 初始化临时文件（创建副本，后续操作在其上进行）
+
+    public FileToolResponse txtInitTemp(UserFile userFile, Map<String, Object> params, String userId) {
+        try {
+            Long sourceFileId = userFile.getId();
+
+            // 读取源文件内容
+            byte[] fileBytes = ftpFileService.downloadFile(userId, userFile.getFileName()).toByteArray();
+
+            // 生成临时文件名
+            String tempFileName = generateTempOriginalName(userFile.getOriginalFileName());
+
+            // 上传临时文件到 FTP
+            String ftpPath = ftpFileService.uploadFileWithFileName(userId, tempFileName, new java.io.ByteArrayInputStream(fileBytes));
+            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
+
+            // 在 user_files 表中创建新记录
+            String conversationId = FileToolConversationContext.getConversationId();
+            UserFile tempUserFile = new UserFile();
+            tempUserFile.setUserId(userId);
+            tempUserFile.setOriginalFileName(tempFileName);
+            tempUserFile.setFileName(storageFileName);
+            tempUserFile.setFileSize((long) fileBytes.length);
+            tempUserFile.setFileType(userFile.getFileType());
+            tempUserFile.setFtpPath(ftpPath);
+            tempUserFile.setSourceFileId(sourceFileId);
+            tempUserFile.setIsToolGenerated(1);
+            tempUserFile.setConversationId(conversationId);
+            tempUserFile.setUploadTime(java.time.LocalDateTime.now());
+            userFileMapper.insert(tempUserFile);
+
+            Long tempFileId = tempUserFile.getId();
+
+            // 生成带签名的下载 URL
+            String downloadUrl = ftpConfig.buildDownloadUrl(tempFileId, userId);
+            tempUserFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(tempUserFile);
+
+            log.info("txt_init_temp created temp file: id={}, sourceFileId={}, tempFileName={}, downloadUrl={}",
+                    tempFileId, sourceFileId, tempFileName, downloadUrl);
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("message", "临时文件初始化成功");
+            result.put("fileId", tempFileId);
+            result.put("sourceFileId", sourceFileId);
+            result.put("fileName", tempFileName);
+            result.put("filePath", ftpPath);
+            result.put("downloadUrl", downloadUrl);
+
+            return FileToolResponse.ok(result, tempFileName);
+        } catch (Exception e) {
+            log.error("txt_init_temp failed for {}", userFile.getOriginalFileName(), e);
+            return FileToolResponse.error("txt_init_temp failed: " + e.getMessage(), userFile.getOriginalFileName());
+        }
+    }
+
+    /**
+     * 无源文件时创建全新 .txt 临时文件（对齐 md_write"不传 fileId 时创建全新文件"语义）。
+     * @param customFileName LLM 指定的文件名（如 "报告.txt"），为 null 时自动生成
+     */
+    private FileToolResponse createNewTempFile(String content, String encoding, String userId, String customFileName) {
+        try {
+            byte[] fileBytes = content.getBytes(java.nio.charset.Charset.forName(encoding));
+            // 用户友好的显示文件名（中文等非 ASCII 字符无问题，仅用于 originalFileName 和返回给 LLM）
+            String displayFileName;
+            if (customFileName != null && !customFileName.trim().isEmpty()) {
+                displayFileName = generateTempOriginalName(customFileName.trim());
+            } else {
+                displayFileName = "new_" + System.currentTimeMillis() + "_temp.txt";
+            }
+            // FTP 存储用 uploadFile（内部 generateStorageFileName 生成纯 ASCII UUID 名，避免中文 FTP 编码问题）
+            String ftpPath = ftpFileService.uploadFile(userId, displayFileName,
+                    new java.io.ByteArrayInputStream(fileBytes));
+            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
+
+            String conversationId = FileToolConversationContext.getConversationId();
+            UserFile tempUserFile = new UserFile();
+            tempUserFile.setUserId(userId);
+            tempUserFile.setOriginalFileName(displayFileName);
+            tempUserFile.setFileName(storageFileName);
+            tempUserFile.setFileSize((long) fileBytes.length);
+            tempUserFile.setFileType("text/plain");
+            tempUserFile.setFtpPath(ftpPath);
+            tempUserFile.setIsToolGenerated(1);
+            tempUserFile.setConversationId(conversationId);
+            tempUserFile.setUploadTime(java.time.LocalDateTime.now());
+            userFileMapper.insert(tempUserFile);
+
+            Long newFileId = tempUserFile.getId();
+            String downloadUrl = ftpConfig.buildDownloadUrl(newFileId, userId);
+            tempUserFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(tempUserFile);
+
+            log.info("txt_write created new temp file: id={}, fileName={}, downloadUrl={}",
+                    newFileId, displayFileName, downloadUrl);
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("message", "全新 TXT 临时文件创建成功");
+            result.put("fileId", newFileId);
+            result.put("fileName", displayFileName);
+            result.put("filePath", ftpPath);
+            result.put("downloadUrl", downloadUrl);
+            result.put("fileSize", (long) fileBytes.length);
+            result.put("lineCount", content.split("\n", -1).length);
+            result.put("totalChars", content.length());
+            result.put("encoding", encoding);
+            return FileToolResponse.ok(result, displayFileName);
+        } catch (Exception e) {
+            log.error("txt_write createNewTempFile failed", e);
+            return FileToolResponse.error("创建新文件失败: " + e.getMessage(), "(new file)");
+        }
+    }
+
+    // ================================================================
+    // txt_write — 写入/追加文本内容（v2 隔离语义）
 
     /**
      * 写入 TXT/MD 文本文件（覆盖式）。
@@ -197,6 +318,29 @@ public class TxtToolService {
      * params.append — 是否追加（默认 false 覆盖）
      * </p>
      */
+    /**
+     * txt_write — 写入/追加文本（始终产出 _temp 临时文件，不修改源文件）。
+     *
+     * <p>语义（v2 隔离）：每次调用都基于源文件生成一份 _temp 副本，
+     * 把写入/追加后的内容落到临时文件上，源文件保持不变。
+     * 返回临时文件的 {@code downloadUrl}，供前端展示与下载。
+     *
+     * <p>参数：
+     * <ul>
+     *   <li>{@code content} — 必填，写入/追加的文本内容</li>
+     *   <li>{@code append} — 可选，true=追加到源文件副本尾部（默认 false=覆盖副本内容）</li>
+     *   <li>{@code originalFileName} — 可选，自定义临时文件名（不含 _temp 后缀），缺省 = 源文件名</li>
+     *   <li>{@code encoding} — 可选，默认 UTF-8</li>
+     * </ul>
+     *
+     * <p>result 关键字段：
+     * <ul>
+     *   <li>{@code fileId} — 临时文件 ID（前端下载入口的主键）</li>
+     *   <li>{@code sourceFileId} — 源文件 ID（如有）</li>
+     *   <li>{@code fileName} — 临时文件名（&lt;name&gt;_temp.&lt;ext&gt;）</li>
+     *   <li>{@code downloadUrl} — 临时文件带签名下载链接</li>
+     * </ul>
+     */
     public FileToolResponse txtWrite(UserFile userFile, Map<String, Object> params, String userId) {
         String content = readStringParam(params, "content", null);
         if (content == null) {
@@ -204,102 +348,157 @@ public class TxtToolService {
                     userFile != null ? userFile.getOriginalFileName() : null);
         }
         String encoding = readStringParam(params, "encoding", DEFAULT_ENCODING);
+        if (userFile == null) {
+            // 无源文件 → 创建全新 .txt 临时文件（对齐 md_write 语义）
+            String customFileName = readStringParam(params, "originalFileName", null);
+            return createNewTempFile(content, encoding, userId, customFileName);
+        }
+        ensureTextFile(userFile);
+
         boolean append = readBoolParam(params, "append", false);
-        boolean createNew = readBoolParam(params, "createNew", false);
-        // 当 userFile 缺失但要 createNew 时，允许没有原文件（直接创建新文件）
-        if (userFile == null && !createNew) {
-            return FileToolResponse.error("必须提供 fileId/fileRef（或设置 createNew=true 创建新文件）", null);
-        }
-        if (userFile != null) {
-            ensureTextFile(userFile);
-        }
+        String baseName = readStringParam(params, "originalFileName", userFile.getOriginalFileName());
+
         try {
-            byte[] bytes;
-            if (append && userFile != null) {
-                ByteArrayOutputStream baos = ftpFileService.downloadFile(userFile.getUserId(), userFile.getFileName());
-                ByteArrayOutputStream merged = new ByteArrayOutputStream();
-                merged.write(baos.toByteArray());
-                merged.write(content.getBytes(Charset.forName(encoding)));
-                bytes = merged.toByteArray();
+            // 解析"根源文件 ID"：如果 userFile 本身已是临时文件（有 sourceFileId），
+            // 向上追溯到根源文件；否则 userFile 就是根源文件。
+            // 这样不管 LLM 传的是源文件还是之前生成的临时文件，所有写操作都锚定到同一个根源文件，
+            // 保证 findLatestTempBySourceFileId 能正确命中已有的临时文件。
+            String conversationId = FileToolConversationContext.getConversationId();
+            Long rootSourceFileId = (userFile.getSourceFileId() != null)
+                    ? userFile.getSourceFileId()
+                    : userFile.getId();
+            java.util.List<UserFile> existingTemps = userFileMapper
+                    .findLatestTempBySourceFileId(conversationId, userId, rootSourceFileId);
+
+            UserFile tempFile;          // 最终被写入/修改的目标临时文件行
+            boolean isReuseExistingTemp = !existingTemps.isEmpty();
+            if (isReuseExistingTemp) {
+                // 复用最近一个临时文件 — 后续写操作都在它上面做
+                tempFile = existingTemps.get(0);
             } else {
+                // 首次调用：基于源文件创建临时文件
+                tempFile = new UserFile();
+                tempFile.setUserId(userId);
+                tempFile.setOriginalFileName(generateTempOriginalName(baseName));
+                // 注意：fileName 不能在这里自己生成 UUID，必须等 FTP upload 返回 fullPath 后再解析，
+                // 否则 ftpConfig.generateStorageFileName 内部会再生成新 UUID，DB 与 FTP 路径不一致 → 下载 500。
+                tempFile.setFileName(null);
+                tempFile.setFileType(extractExtension(baseName));
+                tempFile.setSourceFileId(rootSourceFileId);
+                tempFile.setIsToolGenerated(1);
+                tempFile.setConversationId(conversationId);
+                tempFile.setUploadTime(java.time.LocalDateTime.now());
+            }
+
+            byte[] bytes;
+            if (append) {
+                // 追加：临时文件现有内容 + 换行 + 新内容 → 写回临时文件（首次调用临时文件不存在 → 走源文件）
+                if (isReuseExistingTemp) {
+                    ByteArrayOutputStream baos = ftpFileService.downloadFile(
+                            tempFile.getUserId(), tempFile.getFileName());
+                    ByteArrayOutputStream merged = new ByteArrayOutputStream();
+                    byte[] existing = baos.toByteArray();
+                    merged.write(existing);
+                    // 如果已有内容不以换行结尾，先补一个换行符
+                    if (existing.length > 0 && existing[existing.length - 1] != '\n') {
+                        merged.write('\n');
+                    }
+                    merged.write(content.getBytes(Charset.forName(encoding)));
+                    bytes = merged.toByteArray();
+                } else {
+                    // 首次 + append：从源文件开始 + 换行 + 拼新内容
+                    ByteArrayOutputStream baos = ftpFileService.downloadFile(
+                            userFile.getUserId(), userFile.getFileName());
+                    ByteArrayOutputStream merged = new ByteArrayOutputStream();
+                    byte[] existing = baos.toByteArray();
+                    merged.write(existing);
+                    if (existing.length > 0 && existing[existing.length - 1] != '\n') {
+                        merged.write('\n');
+                    }
+                    merged.write(content.getBytes(Charset.forName(encoding)));
+                    bytes = merged.toByteArray();
+                }
+            } else {
+                // 覆盖：直接用 content（无论首次/后续，临时文件内容 = content）
                 bytes = content.getBytes(Charset.forName(encoding));
             }
 
-            // createNew=true: 写入新文件（不覆盖原 userFile），返回 downloadUrl
-            if (createNew) {
-                // baseName 优先级：params.originalFileName > 原 userFile 名字 > "untitled.txt"
-                String baseName = readStringParam(params, "originalFileName", null);
-                if (baseName == null || baseName.isEmpty()) {
-                    baseName = userFile != null ? userFile.getOriginalFileName() : "untitled.txt";
+            // 写 FTP（首次 → 新上传；后续 → overwrite 同一 storageName）
+            String fullPath;
+            if (isReuseExistingTemp) {
+                // 兜底：如果历史数据的 file_name 与 ftp_path 不一致（修复前的旧 bug 产物），
+                // 从 ftp_path 重新解析 storageName，避免下载 500。
+                String storageName = tempFile.getFileName();
+                String ftpPathStored = tempFile.getFtpPath();
+                if (ftpPathStored != null && ftpPathStored.contains("/")) {
+                    String pathStorageName = ftpPathStored.substring(ftpPathStored.lastIndexOf('/') + 1);
+                    if (storageName == null || !storageName.equals(pathStorageName)) {
+                        log.warn("txt_write: 历史临时文件 file_name={} 与 ftp_path={} 不一致，按 ftp_path 修正", storageName, ftpPathStored);
+                        storageName = pathStorageName;
+                        tempFile.setFileName(storageName);
+                    }
                 }
-                // 后缀替换：若原文件扩展名不是 .txt/.md，沿用 createNew 语义强制使用传入的名字
-                String newOriginalName = generateNewOriginalName(baseName, "");
-                // 若原文件名没有 "_" 后缀（说明原本是 createNew 而非 copy），保留原名
-                if (userFile == null) {
-                    newOriginalName = baseName.endsWith(".txt") || baseName.endsWith(".md") || baseName.endsWith(".markdown")
-                            ? baseName : baseName + ".txt";
-                }
-                String fullPath = ftpFileService.uploadFile(userId, generateNewStorageName(baseName),
+                fullPath = overwriteBytes(tempFile.getUserId(), storageName, bytes);
+            } else {
+                fullPath = ftpFileService.uploadFile(userId, baseName,
                         new ByteArrayInputStream(bytes));
-                String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
-
-                UserFile newFile = new UserFile();
-                newFile.setUserId(userId);
-                newFile.setOriginalFileName(newOriginalName);
-                newFile.setFileName(actualFileName);
-                newFile.setFileSize((long) bytes.length);
-                newFile.setFileType(extractExtension(baseName));
-                newFile.setFtpPath(fullPath);
-                newFile.setUploadTime(java.time.LocalDateTime.now());
-                newFile.setIsToolGenerated(1);
-                newFile.setConversationId(FileToolConversationContext.getConversationId());
-                if (userFile != null) {
-                    newFile.setSourceFileId(userFile.getId());
-                }
-                userFileMapper.insert(newFile);
-
-                String downloadUrl = ftpConfig.buildDownloadUrl(newFile.getId(), userId);
-                newFile.setDownloadUrl(downloadUrl);
-                userFileMapper.updateById(newFile);
-
-                Map<String, Object> result = new LinkedHashMap<String, Object>();
-                result.put("message", "Text file created");
-                if (userFile != null) {
-                    result.put("originalFileId", userFile.getId());
-                }
-                result.put("newFileId", newFile.getId());
-                result.put("newFileName", actualFileName);
-                result.put("originalFileName", newOriginalName);
-                result.put("downloadUrl", downloadUrl);
-                result.put("encoding", encoding);
-                result.put("size", bytes.length);
-                result.put("lineCount", content.split("\n", -1).length);
-                result.put("mode", "createNew");
-                return FileToolResponse.ok(result, newOriginalName);
+                // ftpFileService.uploadFile 内部用 generateStorageFileName(baseName) 生成最终 storageName，
+                // 必须用这个返回值（不要再用我们自己 generateNewStorageName 生成的名字），否则 DB 与 FTP 路径不一致。
+                String actualStorageName = fullPath.substring(fullPath.lastIndexOf('/') + 1);
+                tempFile.setFileName(actualStorageName);
             }
 
-            // 覆盖原文件：保留 userFile.fileName（storageName）不变，避免产生孤儿文件
-            String originalStorageName = userFile.getFileName();
-            String fullPath = overwriteBytes(userFile.getUserId(), originalStorageName, bytes);
-            userFile.setFtpPath(fullPath);
-            userFile.setFileSize((long) bytes.length);
-            userFile.setFileType(extractExtension(userFile.getOriginalFileName()));
+            tempFile.setFtpPath(fullPath);
+            tempFile.setFileSize((long) bytes.length);
+            tempFile.setUploadTime(java.time.LocalDateTime.now());
+
+            if (isReuseExistingTemp) {
+                userFileMapper.updateById(tempFile);
+            } else {
+                userFileMapper.insert(tempFile);
+            }
+
+            // 生成带签名的下载链接（浏览器可直接点击）
+            String downloadUrl = ftpConfig.buildDownloadUrl(tempFile.getId(), userId);
+            tempFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(tempFile);
+
+            log.info("txt_write {} temp file: id={}, sourceFileId={}, tempFileName={}, mode={}, size={}",
+                    isReuseExistingTemp ? "updated" : "created",
+                    tempFile.getId(), userFile.getId(), tempFile.getOriginalFileName(),
+                    append ? "append" : "overwrite", bytes.length);
 
             Map<String, Object> result = new LinkedHashMap<String, Object>();
-            result.put("message", append ? "Text appended" : "Text written");
-            result.put("fileName", userFile.getOriginalFileName());
-            result.put("storageName", originalStorageName);
-            result.put("writtenBack", true);
+            result.put("message", append
+                    ? (isReuseExistingTemp ? "Text appended to temp file" : "Text appended (first time)")
+                    : (isReuseExistingTemp ? "Text overwrote temp file" : "Text written (first time)"));
+            result.put("fileId", tempFile.getId());
+            result.put("sourceFileId", userFile.getId());
+            result.put("fileName", tempFile.getOriginalFileName());
+            result.put("storageName", tempFile.getFileName());
+            result.put("downloadUrl", downloadUrl);
+            result.put("writtenBack", false);
+            result.put("reusedExistingTemp", isReuseExistingTemp);
             result.put("encoding", encoding);
-            result.put("size", bytes.length);
+            result.put("fileSize", (long) bytes.length);
             result.put("lineCount", content.split("\n", -1).length);
+            result.put("totalChars", content.length());
             result.put("mode", append ? "append" : "overwrite");
-            return FileToolResponse.ok(result, userFile.getOriginalFileName());
+            return FileToolResponse.ok(result, tempFile.getOriginalFileName());
         } catch (Exception e) {
             String failedName = userFile != null ? userFile.getOriginalFileName() : null;
             log.error("txt_write failed for {}", failedName, e);
             return FileToolResponse.error("txt_write failed: " + e.getMessage(), failedName);
         }
+    }
+
+    /** 生成临时文件名：foo.txt → foo_temp.txt；无扩展名时直接追加 _temp。 */
+    private String generateTempOriginalName(String baseName) {
+        int dot = baseName.lastIndexOf('.');
+        if (dot <= 0) {
+            return baseName + "_temp";
+        }
+        return baseName.substring(0, dot) + "_temp" + baseName.substring(dot);
     }
 
     /** 在原文件名基础上加后缀生成新文件名，例如 foo.txt → foo_copy.txt；无扩展名时直接追加 _copy。 */
@@ -937,9 +1136,14 @@ public class TxtToolService {
      * fileRef 仍然是同一个，user_files 行的 file_name 不变，DB 与磁盘一致。
      * </p>
      */
+    /**
+     * 用指定 storageName 覆盖 FTP 文件（不做 UUID 重命名，保证 DB 的 fileName 与 FTP 路径始终一致）。
+     * 注意：必须用 {@code uploadFileWithFileName}（指定文件名覆盖），而非 {@code uploadFile}
+     *（后者内部会 generateStorageFileName 生成新 UUID，导致 DB fileName 与 FTP 文件不同）。
+     */
     private String overwriteBytes(String userId, String storageName, byte[] bytes) throws IOException {
         ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
-        return ftpFileService.uploadFile(userId, storageName, bais);
+        return ftpFileService.uploadFileWithFileName(userId, storageName, bais);
     }
 
     private String generateNewStorageName(String originalFileName) {

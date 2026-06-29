@@ -70,8 +70,10 @@ public class FileToolSeeder implements ApplicationRunner {
         rollbackWordOpsIntegration();
 
         // ===== TXT/MD 操作（5.4）=====
-        seedFileOperate("txt_read", "读取 TXT 文本文件（支持指定编码、行范围）", txtReadSchema());
-        seedFileOperate("txt_write", "向 TXT 文本文件写入内容：① 覆盖/追加已有文件（必传 fileId/fileRef）② 创建全新文件（createNew=true + originalFileName，可不传 fileId），生成的新文件通过 downloadUrl 提供下载", txtWriteSchema());
+        seedFileOperate("txt_init_temp", "初始化 TXT 临时文件：根据源文件创建临时文件副本，后续所有 txt_read/txt_write/txt_keyword_lines 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",
+                fileRefSchema());
+        seedFileOperate("txt_read", "读取 TXT文本文件（支持指定编码、行范围）", txtReadSchema());
+        seedFileOperate("txt_write", "向 TXT 文本文件写入内容。两种场景：1) 传入 fileId/fileRef 时在已有文件上操作（基于源文件生成 _temp 临时副本，源文件保持不变；append=true 追加，append=false 覆盖）；2) 不传 fileId/fileRef 时创建全新 TXT 文件，自动上传并返回新 fileId。多次调用同一个 fileId 时会自动续接到同一个临时文件上。\n\n【重要】执行完成后，必须将返回的 fileId/fileName/fileSize/lineCount/totalChars 以 Markdown 表格形式展示给用户，并在表格下方展示下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n示例表格：\n| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告_temp.txt |\n| 文件大小 | 1.5 KB |\n| 总行数 | 25 |\n| 总字符数 | 1024 |\n\n🖱️ [点击下载 报告_temp.txt](downloadUrl)", txtWriteSchema());
         seedFileOperate("txt_keyword_lines", "提取包含关键词的所有行（可选上下文行）", txtKeywordLinesSchema());
         seedFileOperate("txt_regex", "用正则表达式匹配文本行，返回捕获组", txtRegexSchema());
         seedFileOperate("txt_line_range", "提取指定行范围（1-based）", txtLineRangeSchema());
@@ -84,9 +86,9 @@ public class FileToolSeeder implements ApplicationRunner {
         // ===== MD 扩展操作（5.5 / 模块四 §4）=====
         seedFileOperate("md_init_temp", "初始化 Markdown 临时文件：根据源文件创建临时文件副本，后续所有 md_read/md_write/md_filter_section 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",
                 fileRefSchema());
-        seedFileOperate("md_read", "读取 Markdown(.md) 文件全文内容。这是 Markdown 文件的专用读取工具，支持 .md 文件，返回 fileId、downloadUrl、filePath、content（全文 Markdown）、totalChars、totalLines。支持 maxChars 参数限制返回字符数。处理 .md 文件时请使用此工具而非 txt_read。",
+        seedFileOperate("md_read", "读取 Markdown 文件全文内容。返回 fileId、downloadUrl、filePath、content（全文）、totalChars、totalLines。支持 maxChars 参数限制返回字符数。",
                 mdReadSchema());
-        seedFileOperate("md_write", "写入/创建 Markdown(.md) 文件。这是 Markdown 文件的专用写入工具，支持两种场景：1) 传入 fileRef 时在临时文件上覆盖写入 Markdown 内容（fileId 不变，结果在原文件就地覆盖）；2) 不传 fileRef 时创建全新 .md 文件，自动上传到 FTP 并插入 userfile 表，返回新 fileId 供后续操作使用。返回 fileId、downloadUrl、filePath、lineCount、totalChars。需提供 content（Markdown 文本内容，必填）。处理 .md 文件的写入操作时请使用此工具而非 txt_write。",
+        seedFileOperate("md_write", "创建或覆盖 Markdown 文件。两种场景：1) 传入 fileId 时在临时文件上覆盖写入内容（fileId 不变，结果在原文件就地覆盖）；2) 不传 fileId 时创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新 fileId 供后续操作使用。返回 fileId、downloadUrl、filePath、lineCount、totalChars。需提供 content（Markdown 文本内容，必填）。",
                 mdWriteSchema());
         seedFileOperate("md_images", "提取 Markdown 文件所有图片引用（内联 / 引用式）");
         seedFileOperate("md_headings", "提取 Markdown 文件全层级标题（ATX + Setext）");
@@ -214,7 +216,7 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
         seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。生成新文件并返回 downloadUrl。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。",
+        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。生成新文件并返回 fileId/fileName/fileSize/lineCount/totalChars。\n\n【重要】执行完成后，必须将返回的文件信息以 Markdown 表格形式展示给用户，并在表格下方展示下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n示例表格：\n| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告.docx |\n| 文件大小 | 12.3 KB |\n| 总行数 | 50 |\n| 总字符数 | 2048 |\n\n🖱️ [点击下载 报告.docx](downloadUrl)",
                 wordWriteSchema());
         seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
         seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
@@ -521,22 +523,18 @@ public class FileToolSeeder implements ApplicationRunner {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
         Map<String, Object> fileId = new LinkedHashMap<>();
         fileId.put("type", "integer");
-        fileId.put("description", "文件 ID（优先使用），通过文件 ID 直接查询文件信息");
+        fileId.put("description", "源文件 ID（已有文件时使用，新建文件时不传），用于生成 _temp 临时副本；源文件本身不会被修改");
         s.put("fileId", fileId);
-        s.put("fileRef", stringProp("文件名或文件 ID（fileId 优先）", false));
-        s.put("content", stringProp("要写入的文本内容", true));
+        s.put("fileRef", stringProp("源文件名或文件 ID（与 fileId 二选一）", false));
+        s.put("content", stringProp("要写入/追加的文本内容（必填）", true));
         s.put("encoding", stringProp("文件编码（如 UTF-8/GBK），默认 UTF-8", false));
         Map<String, Object> append = new LinkedHashMap<>();
         append.put("type", "boolean");
-        append.put("description", "是否追加模式（false=覆盖，默认覆盖）");
+        append.put("description", "true=把 content 追加到临时文件（单层 _temp，同一会话内复用）尾部；false=用 content 覆盖临时文件内容（默认 false）。后续调用 txt_write 都自动复用同一个临时文件。");
         s.put("append", append);
-        Map<String, Object> createNew = new LinkedHashMap<>();
-        createNew.put("type", "boolean");
-        createNew.put("description", "true=生成新文件并返回 downloadUrl（原文件不变）；false=覆盖/追加原文件（默认 false）。当 createNew=true 时可不传 fileId/fileRef，直接用 originalFileName 创建全新文件。");
-        s.put("createNew", createNew);
         Map<String, Object> originalFileName = new LinkedHashMap<>();
         originalFileName.put("type", "string");
-        originalFileName.put("description", "要创建的新文件名（含扩展名，如 世界杯预测.txt），仅在 createNew=true 时生效");
+        originalFileName.put("description", "自定义文件名（如 \"报告.txt\"）。新建文件时必须提供——决定生成的文件名（会自动加 _temp 后缀，如 报告_temp.txt）；已有文件时可选，缺省=源文件名");
         s.put("originalFileName", originalFileName);
         return s;
     }

@@ -203,6 +203,80 @@ function parseDownloadInfo(result?: string): DownloadInfo | null {
 }
 
 /**
+ * 收集某个 assistant message 里所有可下载的文件（顶层 tool + 子 tool 都要）。
+ * 用于在 assistant content 渲染完后立即展示"快捷下载"区，避免用户必须
+ * 展开"调用详情"折叠区才能看到/下载文件。
+ *
+ * 去重策略：按 fileId 去重，没有 fileId 的按 url 去重。
+ */
+function collectDownloadInfos(item: any): DownloadInfo[] {
+  if (!item) return []
+  const tools: any[] = item.toolInvocations ?? []
+  const seen = new Set<string>()
+  const result: DownloadInfo[] = []
+  const push = (resultStr?: string, label?: string) => {
+    const info = parseDownloadInfo(resultStr)
+    if (!info) return
+    const key = info.fileId != null ? `id:${info.fileId}` : `url:${info.url}`
+    if (seen.has(key)) return
+    seen.add(key)
+    result.push(info)
+  }
+  for (const tool of tools) {
+    push(tool?.result, `tool=${tool?.name}`)
+    for (const child of (tool?.children ?? [])) {
+      push(child?.result, `child=${child?.name}`)
+    }
+  }
+  return result
+}
+
+/**
+ * 给 assistant content 末尾追加 markdown 格式的下载链接（兜底）。
+ *
+ * 行为：
+ * - 收集当前 message 顶层 tool + 子 tool 的所有 downloadUrl（去重）
+ * - 对每个 fileName 生成 `🖱️ [点击下载 文件名](url)` markdown 链接
+ * - 如果 assistant content 已经包含这个 url（LLM 自己写了），就不重复注入
+ *
+ * 这样即使 LLM 不遵守 prompt（不在 content 里输出 downloadUrl），
+ * 也能保证用户每次写文件操作后都能看到一个稳定的 markdown 格式下载链接，
+ * 与 word_write 的展示一致。点击走浏览器原生下载，不会有 fetch+blob 进度条卡死问题。
+ */
+function assistantContentWithDownloads(item: any): string {
+  const rawContent = item?.rawContent || ''
+  if (item?.role !== 'assistant') return rawContent
+  const infos = collectDownloadInfos(item)
+  if (infos.length === 0) return rawContent
+  const links: string[] = []
+  for (const info of infos) {
+    if (!info.url) continue
+    // LLM 已经在 content 里输出过这个 url → 跳过，避免重复
+    if (rawContent.includes(info.url)) continue
+    const fileName = info.fileName && info.fileName !== 'download' ? info.fileName : '下载文件'
+    links.push(`🖱️ [点击下载 ${fileName}](${info.url})`)
+  }
+  if (links.length === 0) return rawContent
+  return rawContent + '\n\n' + links.join('\n\n')
+}
+
+/**
+ * 从 message rawContent markdown 文本里抽取所有 fileId（兜底用）。
+ * 匹配模式：'(fileId=123)' / 'fileId=123' / 'fileId：123' 等。
+ */
+function extractFileIdsFromContent(content?: string): number[] {
+  if (!content) return []
+  const re = /fileId\s*[=:：]\s*(\d+)/gi
+  const ids: number[] = []
+  let m: RegExpExecArray | null
+  while ((m = re.exec(content)) !== null) {
+    const id = Number(m[1])
+    if (Number.isFinite(id) && id > 0 && !ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
+/**
  * 触发 chat 内文件下载，效果与文件管理页完全一致。
  *
  * - 有 fileId：直接复用 fileService.downloadFile(fileId)，走和文件管理
@@ -1064,7 +1138,7 @@ async function copyContent(text: string) {
               :role="item.role"
               :content="
                 item.role === 'assistant'
-                  ? { type: 'markdown', data: item.rawContent || '' }
+                  ? { type: 'markdown', data: assistantContentWithDownloads(item) }
                   : item.rawContent || ''
               "
             />
@@ -1199,23 +1273,6 @@ async function copyContent(text: string) {
                 v-if="formatToolResultText(tool.result)"
                 class="tool-status-result"
               >
-                <div
-                  v-if="parseDownloadInfo(tool.result)"
-                  class="tool-download-card"
-                >
-                  <div class="tool-download-info">
-                    <div class="tool-download-name">📎 {{ parseDownloadInfo(tool.result)!.fileName }}</div>
-                    <div v-if="formatSize(parseDownloadInfo(tool.result)!.size)" class="tool-download-size">
-                      {{ formatSize(parseDownloadInfo(tool.result)!.size) }}
-                    </div>
-                  </div>
-                  <a
-                    :href="parseDownloadInfo(tool.result)!.url"
-                    :download="parseDownloadInfo(tool.result)!.fileName"
-                    @click.prevent="handleToolDownload(parseDownloadInfo(tool.result)!)"
-                    class="tool-download-btn"
-                  >下载</a>
-                </div>
                 <div class="tool-result-header" @click="toggleResultExpansion(tool.id)">
                   <span class="tool-result-arrow">{{ expandedResultKeys.has(tool.id) ? '▼' : '▶' }}</span>
                   <span class="tool-status-result-label">查看返回内容</span>
