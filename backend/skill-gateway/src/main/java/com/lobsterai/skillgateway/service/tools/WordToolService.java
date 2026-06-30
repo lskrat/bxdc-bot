@@ -186,7 +186,13 @@ public class WordToolService {
             byte[] bytes = buildDocxBytes(title, content);
             // 写新文件（原文件保持不变），返回新文件 id + 下载链接
             String originalFileName;
-            if (userFile != null) {
+            String customName = readStringParam(params, "fileName", null);
+            if (customName != null && !customName.trim().isEmpty()) {
+                originalFileName = customName.trim();
+                if (!originalFileName.toLowerCase().endsWith(".docx") && !originalFileName.toLowerCase().endsWith(".doc")) {
+                    originalFileName += ".docx";
+                }
+            } else if (userFile != null) {
                 originalFileName = userFile.getOriginalFileName();
             } else if (title != null && !title.isEmpty()) {
                 originalFileName = title + ".docx";

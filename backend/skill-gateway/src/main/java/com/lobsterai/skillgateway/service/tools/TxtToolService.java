@@ -1024,13 +1024,14 @@ public class TxtToolService {
     @SuppressWarnings("unchecked")
     public FileToolResponse txtKeywordFreq(UserFile userFile, Map<String, Object> params, String userId) {
         ensureTextFile(userFile);
-        Object keywordsObj = readListParam(params, "keywords", null);
-        if (!(keywordsObj instanceof List)) {
-            return FileToolResponse.error("params.keywords (List<String>) is required", userFile.getOriginalFileName());
+        String keywordsStr = readStringParam(params, "keywords", null);
+        if (keywordsStr == null || keywordsStr.trim().isEmpty()) {
+            return FileToolResponse.error("params.keywords is required", userFile.getOriginalFileName());
         }
         List<String> keywords = new ArrayList<String>();
-        for (Object o : (List<Object>) keywordsObj) {
-            if (o != null) keywords.add(String.valueOf(o));
+        for (String kw : keywordsStr.split(",")) {
+            String trimmed = kw.trim();
+            if (!trimmed.isEmpty()) keywords.add(trimmed);
         }
         if (keywords.isEmpty()) {
             return FileToolResponse.error("params.keywords must not be empty", userFile.getOriginalFileName());

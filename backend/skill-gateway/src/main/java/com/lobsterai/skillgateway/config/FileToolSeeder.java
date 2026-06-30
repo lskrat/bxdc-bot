@@ -216,7 +216,7 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
         seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。生成新文件并返回 fileId/fileName/fileSize/lineCount/totalChars。\n\n【重要】执行完成后，必须将返回的文件信息以 Markdown 表格形式展示给用户，并在表格下方展示下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n示例表格：\n| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告.docx |\n| 文件大小 | 12.3 KB |\n| 总行数 | 50 |\n| 总字符数 | 2048 |\n\n🖱️ [点击下载 报告.docx](downloadUrl)",
+        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容）。参数：title（必填，文档标题）、content（必填，正文内容）、fileName（可选，文件名如\"报告.docx\"，不传则用 title+.docx）。生成新文件并返回 fileId/fileName/fileSize/lineCount/totalChars。\n\n【重要】执行完成后，必须将返回的文件信息以 Markdown 表格形式展示给用户，并在表格下方展示下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n示例表格：\n| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告.docx |\n| 文件大小 | 12.3 KB |\n| 总行数 | 50 |\n| 总字符数 | 2048 |\n\n🖱️ [点击下载 报告.docx](downloadUrl)",
                 wordWriteSchema());
         seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
         seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
@@ -456,8 +456,9 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> wordWriteSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("title", stringProp("Word 文档标题", true));
-        s.put("content", stringProp("Word 文档正文内容（多行文本）", true));
+        s.put("title", stringProp("Word 文档标题（必填）", true));
+        s.put("content", stringProp("Word 文档正文内容（多行文本，必填）", true));
+        s.put("fileName", stringProp("文件名（可选），例如 \"报告.docx\"。不传则使用 title + .docx 作为文件名", false));
         return s;
     }
 
@@ -686,9 +687,8 @@ public class FileToolSeeder implements ApplicationRunner {
         s.put("fileId", fileId);
         s.put("fileRef", stringProp("文件名（可选）", false));
         Map<String, Object> keywords = new LinkedHashMap<>();
-        keywords.put("type", "array");
-        keywords.put("description", "要统计的关键词列表，例如 [\"Java\",\"Python\"]");
-        keywords.put("items", Collections.singletonMap("type", "string"));
+        keywords.put("type", "string");
+        keywords.put("description", "要统计的关键词，多个关键词用英文逗号分隔，例如 \"Java,Python,Spring\"");
         s.put("keywords", keywords);
         return s;
     }
