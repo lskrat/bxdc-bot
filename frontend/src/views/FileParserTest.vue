@@ -40,7 +40,19 @@ async function handleFileChange(e: Event) {
 }
 
 function copyResult() {
-  navigator.clipboard.writeText(parsedText.value)
+  const ta = document.createElement('textarea')
+  ta.value = parsedText.value
+  ta.style.position = 'fixed'
+  ta.style.top = '-9999px'
+  ta.style.left = '-9999px'
+  try {
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    document.execCommand('copy')
+  } finally {
+    if (ta.parentNode) document.body.removeChild(ta)
+  }
 }
 </script>
 

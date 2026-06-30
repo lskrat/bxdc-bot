@@ -80,7 +80,7 @@ function formatJsonValue(value: unknown): string {
 
 function parseJsonValue(text: string): unknown {
   const trimmed = text.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) return null;
   try {
     return JSON.parse(trimmed);
   } catch {

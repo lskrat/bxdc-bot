@@ -71,8 +71,7 @@ async function copyApiKey() {
   if (!currentUser.value) return
   try {
     const res = await fetchApiKey(currentUser.value.id, props.conversationId)
-    // 修复内网浏览器兼容：navigator.clipboard.writeText 在内网/IE/http iframe 场景
-    // 可能不可用，改用三层兜底工具（navigator → textarea execCommand → 手动选择）。
+    // 使用 textarea + execCommand('copy')，兼容内网/老浏览器
     const ok = await copyTextToClipboard(res.apiKey)
     if (ok) {
       MessagePlugin.success('已复制到剪贴板')

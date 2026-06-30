@@ -59,22 +59,25 @@ async function copySummary() {
     MessagePlugin.warning('总结为空，无法复制')
     return
   }
+  const ta = document.createElement('textarea')
+  ta.value = props.summaryText
+  ta.style.position = 'fixed'
+  ta.style.top = '-9999px'
+  ta.style.left = '-9999px'
   try {
-    await navigator.clipboard.writeText(props.summaryText)
-    MessagePlugin.success('总结已复制到剪贴板')
-  } catch (e) {
-    // 兜底：用 textarea execCommand
-    try {
-      const ta = document.createElement('textarea')
-      ta.value = props.summaryText
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      MessagePlugin.success('总结已复制')
-    } catch (e2) {
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    const ok = document.execCommand('copy')
+    if (ok) {
+      MessagePlugin.success('总结已复制到剪贴板')
+    } else {
       MessagePlugin.error('复制失败，请手动选择文本')
     }
+  } catch {
+    MessagePlugin.error('复制失败，请手动选择文本')
+  } finally {
+    if (ta.parentNode) document.body.removeChild(ta)
   }
 }
 
