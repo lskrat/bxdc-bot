@@ -509,13 +509,13 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
       endpoint: requireNonEmpty(draft.endpoint, '请求地址'),
       ...(draft.timeoutSeconds !== 30 ? { timeoutSeconds: draft.timeoutSeconds } : {}),
       ...(draft.parameterBinding !== 'query' ? { parameterBinding: draft.parameterBinding } : {}),
-      ...(draft.responseTimestampField.trim() ? { responseTimestampField: draft.responseTimestampField.trim() } : {}),
-      ...(headers !== undefined ? { headers } : {}),
-      ...(query !== undefined ? { query } : {}),
-      ...(body !== undefined ? { body } : {}),
-      ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
-      ...(parameterContract !== undefined ? { parameterContract } : {}),
-      ...(asyncPoll !== undefined && asyncPoll !== null ? { asyncPoll } : {}),
+      responseTimestampField: draft.responseTimestampField.trim(),
+      headers: headers ?? null,
+      query: query ?? null,
+      body: body ?? null,
+      interfaceDescription: draft.interfaceDescription.trim(),
+      parameterContract: parameterContract ?? null,
+      asyncPoll: asyncPoll ?? null,
     })
   }
 
@@ -528,7 +528,7 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
       executor: requireNonEmpty(draft.executor, '执行器'),
       command: requireNonEmpty(draft.command, '命令内容'),
       readOnly: draft.readOnly,
-      ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
+      interfaceDescription: draft.interfaceDescription.trim(),
     })
   }
 
@@ -546,8 +546,8 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
       sandboxName: requireNonEmpty(draft.sandboxName, 'Python 沙箱'),
       code: requireNonEmpty(draft.code, 'Python 脚本'),
       operation: requireNonEmpty(draft.operation, '操作标识'),
-      ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
-      ...(parameterContract !== undefined ? { parameterContract } : {}),
+      interfaceDescription: draft.interfaceDescription.trim(),
+      parameterContract: parameterContract ?? null,
     })
   }
 

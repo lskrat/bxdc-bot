@@ -91,11 +91,11 @@ function fetchPythonSandboxes() {
 
 function draftToFormValues(draft: SkillConfigDraft): Record<string, unknown> {
   if (isApiDraft(draft)) {
-    const headers = draft.headersText.trim() ? (() => { try { return JSON.parse(draft.headersText); } catch { return {}; } })() : undefined;
-    const query = draft.queryText.trim() ? (() => { try { return JSON.parse(draft.queryText); } catch { return {}; } })() : undefined;
-    const body = draft.bodyText.trim() ? (() => { try { return JSON.parse(draft.bodyText); } catch { return {}; } })() : undefined;
-    const pc = draft.parameterContractText.trim() ? (() => { try { return JSON.parse(draft.parameterContractText); } catch { return {}; } })() : undefined;
-    const asyncPollVal = draft.asyncPollText.trim() ? (() => { try { return JSON.parse(draft.asyncPollText); } catch { return {}; } })() : undefined;
+    const headers = draft.headersText.trim() ? (() => { try { return JSON.parse(draft.headersText); } catch { return {}; } })() : null;
+    const query = draft.queryText.trim() ? (() => { try { return JSON.parse(draft.queryText); } catch { return {}; } })() : null;
+    const body = draft.bodyText.trim() ? (() => { try { return JSON.parse(draft.bodyText); } catch { return {}; } })() : null;
+    const pc = draft.parameterContractText.trim() ? (() => { try { return JSON.parse(draft.parameterContractText); } catch { return {}; } })() : null;
+    const asyncPollVal = draft.asyncPollText.trim() ? (() => { try { return JSON.parse(draft.asyncPollText); } catch { return {}; } })() : null;
     return {
       preset: draft.preset,
       operation: draft.operation,
@@ -131,7 +131,7 @@ function draftToFormValues(draft: SkillConfigDraft): Record<string, unknown> {
     };
   }
   if (isPythonDraft(draft)) {
-    const pc = draft.parameterContractText.trim() ? (() => { try { return JSON.parse(draft.parameterContractText); } catch { return {}; } })() : undefined;
+    const pc = draft.parameterContractText.trim() ? (() => { try { return JSON.parse(draft.parameterContractText); } catch { return {}; } })() : null;
     return {
       sandboxName: draft.sandboxName,
       code: draft.code,
@@ -154,10 +154,10 @@ function updateDraftFromFormValues(values: Record<string, unknown>) {
      d.responseTimestampField = (values.responseTimestampField as string) ?? d.responseTimestampField;
     d.timeoutSeconds = typeof values.timeoutSeconds === 'number' ? values.timeoutSeconds : d.timeoutSeconds;
     d.interfaceDescription = (values.interfaceDescription as string) ?? d.interfaceDescription;
-    d.headersText = values.headers && typeof values.headers === 'object' ? JSON.stringify(values.headers, null, 2) : (typeof values.headers === 'string' ? values.headers : d.headersText);
-    d.queryText = values.query && typeof values.query === 'object' ? JSON.stringify(values.query, null, 2) : (typeof values.query === 'string' ? values.query : d.queryText);
-    d.bodyText = values.body && typeof values.body === 'object' ? JSON.stringify(values.body, null, 2) : (typeof values.body === 'string' ? values.body : d.bodyText);
-    d.parameterContractText = values.parameterContract && typeof values.parameterContract === 'object' ? JSON.stringify(values.parameterContract, null, 2) : (typeof values.parameterContract === 'string' ? values.parameterContract : d.parameterContractText);
+    d.headersText = values.headers === null ? '' : (values.headers && typeof values.headers === 'object' ? JSON.stringify(values.headers, null, 2) : (typeof values.headers === 'string' ? values.headers : d.headersText));
+    d.queryText = values.query === null ? '' : (values.query && typeof values.query === 'object' ? JSON.stringify(values.query, null, 2) : (typeof values.query === 'string' ? values.query : d.queryText));
+    d.bodyText = values.body === null ? '' : (values.body && typeof values.body === 'object' ? JSON.stringify(values.body, null, 2) : (typeof values.body === 'string' ? values.body : d.bodyText));
+    d.parameterContractText = values.parameterContract === null ? '' : (values.parameterContract && typeof values.parameterContract === 'object' ? JSON.stringify(values.parameterContract, null, 2) : (typeof values.parameterContract === 'string' ? values.parameterContract : d.parameterContractText));
     d.asyncPollEnabled = !!values.asyncPollEnabled;
     if (values.asyncPollStrategy !== undefined) {
       d.asyncPollStrategy = values.asyncPollStrategy as ApiConfigDraft['asyncPollStrategy'];
@@ -165,7 +165,9 @@ function updateDraftFromFormValues(values: Record<string, unknown>) {
     if (values.asyncPollReadTimeoutSeconds !== undefined) {
       d.asyncPollReadTimeoutSeconds = Number(values.asyncPollReadTimeoutSeconds) || 600;
     }
-    if (values.asyncPoll !== undefined && values.asyncPoll !== null) {
+    if (values.asyncPoll === null) {
+      d.asyncPollText = '';
+    } else if (values.asyncPoll !== undefined) {
       d.asyncPollText = typeof values.asyncPoll === 'object' ? JSON.stringify(values.asyncPoll, null, 2) : String(values.asyncPoll);
     }
   } else if (isSshDraft(configDraft.value)) {
@@ -184,7 +186,7 @@ function updateDraftFromFormValues(values: Record<string, unknown>) {
     d.code = (values.code as string) ?? d.code;
     d.operation = (values.operation as string) ?? d.operation;
     d.interfaceDescription = (values.interfaceDescription as string) ?? d.interfaceDescription;
-    d.parameterContractText = values.parameterContract && typeof values.parameterContract === 'object' ? JSON.stringify(values.parameterContract, null, 2) : (typeof values.parameterContract === 'string' ? values.parameterContract : d.parameterContractText);
+    d.parameterContractText = values.parameterContract === null ? '' : (values.parameterContract && typeof values.parameterContract === 'object' ? JSON.stringify(values.parameterContract, null, 2) : (typeof values.parameterContract === 'string' ? values.parameterContract : d.parameterContractText));
   }
 }
 
