@@ -214,7 +214,7 @@ function collectDownloadInfos(item: any): DownloadInfo[] {
   const tools: any[] = item.toolInvocations ?? []
   const seen = new Set<string>()
   const result: DownloadInfo[] = []
-  const push = (resultStr?: string, label?: string) => {
+  const push = (resultStr?: string) => {
     const info = parseDownloadInfo(resultStr)
     if (!info) return
     const key = info.fileId != null ? `id:${info.fileId}` : `url:${info.url}`
@@ -223,9 +223,9 @@ function collectDownloadInfos(item: any): DownloadInfo[] {
     result.push(info)
   }
   for (const tool of tools) {
-    push(tool?.result, `tool=${tool?.name}`)
+    push(tool?.result)
     for (const child of (tool?.children ?? [])) {
-      push(child?.result, `child=${child?.name}`)
+      push(child?.result)
     }
   }
   return result
