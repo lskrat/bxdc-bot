@@ -185,20 +185,9 @@ public class WordToolService {
         try {
             byte[] bytes = buildDocxBytes(title, content);
             // 写新文件（原文件保持不变），返回新文件 id + 下载链接
-            String originalFileName;
-            String customName = readStringParam(params, "fileName", null);
-            if (customName != null && !customName.trim().isEmpty()) {
-                originalFileName = customName.trim();
-                if (!originalFileName.toLowerCase().endsWith(".docx") && !originalFileName.toLowerCase().endsWith(".doc")) {
-                    originalFileName += ".docx";
-                }
-            } else if (userFile != null) {
-                originalFileName = userFile.getOriginalFileName();
-            } else if (title != null && !title.isEmpty()) {
-                originalFileName = title + ".docx";
-            } else {
-                originalFileName = "untitled.docx";
-            }
+            // 文件名固定为 当前时间_temp.docx
+            String originalFileName = java.time.LocalDateTime.now()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + "_temp.docx";
             String fullPath = ftpFileService.uploadFile(userId, originalFileName,
                     new ByteArrayInputStream(bytes));
             String actualFileName = fullPath.substring(fullPath.lastIndexOf('/') + 1);

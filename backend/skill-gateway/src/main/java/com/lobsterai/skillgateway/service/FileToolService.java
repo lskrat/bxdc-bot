@@ -221,7 +221,6 @@ public class FileToolService {
         Map<String, Object> args = arguments != null ? arguments : Collections.<String, Object>emptyMap();
         String fileRef = args.get("fileRef") instanceof String ? (String) args.get("fileRef") : null;
         Long fileId = args.get("fileId") instanceof Number ? ((Number) args.get("fileId")).longValue() : null;
-        String fileName = args.get("fileName") instanceof String ? (String) args.get("fileName") : null;
 
         try {
             UserFile userFile = null;
@@ -238,8 +237,6 @@ public class FileToolService {
                     }
                 } else if (fileRef != null && !fileRef.trim().isEmpty()) {
                     userFile = fileRefResolver.resolve(userId, fileRef);
-                } else if (fileName != null && !fileName.trim().isEmpty()) {
-                    userFile = fileRefResolver.resolve(userId, fileName);
                 } else if (!isOptionalFileIdTool(toolName)) {
                     // 非 OptionalFileId 工具必须提供 fileId 或 fileRef
                     return FileToolResponse.error("fileId or fileRef is required for tool: " + toolName);

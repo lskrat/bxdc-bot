@@ -73,7 +73,7 @@ public class FileUploadController {
     private static final long MAX_FILE_SIZE = 10L * 1024L * 1024L;
 
     /** 允许上传的文件扩展名 */
-    private static final java.util.Set<String> ALLOWED_EXTENSIONS = new java.util.HashSet<>(java.util.Arrays.asList("doc", "docx", "xls", "xlsx", "txt", "md"));
+    private static final java.util.Set<String> ALLOWED_EXTENSIONS = new java.util.HashSet<>(java.util.Arrays.asList("doc", "docx", "xls", "xlsx", "csv", "txt", "md"));
 
     private final FtpFileService ftpFileService;
     private final FileParseService fileParseService;
@@ -127,7 +127,7 @@ public class FileUploadController {
         String ext = extractExtension(originalFileName);
         if (ext == null || !ALLOWED_EXTENSIONS.contains(ext)) {
             return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "FILE_TYPE_NOT_ALLOWED",
-                    "不支持的文件类型：" + ext + "，仅支持 doc/docx/xls/xlsx/txt/md");
+                    "不支持的文件类型：" + ext + "，仅支持 doc/docx/xls/xlsx/csv/txt/md");
         }
 
         // 2. userId 校验（FileAccessInterceptor 已保证 X-User-Id 存在）
