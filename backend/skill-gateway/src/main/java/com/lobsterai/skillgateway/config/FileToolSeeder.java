@@ -216,7 +216,7 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
         seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "创建一个新的 Word（.docx）文档。参数：title（必填，文档主标题）、content（必填，正文，使用 Markdown 语法输出，后端会将其渲染为 Word 原生格式）。\n\n" +
+        seedFileOperate("word_write", "创建一个新的 Word（.docx）文档。参数：title（必填，文档主标题）、content（必填，正文，使用 Markdown 语法输出，后端会将其渲染为 Word 原生格式）。文件名由系统自动生成（时间_temp.docx）。\n\n" +
                 "支持的 Markdown 语法：\n" +
                 "# ## — 一/二级标题（加粗，字号递减）；\n" +
                 "- — 无序列表（•）；\n" +
