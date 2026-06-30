@@ -777,6 +777,7 @@ public class WordToolService {
     private byte[] buildDocxBytes(String title, String content) throws IOException {
         XWPFDocument doc = new XWPFDocument();
         try {
+            // 文档主标题（独立段落，加粗 18pt）
             if (title != null && !title.isEmpty()) {
                 XWPFParagraph titlePara = doc.createParagraph();
                 org.apache.poi.xwpf.usermodel.XWPFRun run = titlePara.createRun();
@@ -787,12 +788,13 @@ public class WordToolService {
             }
             if (content != null && !content.isEmpty()) {
                 String[] lines = content.split("\n", -1);
-                for (String line : lines) {
-                    XWPFParagraph p = doc.createParagraph();
-                    org.apache.poi.xwpf.usermodel.XWPFRun r = p.createRun();
-                    r.setFontFamily("SimSun");
-                    r.setFontSize(12);
-                    r.setText(line);
+                // 两趟扫描：第一趟识别 Markdown 表格块，第二趟按行渲染（表格块合并走 XWPFTable）
+                boolean[] inTable = new boolean[lines.length];
+                preScanTables(lines, doc, inTable);
+                for (int i = 0; i < lines.length; i++) {
+                    if (!inTable[i]) {
+                        renderContentLine(doc, lines[i]);
+                    }
                 }
             }
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -802,6 +804,258 @@ public class WordToolService {
             doc.close();
         }
     }
+
+    /**
+     * 第一趟扫描：识别 Markdown 表格块（连续的 | ... | 行，第二行必为 | --- | ... | 分隔行），
+     * 合并渲染为 XWPFTable，并标记 [inTable] 使第二趟跳过这些行。
+     */
+    private void preScanTables(String[] lines, XWPFDocument doc, boolean[] inTable) {
+        int i = 0;
+        while (i < lines.length) {
+            // 找表头行：| ... | ... |
+            if (!isTableLine(lines[i])) {
+                i++;
+                continue;
+            }
+            // 确保下一行是分隔行 | --- | --- |
+            int separatorIdx = i + 1;
+            if (separatorIdx >= lines.length || !isTableSeparator(lines[separatorIdx])) {
+                i++;
+                continue;
+            }
+            // 收集数据行（直到非 |...| 行）
+            int dataEnd = separatorIdx + 1;
+            while (dataEnd < lines.length && isTableLine(lines[dataEnd])) {
+                dataEnd++;
+            }
+            int rowCount = 1 + (dataEnd - separatorIdx - 1); // header + data rows
+
+            // 解析表头
+            String[] headers = splitTableCells(lines[i]);
+
+            // 构建 XWPFTable
+            XWPFTable table = doc.createTable(rowCount, headers.length);
+
+            // 表头行：加粗 + 灰底
+            XWPFTableRow headerRow = table.getRow(0);
+            for (int c = 0; c < headers.length && c < headerRow.getTableCells().size(); c++) {
+                setCellText(headerRow.getCell(c), headers[c], true);
+            }
+
+            // 数据行
+            for (int r = 1; r < rowCount; r++) {
+                XWPFTableRow row = table.getRow(r);
+                String[] cells = splitTableCells(lines[separatorIdx + r]);
+                for (int c = 0; c < cells.length && c < row.getTableCells().size(); c++) {
+                    setCellText(row.getCell(c), cells[c], false);
+                }
+            }
+
+            // 标记表格行已处理
+            for (int r = i; r < dataEnd; r++) {
+                inTable[r] = true;
+            }
+
+            // 表格后空段落分隔
+            doc.createParagraph();
+            i = dataEnd;
+        }
+    }
+
+    /** 判断行是否为 Markdown 表格行（以 | 开头或以 | 结尾表示 pipe 表格） */
+    private static boolean isTableLine(String line) {
+        String trimmed = line.trim();
+        return trimmed.startsWith("|") || trimmed.endsWith("|");
+    }
+
+    /** 判断行是否为 Markdown 表格分隔行：| --- | --- | */
+    private static boolean isTableSeparator(String line) {
+        String trimmed = line.trim();
+        if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) {
+            return false;
+        }
+        // 每个单元格内容必须是 -（可带 : 对齐修饰符）
+        String[] parts = trimmed.substring(1, trimmed.length() - 1).split("\\|", -1);
+        if (parts.length == 0) {
+            return false;
+        }
+        for (String part : parts) {
+            String cell = part.trim();
+            if (cell.isEmpty()) return false;
+            // 允许 :--- / :---: / ---: / --- 等分隔符格式
+            if (!cell.matches(":?-{3,}:?")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 按 | 拆分表格行为单元格（去掉首尾空白） */
+    private static String[] splitTableCells(String line) {
+        String trimmed = line.trim();
+        // 去掉首尾 |
+        if (trimmed.startsWith("|")) trimmed = trimmed.substring(1);
+        if (trimmed.endsWith("|")) trimmed = trimmed.substring(0, trimmed.length() - 1);
+        String[] parts = trimmed.split("\\|", -1);
+        String[] cells = new String[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            cells[i] = parts[i].trim();
+        }
+        return cells;
+    }
+
+    /** 设置表格单元格文本（header 加粗 + 灰底，data 普通） */
+    private void setCellText(XWPFTableCell cell, String text, boolean isHeader) {
+        // 清空默认段落
+        for (int i = cell.getParagraphs().size() - 1; i >= 0; i--) {
+            cell.removeParagraph(i);
+        }
+        XWPFParagraph p = cell.addParagraph();
+        // 表格不解析 **加粗** 标记（避免嵌套复杂），统一用纯文本
+        org.apache.poi.xwpf.usermodel.XWPFRun r = p.createRun();
+        r.setBold(isHeader);
+        r.setFontFamily("SimSun");
+        r.setFontSize(11);
+        r.setText(text);
+        if (isHeader) {
+            cell.setColor("D9E2F3"); // 浅蓝灰表头底色
+        }
+    }
+
+    /**
+     * 解析单行 content，按标准 Markdown 语法渲染成 Word 原生段落。
+     * <p>
+     * 支持的 Markdown（与 FileToolSeeder.word_write 描述一致）：
+     * <ul>
+     *   <li># / ## — 一级/二级标题（加粗，字号递减）</li>
+     *   <li>- 开头 — 无序列表项（带 • 前缀）</li>
+     *   <li>1. 2. …开头 — 有序列表项（自增编号）</li>
+     *   <li>**加粗** — 行内加粗（星号不渲染）</li>
+     *   <li>空行 — 段落分隔</li>
+     *   <li>其他 — 普通段落</li>
+     * </ul>
+     * </p>
+     */
+    private void renderContentLine(XWPFDocument doc, String line) {
+        // 1) 空行：段落分隔
+        if (line.isEmpty()) {
+            doc.createParagraph();
+            return;
+        }
+
+        // 2) 二级标题：## xxx（先测 ##，避免被 # 误吞）
+        if (line.startsWith("## ")) {
+            String text = line.substring(3).trim();
+            addHeading(doc, text, 13);
+            return;
+        }
+
+        // 3) 一级标题：# xxx
+        if (line.startsWith("# ")) {
+            String text = line.substring(2).trim();
+            addHeading(doc, text, 16);
+            return;
+        }
+
+        // 4) 无序列表：- xxx
+        if (line.startsWith("- ")) {
+            String text = line.substring(2);
+            addBulletListItem(doc, text);
+            return;
+        }
+
+        // 5) 有序列表：数字. xxx
+        java.util.regex.Matcher orderedM = ORDERED_LIST_HEAD.matcher(line);
+        if (orderedM.find()) {
+            String text = orderedM.replaceFirst("");
+            addOrderedListItem(doc, text);
+            return;
+        }
+
+        // 6) 普通段落：解析行内 **加粗** 标记
+        addParagraphWithMarkdownBold(doc, line);
+    }
+
+    /** 有序列表行首匹配：开头空白 + 数字 + . + 空格 */
+    private static final java.util.regex.Pattern ORDERED_LIST_HEAD =
+            java.util.regex.Pattern.compile("^\\s*\\d+\\.\\s+");
+
+    /** 一级/二级标题段落 */
+    private void addHeading(XWPFDocument doc, String text, int fontSize) {
+        XWPFParagraph p = doc.createParagraph();
+        org.apache.poi.xwpf.usermodel.XWPFRun r = p.createRun();
+        r.setBold(true);
+        r.setFontSize(fontSize);
+        r.setFontFamily("SimSun");
+        r.setText(text);
+    }
+
+    /**
+     * 无序列表项：用文本前缀「• 」渲染（避免 POI numbering XML API 兼容性坑）。
+     */
+    private void addBulletListItem(XWPFDocument doc, String text) {
+        XWPFParagraph p = doc.createParagraph();
+        p.setIndentationLeft(420); // 0.29 inch
+        appendInlineBoldRuns(p, "\u2022 " + text);
+    }
+
+    /**
+     * 有序列表项：用文本前缀「数字. 」渲染（同上原因避开 POI numbering）。
+     */
+    private void addOrderedListItem(XWPFDocument doc, String text) {
+        XWPFParagraph p = doc.createParagraph();
+        p.setIndentationLeft(420);
+        appendInlineBoldRuns(p, (nextOrderedIndex++) + ". " + text);
+    }
+
+    /** 有序列表自增计数器（每次 word_write 调用从 1 开始） */
+    private int nextOrderedIndex = 1;
+
+    /** 普通段落：解析行内 **加粗** 标记（星号不渲染） */
+    private void addParagraphWithMarkdownBold(XWPFDocument doc, String text) {
+        XWPFParagraph p = doc.createParagraph();
+        appendInlineBoldRuns(p, text);
+    }
+
+    /**
+     * 解析行内 **加粗** 标记：用正则扫描 **text** 对，拆分多 run。
+     * 星号本身不写入 Word，中间文字设为加粗。
+     * <p>
+     * 通配符：** 标记不嵌套，非贪婪匹配，不允许 ** 出现在内容中。
+     * </p>
+     */
+    private void appendInlineBoldRuns(XWPFParagraph p, String text) {
+        // 正则匹配 **...**（非贪婪，中间不含 **）
+        java.util.regex.Pattern ptn = java.util.regex.Pattern.compile("\\*\\*(.+?)\\*\\*");
+        java.util.regex.Matcher m = ptn.matcher(text);
+        int last = 0;
+        while (m.find()) {
+            // 标记之前的纯文本
+            if (m.start() > last) {
+                appendRun(p, text.substring(last, m.start()), false);
+            }
+            // **加粗内容**
+            appendRun(p, m.group(1), true);
+            last = m.end();
+        }
+        if (last < text.length()) {
+            appendRun(p, text.substring(last), false);
+        }
+    }
+
+    /** 追加一个 run（中文 SimSun 字体，统一 12pt） */
+    private void appendRun(XWPFParagraph p, String text, boolean bold) {
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        org.apache.poi.xwpf.usermodel.XWPFRun r = p.createRun();
+        if (bold) r.setBold(true);
+        r.setFontFamily("SimSun");
+        r.setFontSize(12);
+        r.setText(text);
+    }
+
+    // ========== Numbering 辅助已移除：列表项退化为文本前缀渲染（避免 ooxml-schemas API 兼容性问题） ==========
 
     // ========== 替换实现 ==========
 

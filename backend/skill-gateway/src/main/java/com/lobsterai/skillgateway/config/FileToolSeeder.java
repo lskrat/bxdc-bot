@@ -216,7 +216,28 @@ public class FileToolSeeder implements ApplicationRunner {
 
         // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
         seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "创建一个新的 Word 文档（支持标题 + 多行内容），参数：title（必填）、content（必填）。生成新文件并返回 fileId/fileName/fileSize/lineCount/totalChars。\n\n【重要】执行完成后，必须将返回的文件信息以 Markdown 表格形式展示给用户，并在表格下方展示下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n示例表格：\n| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告.docx |\n| 文件大小 | 12.3 KB |\n| 总行数 | 50 |\n| 总字符数 | 2048 |\n\n🖱️ [点击下载 报告.docx](downloadUrl)",
+        seedFileOperate("word_write", "创建一个新的 Word（.docx）文档。参数：title（必填，文档主标题）、content（必填，正文，使用 Markdown 语法输出，后端会将其渲染为 Word 原生格式）。\n\n" +
+                "支持的 Markdown 语法：\n" +
+                "# ## — 一/二级标题（加粗，字号递减）；\n" +
+                "- — 无序列表（•）；\n" +
+                "1. 2. — 有序列表；\n" +
+                "**加粗** — 行内加粗（不渲染星号）；\n" +
+                "| 表格 — GFM pipe 表格（表头加粗灰底）；\n" +
+                "段落用空行分隔；\n" +
+                "严禁```代码块、HTML，会被当纯文本写入。\n\n" +
+                "示例：\n" +
+                "# 项目周报\n\n" +
+                "## 本周进展\n" +
+                "本周完成了**用户认证模块**开发：\n" +
+                "- 登录接口联调\n" +
+                "- Token 刷新机制\n\n" +
+                "## 任务统计\n" +
+                "| 模块 | 完成度 | 负责人 |\n" +
+                "| --- | --- | --- |\n" +
+                "| 认证 | 100% | 张三 |\n" +
+                "| 支付 | 80% | 李四 |\n\n" +
+                "【重要】执行完成后，将 fileId/fileName/fileSize/lineCount/totalChars 用 Markdown 表格展示，并在表格下方放下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n" +
+                "| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告.docx |\n| 文件大小 | 12.3 KB |\n| 总行数 | 50 |\n| 总字符数 | 2048 |\n\n🖱️ [点击下载 报告.docx](downloadUrl)",
                 wordWriteSchema());
         seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
         seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
