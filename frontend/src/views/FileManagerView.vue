@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { fileService } from '../services/fileService'
 import type { UserFileRecord } from '../types/fileUpload'
 import { MessagePlugin } from 'tdesign-vue-next'
 import {
   DownloadIcon, DeleteIcon, RefreshIcon, UploadIcon,
-  FileIcon, FileWordIcon, FileExcelIcon, FilePowerpointIcon, FilePdfIcon, FileImageIcon
+  FileIcon, FileWordIcon, FileExcelIcon, FilePowerpointIcon, FilePdfIcon, FileImageIcon,
+  ChevronLeftIcon
 } from 'tdesign-icons-vue-next'
+
+const router = useRouter()
 
 const files = ref<UserFileRecord[]>([])
 const loading = ref(false)
@@ -144,6 +148,9 @@ onMounted(() => {
   <div class="file-manager-page">
     <!-- Header -->
     <div class="page-header">
+      <t-button variant="text" shape="square" @click="router.back()" title="返回">
+        <template #icon><ChevronLeftIcon size="20" /></template>
+      </t-button>
       <h2>文件管理<span v-if="!loading && !error" class="file-count">（共 {{ files.length }} 个文件）</span></h2>
     </div>
 
@@ -253,6 +260,7 @@ onMounted(() => {
 .page-header {
   display: flex;
   align-items: center;
+  gap: 8px;
   flex-shrink: 0;
 }
 

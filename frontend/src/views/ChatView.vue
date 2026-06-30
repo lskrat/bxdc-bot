@@ -1,4 +1,6 @@
 <script setup lang="ts">
+defineOptions({ name: 'ChatView' })
+
 import { onMounted, onUnmounted, onErrorCaptured, watch, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { provideChat, type Message, type ToolInvocation } from '../composables/useChat'

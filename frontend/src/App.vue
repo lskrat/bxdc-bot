@@ -34,7 +34,11 @@ onBeforeUnmount(() => {
 
 <template>
   <t-config-provider :global-config="globalConfig">
-    <router-view />
+    <router-view v-slot="{ Component }">
+      <keep-alive :include="['ChatView']">
+        <component :is="Component" />
+      </keep-alive>
+    </router-view>
   </t-config-provider>
 </template>
 
