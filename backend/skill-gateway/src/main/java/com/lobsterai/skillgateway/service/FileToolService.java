@@ -46,6 +46,32 @@ public class FileToolService {
     private final FtpConfig ftpConfig;
     private final Map<String, ToolHandler> handlers = new ConcurrentHashMap<String, ToolHandler>();
 
+    /** Per-file write lock pool: key = "userId:fileId", value = lock object */
+    private final ConcurrentHashMap<String, Object> fileWriteLocks = new ConcurrentHashMap<String, Object>();
+
+    /**
+     * 需要串行化的写操作工具——同一文件上的并行写会互相覆盖。
+     * 这些工具修改文件内容并写回 FTP，必须对同一 fileId 互斥。
+     */
+    private static final java.util.Set<String> WRITE_TOOLS = new java.util.HashSet<String>();
+    static {
+        // Excel
+        java.util.Collections.addAll(WRITE_TOOLS,
+            "excel_write", "excel_filter", "excel_sort", "excel_aggregate",
+            "excel_pivot", "excel_calculate", "excel_select_columns", "excel_clean",
+            "excel_convert_format", "excel_init_temp"
+        );
+        // Word
+        java.util.Collections.addAll(WRITE_TOOLS,
+            "word_write", "word_replace_text", "word_template_fill"
+        );
+        // TXT / MD
+        java.util.Collections.addAll(WRITE_TOOLS,
+            "txt_write", "txt_distinct_lines", "txt_sort_lines",
+            "md_write", "md_filter_section", "md_merge"
+        );
+    }
+
     public FileToolService(FileRefResolver fileRefResolver,
                            UserFileMapper userFileMapper,
                            FileParseService fileParseService,
@@ -283,7 +309,19 @@ public class FileToolService {
             try {
                 // 从 arguments 提取工具特定 params（排除 fileId、fileRef、fileName）
                 Map<String, Object> toolParams = extractToolParams(args);
-                FileToolResponse response = handler.handle(userFile, toolParams, userId);
+
+                // 对同一文件的写操作串行化，避免并行覆盖
+                FileToolResponse response;
+                Object lock = null;
+                if (WRITE_TOOLS.contains(toolName) && userFile != null && userFile.getId() != null) {
+                    String lockKey = userId + ":" + userFile.getId();
+                    lock = fileWriteLocks.computeIfAbsent(lockKey, k -> new Object());
+                    synchronized (lock) {
+                        response = handler.handle(userFile, toolParams, userId);
+                    }
+                } else {
+                    response = handler.handle(userFile, toolParams, userId);
+                }
 
                 // open spec: conversation-file-isolation — 工具操作产生的新文件自动绑定到当前会话
                 autoBindCreatedFiles(response, conversationId, userId);

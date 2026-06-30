@@ -764,14 +764,17 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          const userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}User Instruction:\n${instruction}`;
+          let userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}User Instruction:\n${instruction}`;
 
-          // dreamsearch 内容注入到 messageList 最前面，作为独立 system 消息
-          const messages: any[] = [];
+          // dreamsearch 内容合并到 user 消息中，避免与 preModelHook 的 system 消息冲突
           if (profileDetails) {
-            messages.push({ role: 'system', content: `[个人特征信息]\n${profileDetails}` });
+            userTurnContentWithSystem = `[个人特征信息]\n${profileDetails}\n\n${userTurnContentWithSystem}`;
           }
-          messages.push(...(validHistory as any[]), { role: 'user', content: userTurnContentWithSystem });
+
+          const messages: any[] = [
+            ...(validHistory as any[]),
+            { role: 'user', content: userTurnContentWithSystem },
+          ];
 
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
           console.log('[DEBUG] Final messages count:', messages.length);

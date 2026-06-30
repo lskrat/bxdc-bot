@@ -304,7 +304,8 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
                   type: 'agent_text',
                   thinkId,
                   role: 'sub_agent',
-                  content: delta,
+                  content: subAgentTextAccum,
+                  replace: true,
                 });
               }
               continue;

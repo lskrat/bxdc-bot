@@ -608,15 +608,10 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 清空选中的工作表，写入筛选后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
-            int lastRowNum = sheet.getLastRowNum();
-            for (int i = lastRowNum; i >= 0; i--) {
-                Row row = sheet.getRow(i);
-                if (row != null) {
-                    sheet.removeRow(row);
-                }
-            }
-            writeDataToSheet(sheet, headers, filteredRows);
+            // 结果写入新工作表，保留原始 sheet 不变
+            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_筛选");
+            Sheet resultSheet = wb.createSheet(resultSheetName);
+            writeDataToSheet(resultSheet, headers, filteredRows);
 
             // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
@@ -715,15 +710,10 @@ public class ExcelFileToolService {
                 });
             }
 
-            // 清空选中的工作表，写入排序后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
-            int lastRowNum = sheet.getLastRowNum();
-            for (int i = lastRowNum; i >= 0; i--) {
-                Row row = sheet.getRow(i);
-                if (row != null) {
-                    sheet.removeRow(row);
-                }
-            }
-            writeDataToSheet(sheet, headers, rows);
+            // 结果写入新工作表，保留原始 sheet 不变
+            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_排序");
+            Sheet resultSheet = wb.createSheet(resultSheetName);
+            writeDataToSheet(resultSheet, headers, rows);
 
             // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
@@ -853,15 +843,10 @@ public class ExcelFileToolService {
                 resultRows.add(row);
             }
 
-            // 清空选中的工作表，写入聚合后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
-            int lastRowNum = sheet.getLastRowNum();
-            for (int i = lastRowNum; i >= 0; i--) {
-                Row row = sheet.getRow(i);
-                if (row != null) {
-                    sheet.removeRow(row);
-                }
-            }
-            writeDataToSheet(sheet, resultHeaders, resultRows);
+            // 结果写入新工作表，保留原始 sheet 不变
+            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_聚合");
+            Sheet resultSheet = wb.createSheet(resultSheetName);
+            writeDataToSheet(resultSheet, resultHeaders, resultRows);
 
             // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
@@ -972,15 +957,10 @@ public class ExcelFileToolService {
                 resultRows.add(rowData);
             }
 
-            // 清空选中的工作表，写入透视后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
-            int lastRowNum = sheet.getLastRowNum();
-            for (int i = lastRowNum; i >= 0; i--) {
-                Row row = sheet.getRow(i);
-                if (row != null) {
-                    sheet.removeRow(row);
-                }
-            }
-            writeDataToSheet(sheet, resultHeaders, resultRows);
+            // 结果写入新工作表，保留原始 sheet 不变
+            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_透视");
+            Sheet resultSheet = wb.createSheet(resultSheetName);
+            writeDataToSheet(resultSheet, resultHeaders, resultRows);
 
             // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
@@ -1067,15 +1047,10 @@ public class ExcelFileToolService {
             }
             headers.add(newColumn);
 
-            // 清空选中的工作表，写入计算后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
-            int lastRowNum = sheet.getLastRowNum();
-            for (int i = lastRowNum; i >= 0; i--) {
-                Row row = sheet.getRow(i);
-                if (row != null) {
-                    sheet.removeRow(row);
-                }
-            }
-            writeDataToSheet(sheet, headers, rows);
+            // 结果写入新工作表，保留原始 sheet 不变
+            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_计算");
+            Sheet resultSheet = wb.createSheet(resultSheetName);
+            writeDataToSheet(resultSheet, headers, rows);
 
             // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
@@ -1164,15 +1139,10 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 清空选中的工作表，写入选择后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
-            int lastRowNum = sheet.getLastRowNum();
-            for (int i = lastRowNum; i >= 0; i--) {
-                Row row = sheet.getRow(i);
-                if (row != null) {
-                    sheet.removeRow(row);
-                }
-            }
-            writeDataToSheet(sheet, headers, rows);
+            // 结果写入新工作表，保留原始 sheet 不变
+            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_选择列");
+            Sheet resultSheet = wb.createSheet(resultSheetName);
+            writeDataToSheet(resultSheet, headers, rows);
 
             // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
@@ -1277,15 +1247,10 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 清空选中的工作表，写入清洗后的数据（写回读取时选中的同一个 sheet，而非第一个 sheet）
-            int lastRowNum = sheet.getLastRowNum();
-            for (int i = lastRowNum; i >= 0; i--) {
-                Row row = sheet.getRow(i);
-                if (row != null) {
-                    sheet.removeRow(row);
-                }
-            }
-            writeDataToSheet(sheet, headers, rows);
+            // 结果写入新工作表，保留原始 sheet 不变
+            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_清洗");
+            Sheet resultSheet = wb.createSheet(resultSheetName);
+            writeDataToSheet(resultSheet, headers, rows);
 
             // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
@@ -1646,6 +1611,22 @@ public class ExcelFileToolService {
             return wb.getSheet(sheetName);
         }
         return wb.getSheetAt(sheetIndex);
+    }
+
+    /**
+     * 生成不重复的结果工作表名称。
+     * <p>如果建议名称已存在，追加 _1, _2, ... 直到不重复。</p>
+     */
+    private String uniqueSheetName(Workbook wb, String suggestedName) {
+        if (wb.getSheet(suggestedName) == null) {
+            return suggestedName;
+        }
+        for (int i = 1; ; i++) {
+            String candidate = suggestedName + "_" + i;
+            if (wb.getSheet(candidate) == null) {
+                return candidate;
+            }
+        }
     }
 
     /**
@@ -2067,50 +2048,85 @@ public class ExcelFileToolService {
     }
 
     private boolean matchesFilter(Object cellValue, String operator, String value) {
-        String cellStr = cellValue != null ? cellValue.toString() : "";
-        
+        if (cellValue == null) {
+            return "equals".equals(operator) ? "".equals(value) : false;
+        }
+        String cellStr = cellValue.toString();
+
+        // 日期列比较：cellValue 是 java.util.Date 且 value 可解析为日期
+        if (cellValue instanceof java.util.Date) {
+            java.util.Date cellDate = (java.util.Date) cellValue;
+            java.util.Date filterDate = parseDateString(value);
+            if (filterDate != null) {
+                switch (operator) {
+                    case "equals":  return cellDate.compareTo(filterDate) == 0;
+                    case "notEquals": return cellDate.compareTo(filterDate) != 0;
+                    case "gt":      return cellDate.compareTo(filterDate) > 0;
+                    case "lt":      return cellDate.compareTo(filterDate) < 0;
+                    case "gte":     return cellDate.compareTo(filterDate) >= 0;
+                    case "lte":     return cellDate.compareTo(filterDate) <= 0;
+                    case "contains": return cellStr.contains(value);
+                    default: return false;
+                }
+            }
+            // value 不像是日期格式，回退到字符串比较
+        }
+
+        // 数值 / 字符串列比较
         switch (operator) {
             case "equals":
                 return cellStr.equals(value);
             case "contains":
                 return cellStr.contains(value);
             case "gt":
-                try {
-                    double cellNum = Double.parseDouble(cellStr);
-                    double valueNum = Double.parseDouble(value);
-                    return cellNum > valueNum;
-                } catch (NumberFormatException e) {
-                    return false;
-                }
+                return compareNumericOrString(cellValue, cellStr, value) > 0;
             case "lt":
-                try {
-                    double cellNum = Double.parseDouble(cellStr);
-                    double valueNum = Double.parseDouble(value);
-                    return cellNum < valueNum;
-                } catch (NumberFormatException e) {
-                    return false;
-                }
+                return compareNumericOrString(cellValue, cellStr, value) < 0;
             case "gte":
-                try {
-                    double cellNum = Double.parseDouble(cellStr);
-                    double valueNum = Double.parseDouble(value);
-                    return cellNum >= valueNum;
-                } catch (NumberFormatException e) {
-                    return false;
-                }
+                return compareNumericOrString(cellValue, cellStr, value) >= 0;
             case "lte":
-                try {
-                    double cellNum = Double.parseDouble(cellStr);
-                    double valueNum = Double.parseDouble(value);
-                    return cellNum <= valueNum;
-                } catch (NumberFormatException e) {
-                    return false;
-                }
+                return compareNumericOrString(cellValue, cellStr, value) <= 0;
             case "notEquals":
                 return !cellStr.equals(value);
             default:
                 return false;
         }
+    }
+
+    /**
+     * 尝试数值比较，失败回退字符串比较。返回 -1/0/1。
+     */
+    private int compareNumericOrString(Object cellValue, String cellStr, String value) {
+        try {
+            double cellNum = (cellValue instanceof Number) ? ((Number) cellValue).doubleValue() : Double.parseDouble(cellStr);
+            double valueNum = Double.parseDouble(value);
+            return Double.compare(cellNum, valueNum);
+        } catch (NumberFormatException e) {
+            return cellStr.compareTo(value);
+        }
+    }
+
+    /**
+     * 尝试将字符串解析为日期，支持 yyyy-MM-dd / yyyy/MM/dd / yyyy-MM-dd HH:mm:ss 等常见格式。
+     * 返回 null 表示无法解析。
+     */
+    private java.util.Date parseDateString(String s) {
+        if (s == null || s.trim().isEmpty()) return null;
+        String[] patterns = {
+            "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd",
+            "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd HH:mm", "yyyy/MM/dd",
+            "yyyy.MM.dd HH:mm:ss", "yyyy.MM.dd HH:mm", "yyyy.MM.dd",
+            "MM/dd/yyyy", "dd/MM/yyyy",
+        };
+        for (String pattern : patterns) {
+            try {
+                java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat(pattern, java.util.Locale.ENGLISH);
+                sdf.setLenient(false);
+                return sdf.parse(s.trim());
+            } catch (java.text.ParseException ignored) {
+            }
+        }
+        return null;
     }
 
     private int compareValues(Object v1, Object v2) {
