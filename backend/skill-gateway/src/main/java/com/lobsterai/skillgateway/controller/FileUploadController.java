@@ -73,7 +73,7 @@ public class FileUploadController {
     private static final long MAX_FILE_SIZE = 10L * 1024L * 1024L;
 
     /** 允许上传的文件扩展名 */
-    private static final java.util.Set<String> ALLOWED_EXTENSIONS = new java.util.HashSet<>(java.util.Arrays.asList("doc", "docx", "xls", "xlsx", "csv", "txt", "md"));
+    private static final java.util.Set<String> ALLOWED_EXTENSIONS = new java.util.HashSet<>(java.util.Arrays.asList("doc", "docx", "xls", "xlsx", "csv", "txt", "md", "log", "html"));
 
     private final FtpFileService ftpFileService;
     private final FileParseService fileParseService;
@@ -123,11 +123,11 @@ public class FileUploadController {
         if (originalFileName == null || originalFileName.trim().isEmpty()) {
             return error(HttpStatus.BAD_REQUEST, "FILE_NO_NAME", "文件名为空");
         }
-        // 文件类型校验：仅允许 doc, docx, xls, xlsx, txt, md
+        // 文件类型校验：仅允许 doc, docx, xls, xlsx, csv, txt, md, log, html
         String ext = extractExtension(originalFileName);
         if (ext == null || !ALLOWED_EXTENSIONS.contains(ext)) {
             return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "FILE_TYPE_NOT_ALLOWED",
-                    "不支持的文件类型：" + ext + "，仅支持 doc/docx/xls/xlsx/csv/txt/md");
+                    "不支持的文件类型：" + ext + "，仅支持 doc/docx/xls/xlsx/csv/txt/md/log/html");
         }
 
         // 2. userId 校验（FileAccessInterceptor 已保证 X-User-Id 存在）
@@ -534,7 +534,8 @@ public class FileUploadController {
         if (lower.endsWith(".ppt"))  return MediaType.parseMediaType("application/vnd.ms-powerpoint");
         if (lower.endsWith(".pdf"))  return MediaType.parseMediaType("application/pdf");
         if (lower.endsWith(".csv")) return MediaType.parseMediaType("text/csv");
-        if (lower.endsWith(".md") || lower.endsWith(".txt")) return MediaType.TEXT_PLAIN;
+        if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".log")) return MediaType.TEXT_PLAIN;
+        if (lower.endsWith(".html") || lower.endsWith(".htm")) return MediaType.parseMediaType("text/html");
         if (lower.endsWith(".json")) return MediaType.APPLICATION_JSON;
         if (lower.endsWith(".png"))  return MediaType.IMAGE_PNG;
         if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return MediaType.IMAGE_JPEG;

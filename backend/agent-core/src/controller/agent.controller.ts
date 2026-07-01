@@ -747,11 +747,17 @@ export class AgentController {
 
           const staticSystemPrompt = buildStaticSystemPrompt();
           const profileDetails = await this.memoryService.fetchUserProfile(userId);
-          const systemParts: string[] = [staticSystemPrompt];
-          if (memoryContext) {
-            systemParts.push(memoryContext);
-          }
-          const systemContent = systemParts.join('\n\n');
+
+          // system 消息：只放长期记忆/个人特征
+          const systemContent = profileDetails || '你是与本平台 Skill Gateway 集成的智能助手，请根据用户的指令和可用工具完成任务。';
+
+          // user 消息：静态提示词 + 技能上下文 + 对话记忆 + 当前指令
+          const userContent = [
+            `System:\n${staticSystemPrompt}`,
+            skillContext || '',
+            memoryContext || '',
+            `User Instruction:\n${instruction}`,
+          ].filter(s => s).join('\n\n');
   
           const allowedHistoryRoles = new Set(['user', 'assistant']);
           const validHistory = sanitizedHistory
@@ -764,16 +770,11 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          let userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}User Instruction:\n${instruction}`;
-
-          // dreamsearch 内容合并到 user 消息中，避免与 preModelHook 的 system 消息冲突
-          if (profileDetails) {
-            userTurnContentWithSystem = `[个人特征信息]\n${profileDetails}\n\n${userTurnContentWithSystem}`;
-          }
-
+          // 首条唯一的 system 消息，对话记忆放在 user 消息中
           const messages: any[] = [
+            { role: 'system', content: systemContent },
             ...(validHistory as any[]),
-            { role: 'user', content: userTurnContentWithSystem },
+            { role: 'user', content: userContent },
           ];
 
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));

@@ -69,19 +69,19 @@ public class FileToolSeeder implements ApplicationRunner {
         //         3) 重新 seed 6 个 word_*（缺哪个补哪个）。
         rollbackWordOpsIntegration();
 
-        // ===== TXT/MD 操作（5.4）=====
-        seedFileOperate("txt_init_temp", "初始化 TXT 临时文件：根据源文件创建临时文件副本，后续所有 txt_read/txt_write/txt_keyword_lines 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",
+        // ===== TXT/MD/LOG/HTML 操作（5.4）=====
+        seedFileOperate("txt_init_temp", "初始化文本临时文件：根据源文件（.txt/.md/.log/.html）创建临时文件副本，后续所有 txt_read/txt_write/txt_keyword_lines 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",
                 fileRefSchema());
-        seedFileOperate("txt_read", "读取 TXT文本文件（支持指定编码、行范围）", txtReadSchema());
-        seedFileOperate("txt_write", "向 TXT 文本文件写入内容。两种场景：1) 传入 fileId/fileRef 时在已有文件上操作（基于源文件生成 _temp 临时副本，源文件保持不变；append=true 追加，append=false 覆盖）；2) 不传 fileId/fileRef 时创建全新 TXT 文件，自动上传并返回新 fileId。多次调用同一个 fileId 时会自动续接到同一个临时文件上。\n\n【重要】执行完成后，必须将返回的 fileId/fileName/fileSize/lineCount/totalChars 以 Markdown 表格形式展示给用户，并在表格下方展示下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n示例表格：\n| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告_temp.txt |\n| 文件大小 | 1.5 KB |\n| 总行数 | 25 |\n| 总字符数 | 1024 |\n\n🖱️ [点击下载 报告_temp.txt](downloadUrl)", txtWriteSchema());
-        seedFileOperate("txt_keyword_lines", "提取包含关键词的所有行（可选上下文行）", txtKeywordLinesSchema());
-        seedFileOperate("txt_regex", "用正则表达式匹配文本行，返回捕获组", txtRegexSchema());
-        seedFileOperate("txt_line_range", "提取指定行范围（1-based）", txtLineRangeSchema());
-        seedFileOperate("txt_section", "提取 Markdown 标题章节（支持嵌套控制）", txtSectionSchema());
-        seedFileOperate("txt_stats", "统计字符数/词数/行数/字节数");
-        seedFileOperate("txt_distinct_lines", "对 TXT 文件去重行。原文件保持不变，生成新文件并返回 downloadUrl。", txtDistinctLinesSchema());
-        seedFileOperate("txt_sort_lines", "对 TXT 文件排序行。原文件保持不变，生成新文件并返回 downloadUrl。", txtSortLinesSchema());
-        seedFileOperate("txt_keyword_freq", "统计关键词在文本中的出现频率", txtKeywordFreqSchema());
+        seedFileOperate("txt_read", "读取文本文件全文或指定行范围（支持 .txt/.md/.log/.html 及指定编码）", txtReadSchema());
+        seedFileOperate("txt_write", "向文本文件写入内容（支持 .txt/.md/.log/.html）。两种场景：1) 传入 fileId/fileRef 时在已有文件上操作（基于源文件生成 _temp 临时副本，源文件保持不变；append=true 追加，append=false 覆盖）；2) 不传 fileId/fileRef 时创建全新 TXT 文件，自动上传并返回新 fileId。多次调用同一个 fileId 时会自动续接到同一个临时文件上。\n\n【重要】执行完成后，必须将返回的 fileId/fileName/fileSize/lineCount/totalChars 以 Markdown 表格形式展示给用户，并在表格下方展示下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n示例表格：\n| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告_temp.txt |\n| 文件大小 | 1.5 KB |\n| 总行数 | 25 |\n| 总字符数 | 1024 |\n\n🖱️ [点击下载 报告_temp.txt](downloadUrl)", txtWriteSchema());
+        seedFileOperate("txt_keyword_lines", "提取包含关键词的所有行（支持 .txt/.md/.log/.html，可选上下文行）", txtKeywordLinesSchema());
+        seedFileOperate("txt_regex", "用正则表达式匹配文本行并返回捕获组（支持 .txt/.md/.log/.html）", txtRegexSchema());
+        seedFileOperate("txt_line_range", "提取指定行范围 1-based（支持 .txt/.md/.log/.html）", txtLineRangeSchema());
+        seedFileOperate("txt_section", "提取 Markdown 标题章节（支持嵌套控制；.log/.html 文件不适用，会返回空）", txtSectionSchema());
+        seedFileOperate("txt_stats", "统计字符数/词数/行数/字节数（支持 .txt/.md/.log/.html）");
+        seedFileOperate("txt_distinct_lines", "对文本文件去重行（支持 .txt/.md/.log/.html）。原文件保持不变，生成新文件并返回 downloadUrl。", txtDistinctLinesSchema());
+        seedFileOperate("txt_sort_lines", "对文本文件按行排序（支持 .txt/.md/.log/.html）。原文件保持不变，生成新文件并返回 downloadUrl。", txtSortLinesSchema());
+        seedFileOperate("txt_keyword_freq", "统计关键词在文本中的出现频率（支持 .txt/.md/.log/.html）", txtKeywordFreqSchema());
 
         // ===== MD 扩展操作（5.5 / 模块四 §4）=====
         seedFileOperate("md_init_temp", "初始化 Markdown 临时文件：根据源文件创建临时文件副本，后续所有 md_read/md_write/md_filter_section 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",

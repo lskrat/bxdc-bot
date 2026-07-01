@@ -232,14 +232,14 @@ export const FILE_UPLOAD_CONFIG: FileUploadConfig = {
     excel: ['.xls', '.xlsx', '.csv'],
     // ppt/image 留空数组：getFileTypeFromName 找不到扩展名 → 返回 null → 触发 DialogPlugin.alert
     ppt: [],
-    txt: ['.txt', '.md'],
+    txt: ['.txt', '.md', '.log', '.html'],
     image: [],
   },
   MAX_FILES_PER_SESSION: 5,
   MAX_CONCURRENT_PARSES: 3,
   MESSAGES: {
     // open spec: unsupported-file-type-alert — 弹窗文案按用户需求固定
-    UNSUPPORTED_TYPE: '当前仅支持doc、docx、xls、xlxs、csv、txt以及md文件的上传',
+    UNSUPPORTED_TYPE: '当前仅支持doc、docx、xls、xlxs、csv、txt、md、log、html文件的上传',
     FILE_TOO_LARGE: '文件大小超过10Mb，请修改后重试。',
     TOO_MANY_FILES: '单次最多上传5个文件，请减少选择。',
     DUPLICATE_FILE: (name: string, time: string) =>
