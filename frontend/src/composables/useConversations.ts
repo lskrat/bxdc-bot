@@ -224,11 +224,30 @@ function createConversationsState(): ConversationsState {
 
   async function publishConversationMethod(conversationId: string, userId: string, apiDescription: string): Promise<{ apiKey: string }> {
     const res = await apiPublishConversation(userId, conversationId, apiDescription)
-    // Update local cache — use splice for reliable Vue 3 reactivity
-    const idx = conversations.value.findIndex((c) => c.conversation_id === conversationId)
-    if (idx >= 0 && res.conversation) {
-      conversations.value.splice(idx, 1, res.conversation)
-    }
+    // Refresh the full conversations list from the backend so every view that
+    // reads from `conversations` (sidebar, ChatView's watcher, etc.) sees the
+    // fresh `is_published = true` state.
+    //
+    // The backend's `selectByUserIdOrderByUpdatedAt` returns conversations in
+    // `updated_at desc` order, so after a refresh the just-published item is
+    // first. The frontend sidebar sorts by `created_at desc` (stable), which
+    // preserves the previous order for items with unique `created_at` but NOT
+    // when several conversations share the same `created_at` timestamp — for
+    // those, the sort keeps the backend's `updated_at desc` relative order,
+    // which still moves the published one up.
+    //
+    // To guarantee the published conversation stays where it was, snapshot the
+    // current order before refresh, then re-order the refreshed list to that
+    // snapshot. New conversations (not in the snapshot) are appended to the end.
+    const previousOrder = (conversations.value || []).map((c) => c.conversation_id)
+    await refreshConversations(userId)
+    const refreshed = conversations.value || []
+    const previousSet = new Set(previousOrder)
+    const orderedExisting = previousOrder
+      .map((id) => refreshed.find((c) => c.conversation_id === id))
+      .filter((c): c is Conversation => c !== undefined)
+    const appendedNew = refreshed.filter((c) => !previousSet.has(c.conversation_id))
+    conversations.value = [...orderedExisting, ...appendedNew]
     return { apiKey: res.apiKey }
   }
 
