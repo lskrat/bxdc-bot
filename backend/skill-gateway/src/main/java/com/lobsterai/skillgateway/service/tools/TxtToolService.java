@@ -1095,9 +1095,10 @@ public class TxtToolService {
 
     private void ensureTextFile(UserFile userFile) {
         String ext = extractExtension(userFile.getOriginalFileName());
-        if (!"txt".equals(ext) && !"md".equals(ext) && !"markdown".equals(ext)) {
+        if (!"txt".equals(ext) && !"md".equals(ext) && !"markdown".equals(ext)
+                && !"log".equals(ext) && !"html".equals(ext) && !"htm".equals(ext)) {
             throw new IllegalArgumentException("Not a text file: " + userFile.getOriginalFileName()
-                    + ". Use 'txt_*' APIs only with .txt/.md/.markdown files.");
+                    + ". Use 'txt_*' APIs only with .txt/.md/.log/.html files.");
         }
     }
 

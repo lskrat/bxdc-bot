@@ -23,7 +23,6 @@
 
 import { Annotation, MessagesAnnotation } from "@langchain/langgraph";
 import type { BaseMessage } from "@langchain/core/messages";
-import { SystemMessage } from "@langchain/core/messages";
 import { Prompts } from "../prompts";
 
 // 注意：CONFIRMATION_REQUIRED 检测辅助函数已移除
@@ -211,25 +210,35 @@ export function buildTasksSummary(tasks: TasksStatusMap): string {
 export function preModelHook(
   state: AgentState & { llmInputMessages?: BaseMessage[] },
 ) {
-  // 从消息历史重建最新任务状态
   const freshStatus = rebuildTasksStatusFromMessages(state.messages ?? []);
-
-  // 合并状态（重建状态优先）
   const merged: TasksStatusMap = { ...state.tasks_status, ...freshStatus };
-
-  // 生成任务摘要
   const summary = buildTasksSummary(merged);
 
-  // 获取基础消息列表
-  // llmInputMessages 可能在第一次调用时为 undefined，此时回退到 state.messages
   const base = Array.isArray(state.llmInputMessages)
     ? state.llmInputMessages
     : (state.messages ?? []);
   const llmInputMessages: BaseMessage[] = [...base];
 
-  // 如果有任务摘要，作为系统消息插入到最前面
-  if (summary) {
-    llmInputMessages.unshift(new SystemMessage(summary));
+  if (summary && llmInputMessages.length > 0) {
+    // 找到第一条 system 消息，把任务摘要合并进去（不允许存在多条 system）
+    const sysIdx = llmInputMessages.findIndex(
+      (m) => (m as any).getType?.() === "system" || (m as any)._getType?.() === "system",
+    );
+    if (sysIdx >= 0) {
+      const sysMsg = llmInputMessages[sysIdx];
+      let content: string = typeof sysMsg.content === "string" ? sysMsg.content : "";
+      // 去除已有的任务状态段（preModelHook 可能被多次调用），再追加最新摘要
+      const TASK_SECTION = "\n\n[当前任务状态]";
+      const TASK_SECTION_EN = "\n\n[Current Task Status]";
+      content = content.split(TASK_SECTION)[0].split(TASK_SECTION_EN)[0];
+      llmInputMessages[sysIdx] = new (sysMsg.constructor as any)({
+        content: content + TASK_SECTION_EN + summary.slice(summary.indexOf("\n")),
+      });
+    } else {
+      // 兜底：如果没有任何 system 消息，在开头插入一条
+      const { SystemMessage } = require("@langchain/core/messages");
+      llmInputMessages.unshift(new SystemMessage(summary));
+    }
   }
 
   return {

@@ -243,7 +243,7 @@ onMounted(() => {
         ref="fileInputRef"
         type="file"
         style="display:none"
-        accept=".doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.py,.png,.jpg,.jpeg,.webp"
+        accept=".doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.log,.html,.py,.png,.jpg,.jpeg,.webp"
         @change="handleUpload"
       />
     </div>
