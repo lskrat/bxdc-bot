@@ -402,8 +402,18 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
                 const toolId = lastCall?.toolId || (typeof toolCallId === 'string' && toolCallId) || `${toolName}:${Date.now()}`;
                 const gatewayInfo = describeGatewayExtendedTool(toolName);
 
-                const status: ToolTraceStatus =
-                  toolOutput.includes('CANCELLED') || toolOutput.includes('Error') ? 'failed' : 'completed';
+                // 优先从 JSON 响应中的 success 字段判断，避免响应内容包含 "Error" 字面量时误判
+                let status: ToolTraceStatus = 'completed';
+                try {
+                  const parsed = JSON.parse(toolOutput);
+                  if (parsed && typeof parsed === 'object') {
+                    if (parsed.success === false) status = 'failed';
+                    else if (parsed.status === 'CANCELLED') status = 'failed';
+                  }
+                } catch {
+                  // 非 JSON 响应：回退到字符串匹配
+                  status = toolOutput.includes('CANCELLED') ? 'failed' : 'completed';
+                }
 
                 console.log(`[DEBUG] emitToolTraceEvent: toolId=${toolId}, toolName=${toolName}, status=${status}`);
 

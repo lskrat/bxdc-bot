@@ -738,7 +738,7 @@ export class AgentController {
             userId,
           );
 
-          // 记忆开关：关闭时不检索记忆、不注入 memoryContext、不写入 processTurn
+          // 记忆开关：关闭时不检索记忆（保持远端 c8d9330 的 new structure 不变）
           const memories = memoryEnabled
             ? await this.memoryService.searchMemories(instruction, userId, 10)
             : [];
@@ -752,15 +752,21 @@ export class AgentController {
             : '';
 
           const staticSystemPrompt = buildStaticSystemPrompt();
-          // 记忆开关：关闭时同样跳过 profile 检索与注入（避免"用记忆"）
+          // 记忆开关：关闭时跳过 profile 检索（systemContent 回退到 c8d9330 兜底文案）
           const profileDetails = memoryEnabled
             ? await this.memoryService.fetchUserProfile(userId)
             : '';
-          const systemParts: string[] = [staticSystemPrompt];
-          if (memoryContext) {
-            systemParts.push(memoryContext);
-          }
-          const systemContent = systemParts.join('\n\n');
+
+          // system 消息：只放长期记忆/个人特征
+          const systemContent = profileDetails || '你是与本平台 Skill Gateway 集成的智能助手，请根据用户的指令和可用工具完成任务。';
+
+          // user 消息：静态提示词 + 技能上下文 + 对话记忆 + 当前指令
+          const userContent = [
+            `System:\n${staticSystemPrompt}`,
+            skillContext || '',
+            memoryContext || '',
+            `User Instruction:\n${instruction}`,
+          ].filter(s => s).join('\n\n');
   
           const allowedHistoryRoles = new Set(['user', 'assistant']);
           const validHistory = sanitizedHistory
@@ -773,16 +779,11 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          let userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}User Instruction:\n${instruction}`;
-
-          // dreamsearch 内容合并到 user 消息中，避免与 preModelHook 的 system 消息冲突
-          if (profileDetails) {
-            userTurnContentWithSystem = `[个人特征信息]\n${profileDetails}\n\n${userTurnContentWithSystem}`;
-          }
-
+          // 首条唯一的 system 消息，对话记忆放在 user 消息中
           const messages: any[] = [
+            { role: 'system', content: systemContent },
             ...(validHistory as any[]),
-            { role: 'user', content: userTurnContentWithSystem },
+            { role: 'user', content: userContent },
           ];
 
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));

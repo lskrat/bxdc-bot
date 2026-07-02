@@ -65,7 +65,7 @@ function copyResult() {
       <input
         id="file-input"
         type="file"
-        accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md"
+        accept=".doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.log,.html"
         @change="handleFileChange"
       />
       <span v-if="fileName" class="file-info">
