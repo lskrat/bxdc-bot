@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lobsterai.skillgateway.mapper.ExternalServiceInputMapper">
+
+    <!-- listByServiceId() / deleteByServiceId() 已在 @Select / @Delete 注解实现 -->
+
+    <resultMap id="BaseResultMap" type="com.lobsterai.skillgateway.entity.ExternalServiceInput">
+        <id property="id" column="id" />
+        <result property="serviceId" column="service_id" />
+        <result property="externalParamName" column="external_param_name" />
+        <result property="displayName" column="display_name" />
+        <result property="isRequired" column="is_required" />
+        <result property="isRawTransmission" column="is_raw_transmission" />
+        <result property="paramLocation" column="param_location" />
+        <result property="bodyContentType" column="body_content_type" />
+        <result property="paramType" column="param_type" />
+        <result property="isSensitive" column="is_sensitive" />
+        <result property="description" column="description" />
+        <result property="displayOrder" column="display_order" />
+    </resultMap>
+
+</mapper>

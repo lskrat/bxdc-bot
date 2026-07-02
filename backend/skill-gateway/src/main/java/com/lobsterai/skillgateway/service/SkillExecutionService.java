@@ -63,7 +63,8 @@ public class SkillExecutionService {
             ObjectMapper objectMapper,
             FileToolService fileToolService,
             PythonSandboxService pythonSandboxService,
-            JsonSchemaValidator jsonSchemaValidator
+            JsonSchemaValidator jsonSchemaValidator,
+            ExternalServiceSkillExecutor externalServiceSkillExecutor
     ) {
         this.skillService = skillService;
         this.apiProxyService = apiProxyService;
@@ -79,7 +80,10 @@ public class SkillExecutionService {
         this.jsonSchemaValidator = jsonSchemaValidator;
         this.objectMapper = objectMapper;
         this.fileToolService = fileToolService;
+        this.externalServiceSkillExecutor = externalServiceSkillExecutor;
     }
+
+    private final ExternalServiceSkillExecutor externalServiceSkillExecutor;
 
     public Object execute(ExecuteRequest request) throws Exception {
         Skill skill = skillService.getSkillByIdForUser(request.skillId, request.userId)
@@ -162,6 +166,14 @@ public class SkillExecutionService {
                 return executeFileToolSkill(config, effectiveParameters, request.userId, request.conversationId);
             case "python":
                 return executePythonSkill(skill, config, effectiveParameters, request.userId);
+            case "external":
+                // external-service-skill：直接委托给独立的 ExternalServiceSkillExecutor。
+                // 原 5 个 case 完全不变；新增 case 只在 kind=external 时触发。
+                if (externalServiceSkillExecutor == null) {
+                    throw new IllegalStateException("ExternalServiceSkillExecutor not available");
+                }
+                return externalServiceSkillExecutor.executeExternalSkill(
+                        skill, config, effectiveParameters, request.userId);
             default:
                 throw new IllegalArgumentException("Unsupported skill kind: " + kind);
         }

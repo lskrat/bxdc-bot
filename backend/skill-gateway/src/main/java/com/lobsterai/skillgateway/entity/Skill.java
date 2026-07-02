@@ -270,7 +270,10 @@ public class Skill {
         // 2) Augment with computed properties from configuration (SSH variables, template placeholders, etc.)
         if (configuration != null && !configuration.isEmpty()) {
             java.util.Map<String, java.util.Map<String, Object>> computed = computeSchemaProperties(configuration);
-            if (schemaProperties == null) {
+            if (computed == null) {
+                // external 类型等场景下返回 null 哨兵值，schema 派生交给 SkillService
+                // 这里保持 schemaProperties 原状（可能为 null 或 persisted JSON 反序列化的结果）
+            } else if (schemaProperties == null) {
                 schemaProperties = computed;
             } else if (!computed.isEmpty()) {
                 // Merge computed props into persisted props (computed wins on conflict)
@@ -380,7 +383,14 @@ public class Skill {
                     }
                 }
             }
+
+            // 4) External: 派生交给 SkillService.createOrUpdate() 调用 ExternalServiceSkillExecutor.deriveSchemaProperties()
+            //    这里返回 null 哨兵值；agent-core 0 改动（设计决策 11）
+            if ("external".equals(kind)) {
+                return null;
+            }
         } catch (Exception ignored) {}
+
         return result;
     }
 }

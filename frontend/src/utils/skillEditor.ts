@@ -1,5 +1,5 @@
 export type ExecutionMode = 'CONFIG' | 'OPENCLAW'
-export type ConfigKind = 'api' | 'ssh' | 'template' | 'python'
+export type ConfigKind = 'api' | 'ssh' | 'template' | 'python' | 'external'
 export type ApiPreset = 'none' | 'current-time'
 export type SshPreset = 'server-resource-status'
 
@@ -86,7 +86,7 @@ export interface OpenClawConfigDraft {
   orchestrationMode: 'serial'
 }
 
-export type SkillConfigDraft = ApiConfigDraft | SshConfigDraft | TemplateConfigDraft | PythonConfigDraft | OpenClawConfigDraft
+export type SkillConfigDraft = ApiConfigDraft | SshConfigDraft | TemplateConfigDraft | PythonConfigDraft | ExternalConfigDraft | OpenClawConfigDraft
 
 export interface ParseSkillDraftResult {
   draft: SkillConfigDraft | null
@@ -100,6 +100,72 @@ const CONFIG_KIND_LABELS: Record<ConfigKind, string> = {
   ssh: 'SSH',
   template: '模板',
   python: 'Python 沙箱',
+  external: '外部 HTTP 服务',
+}
+
+/** external-service-skill：固定键（kind/serviceName/operation/interfaceDescription）+ 子表动态参数（顶层展开） */
+export const EXTERNAL_ALLOWED_KEYS = ['kind', 'serviceName', 'operation', 'interfaceDescription'] as const
+
+/** 子表里固定的"参数格式契约"占位键（特殊 UI：jsonEditor + AI 优化），序列化时识别 */
+export const EXTERNAL_PARAMETER_CONTRACT_KEY = 'parameterContract'
+
+export interface ExternalConfigDraft {
+  kind: 'external'
+  /** 引用 external_service.name；子表行由 GET /api/external-service/{name}/inputs 拉取渲染 */
+  serviceName: string
+  /** 操作标识（LLM 工具名后缀） */
+  operation: string
+  /** LLM 看的接口说明（给 LLM 用的中文描述） */
+  interfaceDescription: string
+  /** 子表动态参数值（key: external_param_name，value: 用户输入）；序列化时顶层展开 */
+  parameters: Record<string, string>
+}
+
+export function isExternalDraft(draft: SkillConfigDraft | null): draft is ExternalConfigDraft {
+  return !!draft && (draft as { kind?: string }).kind === 'external'
+}
+
+export function parseExternalDraft(parsed: JsonRecord): ExternalConfigDraft {
+  const fixedKeys = new Set<string>(['kind', 'serviceName', 'operation', 'interfaceDescription'])
+  const parameters: Record<string, string> = {}
+  for (const key of Object.keys(parsed)) {
+    if (!fixedKeys.has(key)) {
+      const v = parsed[key]
+      parameters[key] = v == null ? '' : typeof v === 'string' ? v : JSON.stringify(v)
+    }
+  }
+  return {
+    kind: 'external',
+    serviceName: readString(parsed, 'serviceName', ''),
+    operation: readString(parsed, 'operation', ''),
+    interfaceDescription: readString(parsed, 'interfaceDescription', ''),
+    parameters,
+  }
+}
+
+export function serializeExternalDraft(draft: ExternalConfigDraft): JsonRecord {
+  const out: JsonRecord = { kind: 'external' }
+  if (draft.serviceName) out.serviceName = draft.serviceName
+  if (draft.operation) out.operation = draft.operation
+  if (draft.interfaceDescription) out.interfaceDescription = draft.interfaceDescription
+  // 顶层展开所有动态参数值（包括 parameterContract JSON 对象）
+  if (draft.parameters) {
+    for (const key of Object.keys(draft.parameters)) {
+      const v = draft.parameters[key]
+      if (v == null || v === '') continue
+      // parameterContract 是 JSON 字符串，尝试还原为对象
+      if (key === EXTERNAL_PARAMETER_CONTRACT_KEY) {
+        try {
+          out[key] = JSON.parse(v)
+        } catch {
+          out[key] = v
+        }
+      } else {
+        out[key] = v
+      }
+    }
+  }
+  return out
 }
 
 const API_ALLOWED_KEYS = [
@@ -399,6 +465,16 @@ export function createDefaultSkillDraft(executionMode: ExecutionMode, configKind
     }
   }
 
+  if (configKind === 'external') {
+    return {
+      kind: 'external',
+      serviceName: '',
+      operation: '',
+      interfaceDescription: '',
+      parameters: {},
+    }
+  }
+
     return {
       kind: 'api',
       preset: 'none',
@@ -447,6 +523,8 @@ export function parseSkillDraft(executionMode: ExecutionMode, configuration: str
         return { draft: parseTemplateDraft(parsed), error: null }
       case 'python':
         return { draft: parsePythonDraft(parsed), error: null }
+      case 'external':
+        return { draft: parseExternalDraft(parsed), error: null }
       case 'openclaw':
         throw new Error('CONFIG Skill 不能使用 openclaw 配置')
       default:
@@ -549,6 +627,37 @@ export function serializeSkillDraft(executionMode: ExecutionMode, draft: SkillCo
       ...(draft.interfaceDescription.trim() ? { interfaceDescription: draft.interfaceDescription.trim() } : {}),
       ...(parameterContract !== undefined ? { parameterContract } : {}),
     })
+  }
+
+  if (isExternalDraft(draft)) {
+    // external-service-skill 序列化：kind + serviceName（required）+ operation + interfaceDescription（可选）+ 子表动态参数
+    const out: JsonRecord = {
+      kind: 'external',
+      serviceName: requireNonEmpty(draft.serviceName, '外部服务名'),
+    }
+    if (draft.operation.trim()) {
+      out.operation = draft.operation.trim()
+    }
+    if (draft.interfaceDescription.trim()) {
+      out.interfaceDescription = draft.interfaceDescription.trim()
+    }
+    // 顶层展开所有动态参数值（包括 parameterContract JSON 对象）
+    if (draft.parameters) {
+      for (const key of Object.keys(draft.parameters)) {
+        const v = draft.parameters[key]
+        if (v == null || v === '') continue
+        if (key === EXTERNAL_PARAMETER_CONTRACT_KEY) {
+          try {
+            out[key] = JSON.parse(v)
+          } catch {
+            out[key] = v
+          }
+        } else {
+          out[key] = v
+        }
+      }
+    }
+    return JSON.stringify(out)
   }
 
   throw new Error('CONFIG Skill 不能序列化为 openclaw 配置')

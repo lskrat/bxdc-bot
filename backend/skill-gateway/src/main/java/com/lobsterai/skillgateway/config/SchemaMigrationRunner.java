@@ -51,6 +51,8 @@ public class SchemaMigrationRunner implements InitializingBean {
             migrateConversationEnabledFiles(conn);
             migrateAsyncTaskParentToolId(conn);
             migrateChatMessageParentToolId(conn);
+            migrateExternalService(conn);
+            migrateExternalServiceInput(conn);
             cleanupDuplicateBxdcbotSubTaskChatMessages(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
@@ -590,5 +592,111 @@ public class SchemaMigrationRunner implements InitializingBean {
         // 3. 复合索引（按 parent_tool_id 过滤子任务产生的对话消息）
         ensureIndex(conn, table, "idx_chat_msg_parent_tool", existingIndexes,
                 "CREATE INDEX idx_chat_msg_parent_tool ON " + table + "(parent_tool_id)");
+    }
+
+    /**
+     * external-service-skill change 配套 schema 迁移（open spec）。
+     *
+     * 创建 external_service 主表（13 字段）。
+     * 注意：主表 CREATE TABLE 也在 schema-mysql.sql 里（CREATE TABLE IF NOT EXISTS），
+     * 这里 ensureColumn 主要应对历史已部署但表还没建的场景，或后续新增列。
+     */
+    void migrateExternalService(Connection conn) {
+        String table = "external_service";
+        if (!tableExists(conn, table)) {
+            // 表不存在 — schema-mysql.sql 会创建；这里跳过（避免重复 CREATE）
+            log.debug("[SchemaMigration] Table {} will be created by schema-mysql.sql", table);
+            return;
+        }
+
+        // 表已存在 → 检查列；新增列防御
+        Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
+
+        ensureColumn(conn, table, "name", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN name VARCHAR(64) NOT NULL UNIQUE " +
+                "COMMENT '服务引用名'");
+        ensureColumn(conn, table, "endpoint_url", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN endpoint_url VARCHAR(1024) NOT NULL " +
+                "COMMENT '完整 URL'");
+        ensureColumn(conn, table, "http_method", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN http_method VARCHAR(8) NOT NULL DEFAULT 'POST' " +
+                "COMMENT 'GET/POST/PUT/DELETE/PATCH'");
+        ensureColumn(conn, table, "auth_kind", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN auth_kind VARCHAR(16) NOT NULL DEFAULT 'none' " +
+                "COMMENT 'none/apiKey/bearer/dynamicToken'");
+        ensureColumn(conn, table, "auth_config", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN auth_config JSON NULL " +
+                "COMMENT '认证配置 JSON'");
+        ensureColumn(conn, table, "response_format", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN response_format VARCHAR(16) NOT NULL DEFAULT 'json' " +
+                "COMMENT 'json/text/binary-base64'");
+        ensureColumn(conn, table, "retry_max", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN retry_max INT NOT NULL DEFAULT 0 " +
+                "COMMENT '重试次数'");
+        ensureColumn(conn, table, "enabled", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1 " +
+                "COMMENT '是否启用'");
+        ensureColumn(conn, table, "display_order", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN display_order INT NOT NULL DEFAULT 0 " +
+                "COMMENT 'Admin 列表展示顺序'");
+        ensureColumn(conn, table, "description", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN description TEXT NULL " +
+                "COMMENT 'Admin 备注'");
+
+        // 索引
+        ensureIndex(conn, table, "idx_es_enabled_sort", existingIndexes,
+                "CREATE INDEX idx_es_enabled_sort ON " + table + "(enabled, display_order)");
+    }
+
+    /**
+     * external-service-skill 子表 schema 迁移。
+     */
+    void migrateExternalServiceInput(Connection conn) {
+        String table = "external_service_input";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} will be created by schema-mysql.sql", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
+
+        ensureColumn(conn, table, "service_id", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN service_id BIGINT NOT NULL " +
+                "COMMENT 'FK -> external_service.id'");
+        ensureColumn(conn, table, "external_param_name", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN external_param_name VARCHAR(64) NOT NULL " +
+                "COMMENT '第三方 API 入参名'");
+        ensureColumn(conn, table, "display_name", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN display_name VARCHAR(64) NULL " +
+                "COMMENT '中文 label'");
+        ensureColumn(conn, table, "is_required", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN is_required TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT 'LLM tool schema required'");
+        ensureColumn(conn, table, "is_raw_transmission", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN is_raw_transmission TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT '原文透传标志'");
+        ensureColumn(conn, table, "param_location", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN param_location VARCHAR(16) NOT NULL DEFAULT 'body' " +
+                "COMMENT 'query/body/path/header'");
+        ensureColumn(conn, table, "body_content_type", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN body_content_type VARCHAR(16) NULL " +
+                "COMMENT 'json/form/text/binary'");
+        ensureColumn(conn, table, "param_type", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN param_type VARCHAR(16) NOT NULL DEFAULT 'string' " +
+                "COMMENT 'string/number/boolean'");
+        ensureColumn(conn, table, "is_sensitive", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN is_sensitive TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT '审计脱敏标志'");
+        ensureColumn(conn, table, "description", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN description TEXT NULL " +
+                "COMMENT '详细说明'");
+        ensureColumn(conn, table, "display_order", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN display_order INT NOT NULL DEFAULT 0 " +
+                "COMMENT '渲染/出站顺序'");
+
+        ensureIndex(conn, table, "idx_esi_service_sort", existingIndexes,
+                "CREATE INDEX idx_esi_service_sort ON " + table + "(service_id, display_order)");
     }
 }

@@ -88,6 +88,78 @@ Gateway 当前 6 种 Skill 类型中，`api` Skill 把 URL/方法/Headers 写在
 - **失效**：`registry.invalidateAll()` / `registry.invalidateService(id)`（admin UI 或 SQL 修改后调用）
 - **trade-off**：admin 改子表后最长 5 分钟生效（业务方可接受；admin 调 invalidate API 即时生效）
 
+### 决策 10：空数据场景兜底（强约束，原有 Skill 链路零回归）
+
+- **目标**：2 张新表为空时，**新功能完全不挂载**（schema 列表无 external 项），**原有 Skill 链路（api/ssh/python/template/openclaw/file_tool）零行为变化**
+- **8 条兜底原则**（详见 `docs/external-service-skill-design.md §17.1`）：
+  1. **新功能 = 完全 opt-in**：注册表为空 → 系统与本次改动前**行为一致**
+  2. **空集合用 `Collections.emptyList()`，不用 `null`** —— 防止上游 NPE
+  3. **冷启动逻辑包 try/catch**：失败仅 `log.warn`，**不阻塞 Spring 启动**（与 `PythonSandboxService` 启动模式一致）
+  4. **新增 case 独立成方法**：`executeExternalSkill` 独立 `ExternalServiceSkillExecutor` 类，switch 入口 1 行委托，原 4 个 case 逻辑零修改
+  5. **FK 校验用 `if (kind.equals("external"))` 包裹**：仅对 `kind=external` 生效，其他 kind 逻辑零改动
+  6. **前端响应式状态初始为空数组**：`externalOptions.value = []` / `subTablePreview.value = []`，避免渲染时报错
+  7. **认证注入按主表，不依赖子表**：即便子表为空，apiKey / bearer 仍生效 → 出站 HTTP 仍能调通（POST 空 body / GET 无 query）
+  8. **`vue-tsc -b` 零 TS6133**：所有 `ExternalConfigDraft` / `isExternalDraft` / `parseExternalDraft` 等 export 必须被引用
+- **关键代码路径**：
+  - `ExternalServiceRegistry.loadAll()` 包 try/catch；`listEnabled()` 永不返回 null、永不抛异常
+  - `SystemSkillController.listExecutionTypes()` 原 4 种类型逻辑保留，新增 `for (ExternalService svc : registry.listEnabled())` 0 次循环 = 无挂载
+  - `SkillService.createOrUpdate()` 加 `if ("external".equals(kind))` 守卫，FK 校验仅对 external 触发
+  - `SkillExecutionService.execute()` switch 追加 `case "external"` 不影响其他 case
+  - `ExternalServiceSkillExecutor.executeExternalSkill()` 子表为空 → 所有 map 保持空 → 仍能出站
+  - `GET /api/external-service/{name}/inputs` 服务不存在 → 404；子表空 → `[]`
+- **前端兜底**：`externalOptions` / `subTablePreview` 初始为空数组；`serviceName` select `:disabled="!externalOptions.length"`；子表预览区 `v-if="subTablePreview.length"`
+- **自检 checklist**：见 `docs/external-service-skill-design.md §17.5`（12 条验证项，覆盖冷启动 / 编译 / 运行时 / 空表 UI / 空子表出站）
+
+### 决策 11：agent-core 0 改动机制 — Gateway `Skill.computeSchemaPropertiesInternal()` 派生 schemaProperties
+
+**核心结论**：agent-core 通过 Gateway 返回的 `schemaProperties` 字段消费 Skill 入参契约，**不**关心 `kind`。本次 change 在 Gateway 单点扩展 `Skill.computeSchemaPropertiesInternal()` 的 `kind=external` 分支，agent-core **完全 0 改动**。
+
+**机制详解**：
+
+1. **既有路径**（api / python）：
+   - [`Skill.java::computeSchemaPropertiesInternal()`](file:///d:/IdeaProjects/bxdc-bot/backend/skill-gateway/src/main/java/com/lobsterai/skillgateway/entity/Skill.java) 从 `configuration.parameterContract` 提取 → 派生成 `Map<propertyName, {type, description}>` → 持久化到 `skills.schema_properties` 列
+   - agent-core [`java-skills.ts::buildSkillZodSchema(config, schemaProperties)`](file:///d:/IdeaProjects/bxdc-bot/backend/agent-core/src/tools/java-skills.ts) 直接读这个 Map → 构造 Zod → 注册为 `DynamicStructuredTool`
+   - agent-core **完全不知道**这个 skill 是 `api` / `python` 还是别的
+
+2. **新增路径**（external）：
+   - **不**让 `configuration` 存 inputs 定义（避免运行时单一数据源被破坏，§决策 1）
+   - **不**让 agent-core 写 external 特定代码（违反 AGENTS.md §5.5）
+   - **在 `Skill.computeSchemaPropertiesInternal()` 新增 `kind=external` 分支**（单点 ~30 行）：
+     - 读 `cfg.get("serviceName")` → `ExternalServiceRegistry.getByNameOrThrow(serviceName)`
+     - 调 `registry.listInputs(svc.getId())` → 拿子表行（顺序 `display_order ASC, id ASC`）
+     - 派生 `Map<external_param_name, {type: param_type, description: description}>`
+     - 收集 `required` 列表（`is_required=1` 的 `external_param_name` 集合）
+   - 持久化到 `skills.schema_properties`（与 api/python 完全一致的 schema 形态）
+   - agent-core 走既有 `buildSkillZodSchema()` 路径 → 看到的是普通 CONFIG-mode schema → **零外部 kind 特定代码**
+
+3. **执行链路**（无外部特定代码）：
+   - LLM 按 schema 填 payload（payload key = `external_param_name`，字符级一致）
+   - agent-core 原样 POST Gateway `/api/skills/execute`（既有路径）
+   - Gateway `SkillExecutionService.execute()` switch 进 `case "external"` → `ExternalServiceSkillExecutor`
+   - `ExternalServiceSkillExecutor` 再次查子表（运行时单一数据源）→ 拼出站 → 响应回 LLM
+
+4. **关键不变量**：
+   - agent-core 看到的 payload key **永远等于** 子表 `external_param_name`（由 Gateway 派生的 schemaProperties 决定）— §20 参数名一致性硬约束
+   - agent-core **永远不知道** `kind` 字段存在 — 走通用 CONFIG-mode 路径
+   - `ExternalServiceSkillExecutor` 在 Gateway 侧，与 agent-core **完全解耦** — 改出站逻辑不动 agent-core
+
+**与 api/python 的对等性证据**（消除关注项 2）：
+
+| 维度 | api / python | external（本次新增） |
+|---|---|---|
+| 派生子表 / 字段来源 | `configuration.parameterContract` | `external_service_input` 子表 |
+| 派生位置 | `Skill.computeSchemaPropertiesInternal()` `if (kind == "api")` 分支 | **新增** `else if (kind == "external")` 分支 |
+| 派生代码量 | ~20 行 | ~30 行（多 1 次 registry 调用 + service 校验）|
+| agent-core 路径 | `buildSkillZodSchema(config, schemaProperties)` 统一 | **同一路径**，**零 external 特定代码** |
+| 执行路径 | `POST /api/skills/execute` → switch case | **同一路径** |
+| Gateway Executor | `ApiProxyService` / `PythonExecutorService` | `ExternalServiceSkillExecutor`（独立 @Service）|
+| agent-core 改动 | 无 | **无**（合规 AGENTS.md §5.5）|
+
+**这意味着**：
+- 本次 change 在 Gateway `Skill.java` 单点加 1 个 `else if (kind.equals("external"))` 分支（~30 行代码）
+- agent-core 不需要任何文件改动（不需要改 `java-skills.ts` / `agent.ts` / `skill-generator.ts` 等）
+- 实施期只需确认 `Skill.computeSchemaPropertiesInternal()` 的现有 case 逻辑不被破坏（用现有的 `parameterContract` 分支继续处理 api/python）+ 新增 `external` 分支处理 sub-table 注入
+
 ## Risks / Trade-offs
 
 | 风险 | 严重度 | 缓解 |
@@ -104,6 +176,7 @@ Gateway 当前 6 种 Skill 类型中，`api` Skill 把 URL/方法/Headers 写在
 | `auth_config` JSON 解析失败 | 中 | `AuthConfigParser` 解析失败 → 400 拒绝 Skill 执行，audit 标 ERROR |
 | 缓存 5 分钟延迟生效 | 低 | 兜底；admin 主动调 `invalidate` API 即时生效；admin UI 集成 `invalidate` 调用 |
 | 旧 `reviews/2026-06-23-add-external-service-skill.md` 基于旧设计 | 低 | 该 review 引用 `inputs[]` / `dynamicList` / `auth_value_static` 等已删除字段，**仅作历史参考**；本次 change 是新设计稿的完整重写，旧 review 不阻塞 apply |
+| 2 张新表为空时影响原有 Skill 链路 | 中 | 严格按决策 10 兜底（详见 `docs/external-service-skill-design.md §17`）；`ExternalServiceRegistry` 冷启动 try/catch + `Collections.emptyList()` 返回；switch 新增 case 独立；FK 校验 `if (kind.equals("external"))` 守卫；前端响应式状态初始空数组；12 条自检 checklist 必跑 |
 
 ## Migration Plan
 

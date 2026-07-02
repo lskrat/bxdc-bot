@@ -66,19 +66,58 @@ The Gateway SHALL NOT copy any `external_service_input` row data into `skills.co
 
 ### Requirement: External skill runtime exposure to LLM
 
-The agent extended-skill loader SHALL register a tool for each enabled `kind=external` skill using the same outer-`payload` Zod wrapper as `api` / `ssh` / `template` / `python` (no kind-specific branch in agent-core). The Zod schema for the inner `payload` object SHALL be derived from the `external_service_input` rows of the referenced `serviceName`: each row contributes one property whose name is `external_param_name`, whose type is `param_type` (string / number / boolean), and whose `is_required=1` rows become `required` in the Zod schema.
+The Gateway's `Skill.computeSchemaPropertiesInternal()` SHALL, when processing a `kind=external` skill, derive the `schemaProperties` Map by querying `ExternalServiceRegistry.listInputs(svc.getId())`: each sub-table row contributes one property whose name is `external_param_name`, whose type is `param_type` (string / number / boolean), and whose `is_required=1` rows become `required` in the schema. The `schemaProperties` Map is then persisted to `skills.schema_properties` and returned to agent-core via the existing `GET /api/skills` endpoint. agent-core's `buildSkillZodSchema()` consumes this Map generically — it MUST NOT contain any `if (config.kind === 'external')` branch and MUST use the same outer-`payload` Zod wrapper as `api` / `ssh` / `template` / `python`.
 
-#### Scenario: Zod schema derived from sub-table rows
+#### Scenario: Gateway derives schemaProperties from sub-table rows
 
 - **WHEN** a `kind=external` skill's `serviceName` references an `external_service` with 3 sub-table rows: `q` (string, required), `units` (string, optional), `lang` (string, optional)
+- **THEN** the Gateway's `Skill.computeSchemaPropertiesInternal()` returns the Map:
+  ```
+  {
+    "q":     {"type": "string", "description": "<description of q>"},
+    "units": {"type": "string", "description": "<description of units>"},
+    "lang":  {"type": "string", "description": "<description of lang>"}
+  }
+  ```
+- **AND** `required` array is `["q"]` (only the `is_required=1` rows)
+- **AND** the Map is persisted to `skills.schema_properties` (with required list embedded)
+
+#### Scenario: agent-core Zod schema is generic over kind
+
+- **WHEN** agent-core receives a skill with `schemaProperties = {q, units, lang}` (regardless of original `kind`)
 - **THEN** agent-core's Zod schema for this tool's inner payload is `z.object({ q: z.string(), units: z.string().optional(), lang: z.string().optional() })`
 - **AND** the LLM is informed that `q` is mandatory and `units` / `lang` are optional
+- **AND** agent-core has NO awareness of whether this skill is `external` / `api` / `python` — it consumes `schemaProperties` generically
 
 #### Scenario: agent-core has no external-specific branch
 
 - **WHEN** the LLM invokes a `kind=external` tool
 - **THEN** agent-core MUST NOT contain any `if (config.kind === 'external')` branch in the tool invocation path
 - **AND** the call MUST go through the same `POST /api/skills/execute` path as `api` / `ssh` / `template` / `python` extension skills
+- **AND** agent-core's `java-skills.ts` MUST NOT be modified by this change
+
+#### Scenario: payload key is verbatim external_param_name
+
+- **WHEN** the LLM fills the tool payload with `{q: "北京", units: "metric", lang: "zh"}`
+- **THEN** the agent-core POST to Gateway `/api/skills/execute` includes payload with the **exact** keys `q` / `units` / `lang` (no transformation)
+- **AND** the Gateway's `ExternalServiceSkillExecutor` reads the payload keys directly against the sub-table `external_param_name` values (see Requirement: Outbound parameter names are character-exact with external_param_name)
+
+#### Scenario: schemaProperties re-derives on cache invalidation
+
+- **WHEN** admin adds a new sub-table row `q2` (is_required=1) and calls `registry.invalidateService(serviceId)`
+- **AND** admin then updates the skill (triggers `computeSchemaPropertiesInternal()` re-run)
+- **THEN** the new `schemaProperties` Map includes `q2` with `required` array now `["q", "q2"]`
+- **AND** the LLM, on next skill load, sees `q2` as required and MUST provide it
+
+#### Scenario: agent-core files unchanged
+
+- **GIVEN** the change is applied
+- **THEN** the following agent-core files SHALL be unmodified (verified via `git diff backend/agent-core/`):
+  - `backend/agent-core/src/tools/java-skills.ts`
+  - `backend/agent-core/src/agent/agent.ts`
+  - `backend/agent-core/src/tools/skill-generator.ts`
+  - `backend/agent-core/src/tools/execute-skill.ts`
+  - All other agent-core source files
 
 ### Requirement: External skill execution by Gateway
 
@@ -252,3 +291,155 @@ The Gateway's `ExternalServiceRegistry` MUST cache `external_service` and `exter
 
 - **WHEN** admin updates a sub-table row but does NOT call `invalidateService` (e.g., direct SQL)
 - **THEN** within 5 minutes (cache TTL), the change takes effect automatically on the next execution
+
+### Requirement: Empty sub-table still allows outbound execution
+
+The Gateway's `executeExternalSkill()` MUST handle the case where the referenced `external_service` row has zero sub-table rows (empty `external_service_input` list for that `serviceId`). In this case:
+1. Required-field validation loop MUST execute zero iterations and pass
+2. Outbound map assembly (`query` / `body` / `header`) MUST initialize to empty maps
+3. Authentication injection MUST still execute (based on the main table's `auth_kind` / `auth_config`)
+4. The HTTP call MUST still execute via `RetryableHttpClient` — only the URL + auth headers + (possibly empty) body are sent to the third party
+5. The response MUST be returned to the LLM through `ExternalResponseFormatter`
+
+#### Scenario: Empty sub-table zero-iteration validation
+
+- **WHEN** the LLM calls a `kind=external` skill with `parameters = { random_key: "value" }` and the referenced service has zero sub-table rows
+- **THEN** the required-field validation loop iterates 0 times
+- **AND** no `Missing required field` error is raised
+- **AND** the executor proceeds to the outbound assembly phase
+
+#### Scenario: Empty sub-table outbound without query/body/header
+
+- **WHEN** the LLM calls a `kind=external` skill with arbitrary `parameters` and the referenced service has zero sub-table rows
+- **THEN** the executor assembles:
+  - `queryMap = {}` (empty)
+  - `bodyMap = {}` (empty)
+  - `headerMap = { auth-related headers }` (auth injected from main table)
+- **AND** the HTTP call executes with the main table's `endpoint_url` + `http_method` + auth headers
+- **AND** the response is returned to the LLM
+
+#### Scenario: Empty sub-table with auth still works
+
+- **WHEN** the referenced service has `auth_kind = "apiKey"` and `auth_config = {"headerName": "X-API-Key", "valueStatic": "<encrypted>"}` and zero sub-table rows
+- **THEN** the executor injects the `X-API-Key` header from the main table
+- **AND** the HTTP call is made with URL + `X-API-Key` header + empty body / empty query
+- **AND** the response is returned to the LLM
+
+### Requirement: Non-external skill execution is unaffected by external tables
+
+The Gateway's `SkillExecutionService.execute()` switch MUST route `kind=external` skills to the new `ExternalServiceSkillExecutor` and route all other kinds (`api` / `ssh` / `python` / `template`) to their existing handlers without modification. The presence or absence of data in `external_service` / `external_service_input` tables MUST NOT affect execution of non-external skills.
+
+#### Scenario: Switch routes api skill normally
+
+- **WHEN** the LLM calls a `kind=api` skill while `external_service` is empty
+- **THEN** the switch routes to `executeApiSkill()`
+- **AND** `ExternalServiceSkillExecutor.executeExternalSkill()` is NOT invoked
+- **AND** the skill executes via the original `api` flow
+
+#### Scenario: Switch routes ssh skill normally
+
+- **WHEN** the LLM calls a `kind=ssh` skill while `external_service` is empty
+- **THEN** the switch routes to `executeSshSkill()`
+- **AND** the skill executes via the original `ssh` flow
+
+#### Scenario: Switch routes python skill normally
+
+- **WHEN** the LLM calls a `kind=python` skill while `external_service` is empty
+- **THEN** the switch routes to `executePythonSkill()`
+- **AND** the skill executes via the original `python` flow
+
+#### Scenario: Switch routes template skill normally
+
+- **WHEN** the LLM calls a `kind=template` skill while `external_service` is empty
+- **THEN** the switch routes to `executeTemplateSkill()`
+- **AND** the skill executes via the original `template` flow
+
+### Requirement: ExternalServiceSkillExecutor defensive null handling
+
+The `ExternalServiceSkillExecutor.executeExternalSkill()` MUST defensively convert null `inputs` / `llmParams` to empty collections at the entry of the method, so that subsequent loops and method calls do not raise `NullPointerException`.
+
+#### Scenario: Null inputs handled
+
+- **WHEN** `registry.listInputs(svc.getId())` returns null (defensive case)
+- **THEN** the executor converts it to `Collections.emptyList()` before any iteration
+- **AND** no `NullPointerException` is raised
+
+#### Scenario: Null llmParams handled
+
+- **WHEN** `asMap(parameters)` returns null (defensive case, e.g., empty parameters)
+- **THEN** the executor converts it to `Collections.emptyMap()` before any iteration
+- **AND** no `NullPointerException` is raised
+
+### Requirement: Audit masking handles empty sub-table
+
+The `ExternalOutboundPayloadMasker.mask()` MUST handle empty / null inputs gracefully: when `inputs` is empty or null, no masking occurs, and all LLM-provided keys are passed through unchanged.
+
+#### Scenario: Empty inputs no-op masking
+
+- **WHEN** `mask(llmParams = { foo: "bar", baz: "qux" }, inputs = [])` is called
+- **THEN** no sensitive-key collection occurs
+- **AND** the returned map contains `{ foo: "bar", baz: "qux" }` unchanged
+
+#### Scenario: Null inputs no-op masking
+
+- **WHEN** `mask(llmParams, null)` is called
+- **THEN** the inputs parameter is converted to `Collections.emptyList()` internally
+- **AND** the returned map equals the input llmParams map unchanged
+
+### Requirement: Outbound parameter names are character-exact with external_param_name
+
+The Gateway's `executeExternalSkill()` MUST use the value of `external_service_input.external_param_name` as the outbound HTTP request key (query parameter name, JSON body field name, header name) **without any transformation** (no camelCase conversion, no snake_case conversion, no aliasing, no `mapsTo` indirection). The character-exact `external_param_name` MUST appear in the outbound request at the position determined by `param_location` (`query` / `body` / `path` / `header`).
+
+#### Scenario: Query parameter name is verbatim
+
+- **WHEN** the sub-table has row `external_param_name = "q"` with `param_location = "query"`
+- **AND** the LLM provides `parameters = { q: "北京" }`
+- **THEN** the outbound URL MUST contain `?q=%E5%8C%97%E4%BA%AC`
+- **AND** the URL MUST NOT contain `?query=...` or `?cityName=...` or `?city=...`
+- **AND** the outbound key is the **exact** value of `external_param_name` from the sub-table
+
+#### Scenario: Body field name is verbatim
+
+- **WHEN** the sub-table has row `external_param_name = "msg_type"` with `param_location = "body"` and `body_content_type = "json"`
+- **AND** the LLM provides `parameters = { msg_type: "text" }`
+- **THEN** the outbound body MUST contain `"msg_type": "text"` (snake_case, verbatim)
+- **AND** the outbound body MUST NOT contain `"msgType": "text"` or `"msg-type": "text"`
+- **AND** the JSON field name is the **exact** value of `external_param_name` from the sub-table
+
+#### Scenario: Header name is verbatim
+
+- **WHEN** the sub-table has row `external_param_name = "X-API-Key"` with `param_location = "header"`
+- **AND** the LLM provides `parameters = { "X-API-Key": "abc123" }`
+- **THEN** the outbound request MUST have header `X-API-Key: abc123` (case-preserved, hyphens preserved)
+- **AND** the outbound request MUST NOT have header `x-api-key: abc123` or `X-Api-Key: abc123`
+- **AND** the header name is the **exact** value of `external_param_name` from the sub-table
+
+#### Scenario: Path placeholder substitution is verbatim
+
+- **WHEN** `endpoint_url = "https://api.example.com/users/{userId}/posts"` and the sub-table has row `external_param_name = "userId"` with `param_location = "path"`
+- **AND** the LLM provides `parameters = { userId: "123" }`
+- **THEN** the Gateway MUST substitute the `{userId}` placeholder with `123`
+- **AND** the final URL MUST be `https://api.example.com/users/123/posts`
+- **AND** the placeholder name in the URL MUST be the **exact** value of `external_param_name` from the sub-table (case-sensitive)
+
+#### Scenario: LLM payload key must match external_param_name
+
+- **WHEN** the sub-table has row `external_param_name = "appid"`
+- **THEN** the LLM tool schema exposes a property named exactly `appid`
+- **AND** the LLM MUST provide the value under the key `appid` (NOT `apiKey` / `app_id` / `api-key`)
+- **AND** if the LLM provides the value under a different key (e.g., `apiKey`), the Gateway MUST NOT include that value in the outbound request (no sub-table row = no outbound)
+- **AND** the audit log records the mismatched key as "LLM-provided but no sub-table row"
+
+#### Scenario: Snake_case preserved in body
+
+- **WHEN** the sub-table has row `external_param_name = "user_id"` (snake_case) with `param_location = "body"`
+- **AND** the LLM provides `parameters = { user_id: "12345" }`
+- **THEN** the outbound body MUST contain `"user_id": "12345"` (snake_case preserved)
+- **AND** the Gateway MUST NOT auto-convert to `userId` (camelCase) or `user-id` (kebab-case)
+
+#### Scenario: Case sensitivity enforced in header
+
+- **WHEN** the sub-table has row `external_param_name = "Content-Type"` with `param_location = "header"`
+- **AND** the LLM provides `parameters = { "Content-Type": "application/json" }`
+- **THEN** the outbound header MUST be `Content-Type: application/json` (case-preserved)
+- **AND** the Gateway MUST NOT auto-lowercase to `content-type: application/json`

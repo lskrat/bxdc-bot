@@ -279,3 +279,120 @@ The system SHALL NOT require destructive migrations to existing `external_servic
 - **WHEN** a future change adds a new column `timeout_ms INT` to `external_service`
 - **THEN** the migration uses `ensureColumn(conn, "external_service", "timeout_ms", existingColumns, "ALTER TABLE external_service ADD COLUMN timeout_ms INT DEFAULT 30000")`
 - **AND** the migration is idempotent (running twice does not fail)
+
+### Requirement: Empty tables do not break existing skill flow
+
+The `external_service` / `external_service_input` tables SHALL be **completely opt-in**: when both tables are empty (or the new tables do not exist yet on a fresh deploy), all existing skill flows (`api` / `ssh` / `python` / `template` / `openclaw` / `file_tool`) MUST continue to behave exactly as before this change. The `external` skill type MUST NOT appear in the `GET /api/system-skills/execution-types` response when no enabled `external_service` rows exist.
+
+#### Scenario: Both tables empty at first deploy
+
+- **WHEN** the Gateway starts on a deployment where `external_service` and `external_service_input` are created by `SchemaMigrationRunner` but contain zero rows
+- **THEN** `ExternalServiceRegistry.listEnabled()` returns an empty list (NOT null, NOT throwing)
+- **AND** `GET /api/system-skills/execution-types` returns the same list as before this change (no `external` type entries appended)
+- **AND** business users can still create `kind=api` / `kind=ssh` / `kind=python` / `kind=template` skills without any behavioral change
+
+#### Scenario: Schema list loop on empty registry
+
+- **WHEN** `SystemSkillController.listExecutionTypes()` runs and `registry.listEnabled()` returns an empty list
+- **THEN** the `for (ExternalService svc : registry.listEnabled())` loop executes zero iterations
+- **AND** no `external` type entry is added to the response
+- **AND** the existing 4 type entries (`api` / `ssh` / `template` / `python`) are returned in their original order
+
+#### Scenario: Non-external skill create unaffected
+
+- **WHEN** a business user creates a `kind=api` skill while `external_service` is empty
+- **THEN** `SkillService.createOrUpdate()` does NOT enter the `if ("external".equals(kind))` branch
+- **AND** the skill is persisted successfully via the original `api` flow
+
+### Requirement: Empty registry defensive null handling
+
+The `ExternalServiceRegistry` public methods (`listEnabled` / `listInputs` / `getByNameOrThrow` / `assertExists`) MUST handle null inputs gracefully and MUST NEVER return `null` for list-returning methods. The `loadAll()` method MUST be wrapped in a try/catch so that any DB exception is logged as a warning and does not propagate to block Spring startup.
+
+#### Scenario: loadAll on DB error
+
+- **WHEN** the Gateway starts and the DB is unreachable / throws an exception during `loadAll()`
+- **THEN** the exception is caught and logged as `log.warn`
+- **AND** the registry maps remain empty
+- **AND** Spring startup proceeds normally
+- **AND** subsequent calls to `listEnabled()` return an empty list
+
+#### Scenario: listEnabled never returns null
+
+- **WHEN** `listEnabled()` is called regardless of registry state (empty map / partial map / after invalidation)
+- **THEN** it MUST return a non-null `List<ExternalService>` (empty list if no enabled rows)
+
+#### Scenario: listInputs never returns null
+
+- **WHEN** `listInputs(serviceId)` is called for a service that has zero sub-table rows OR when the registry cache is cold / partial
+- **THEN** it MUST return a non-null `List<ExternalServiceInput>` (empty list if no rows)
+
+### Requirement: Public inputs endpoint handles missing service
+
+The public read endpoint `GET /api/external-service/{name}/inputs` MUST return `404 Not Found` when the service name does not exist in `external_service`, and MUST return an empty JSON array `[]` (NOT null) when the service exists but has zero sub-table rows. The endpoint MUST NOT require admin role (any authenticated user can read).
+
+#### Scenario: Service not found
+
+- **WHEN** an authenticated user calls `GET /api/external-service/nonexistent-service/inputs`
+- **THEN** the system returns 404 Not Found with `{"error": "External service not found: nonexistent-service"}`
+
+#### Scenario: Service exists with empty sub-table
+
+- **WHEN** an authenticated user calls `GET /api/external-service/weather-openweathermap/inputs` and the service exists but has zero sub-table rows
+- **THEN** the system returns 200 OK with body `[]`
+- **AND** the response Content-Type is `application/json`
+
+#### Scenario: Service exists with sub-table rows
+
+- **WHEN** an authenticated user calls `GET /api/external-service/weather-openweathermap/inputs` and the service exists with 3 sub-table rows
+- **THEN** the system returns 200 OK with body containing 3 row objects ordered by `display_order ASC, id ASC`
+
+### Requirement: external_param_name must match third-party API parameter name exactly
+
+The `external_service_input.external_param_name` field SHALL be **character-exact** (case-sensitive, including underscores / hyphens / digits / special characters) with the third-party API's documented input parameter name. The Gateway MUST NOT perform any renaming / mapping / translation: the value of `external_param_name` is used verbatim as the LLM tool schema property key, the outbound HTTP query key, the body field key, and the header name. There SHALL be no `mapsTo` or aliasing field.
+
+#### Scenario: OpenWeatherMap q parameter
+
+- **WHEN** admin inserts a sub-table row with `external_param_name = "q"` for an OpenWeatherMap service
+- **THEN** the LLM tool schema exposes a property `q` (NOT `query` / `cityName` / `city`)
+- **AND** the Gateway outbound URL contains `?q=...` (NOT `?query=...` or `?cityName=...`)
+- **AND** OpenWeatherMap correctly receives the `q` parameter
+
+#### Scenario: appid parameter (apiKey auth header)
+
+- **WHEN** admin configures an apiKey auth with `auth_config = {"headerName": "appid", "valueStatic": "<encrypted>"}`
+- **THEN** the Gateway MUST inject the request header named exactly `appid` (NOT `apiKey` or `app_id` or `api-key`)
+- **AND** OpenWeatherMap correctly authenticates the request
+
+#### Scenario: NewAPI stdlib snake_case parameter
+
+- **WHEN** admin inserts a sub-table row with `external_param_name = "user_id"` (snake_case) for a third-party API
+- **THEN** the LLM tool schema exposes a property `user_id` (NOT `userId` / `user-id`)
+- **AND** the outbound body contains `"user_id": "..."` (NOT `"userId": "..."`)
+- **AND** the third-party API correctly parses the snake_case parameter
+
+#### Scenario: HTTP standard header name
+
+- **WHEN** admin inserts a sub-table row with `external_param_name = "Content-Type"` and `param_location = "header"`
+- **THEN** the Gateway MUST inject the request header named exactly `Content-Type` (NOT `content_type` or `contentType`)
+- **AND** HTTP protocol correctly parses the header
+
+#### Scenario: Case sensitivity enforced
+
+- **WHEN** admin inserts a sub-table row with `external_param_name = "APIKey"` (mixed case) for an API that documents the parameter as `apikey`
+- **THEN** the Gateway outbound uses `apikey` mismatch → third-party returns 4xx
+- **AND** the Gateway transparently passes the third-party error back to the LLM
+- **AND** the error message includes the actual outbound key (`APIKey`) for debugging
+
+#### Scenario: No mapsTo aliasing
+
+- **WHEN** any sub-table row is inserted, the schema MUST NOT contain any `mapsTo` field
+- **AND** there is no Skill-side mechanism to override the outbound key
+- **AND** the only way to change the outbound key is to update `external_param_name` in the sub-table (admin-only)
+
+#### Scenario: Mismatch is admin's responsibility
+
+- **WHEN** admin mis-configures `external_param_name` (does not match the third-party API documentation)
+- **THEN** the Gateway SHALL NOT auto-correct or "guess" the correct parameter name
+- **AND** the Gateway SHALL pass the third-party's 4xx error response transparently back to the LLM
+- **AND** the audit log SHALL record the actual outbound key for forensics
+- **AND** the resolution is for admin to update the sub-table row (no Skill change required, no Gateway code change required)
