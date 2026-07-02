@@ -48,10 +48,14 @@ const emit = defineEmits<{
   (e: 'published', conversationId: string): void
 }>()
 
+// Sort by created_at descending (newest first). created_at is stable across
+// all later modifications (rename, publish, send-message updates), so a renamed
+// or just-published conversation will NOT jump to the top — its position in
+// the list reflects when it was created, not when it was last touched.
 const sortedConversations = computed<Conversation[]>(() => {
   const list = conversations.value || []
   return [...list].sort((a, b) => {
-    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   })
 })
 

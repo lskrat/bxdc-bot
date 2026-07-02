@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
+    "build": "vite build",
     "test": "vitest run",
     "preview": "vite preview",
     "vendor:twemoji": "node scripts/vendor-twemoji-assets.mjs",

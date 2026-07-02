@@ -1,4 +1,6 @@
 <script setup lang="ts">
+defineOptions({ name: 'ChatView' })
+
 import { onMounted, onUnmounted, onErrorCaptured, watch, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { provideChat, type Message, type ToolInvocation } from '../composables/useChat'
@@ -23,8 +25,12 @@ const showApiDetail = ref(false)
 // Destructure for template (auto-unwrapping only works on top-level refs)
 const currentConvId = conversations.currentConversationId
 
-// Watch for conversation switch: auto-detect if published
-// Track conversations array changes + current conversation is_published
+// Sync `showApiDetail` with the current conversation's `is_published`.
+//
+// After publishing, `publishConversationMethod` replaces `conversations.value`
+// entirely (not in-place splice), so the conversation object that this getter
+// returns is the fresh one from the backend — `is_published` is up to date and
+// Vue's `===` comparison reliably detects the boolean flip.
 watch(
   () => {
     const conv = (conversations.conversations.value || []).find(

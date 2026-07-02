@@ -158,7 +158,7 @@ export interface ChatState {
   isThinking: ReturnType<typeof ref<boolean>>
   error: ReturnType<typeof ref<string | null>>
   clearError: () => void
-  sendMessage: (content: string, userId?: string, attachedFiles?: UploadFileInfo[]) => Promise<void>
+  sendMessage: (content: string, userId?: string, attachedFiles?: UploadFileInfo[], memoryEnabled?: boolean) => Promise<void>
   /** Stop the current in-flight SSE stream (cancel button while agent is reasoning). */
   stop: () => void
   addMessage: (message: Message) => void
@@ -807,7 +807,7 @@ export function provideChat() {
     }));
   }
 
-  async function sendMessage(content: string, userId?: string, attachedFiles?: UploadFileInfo[]) {
+  async function sendMessage(content: string, userId?: string, attachedFiles?: UploadFileInfo[], memoryEnabled?: boolean) {
     if (isThinking.value) return
 
     const conversationEnabledSkillIds = (() => {
@@ -898,6 +898,8 @@ export function provideChat() {
           history,
           enabledSkillIds: conversationEnabledSkillIds,
           conversationId,
+          // 记忆开关：默认 true；为 false 时后端不读记忆也不写记忆
+          memoryEnabled: memoryEnabled !== false,
         }),
         signal: abortController.signal,
       })
@@ -958,7 +960,7 @@ export function provideChat() {
           }
 
           // 上报本次对话涉及的文件名（任务 8.3）
-          if (attachedFiles && attachedFiles.length > 0 && userId) {
+          if (attachedFiles && attachedFiles.length > 0 && userId && memoryEnabled !== false) {
             const fileNames = attachedFiles.map((f) => f.fileName)
             try {
               await fetch(agentUrl('/memory/add'), {

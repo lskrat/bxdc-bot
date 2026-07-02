@@ -73,7 +73,7 @@ public class FileUploadController {
     private static final long MAX_FILE_SIZE = 10L * 1024L * 1024L;
 
     /** 允许上传的文件扩展名 */
-    private static final java.util.Set<String> ALLOWED_EXTENSIONS = new java.util.HashSet<>(java.util.Arrays.asList("doc", "docx", "xls", "xlsx", "txt", "md"));
+    private static final java.util.Set<String> ALLOWED_EXTENSIONS = new java.util.HashSet<>(java.util.Arrays.asList("doc", "docx", "xls", "xlsx", "csv", "txt", "md", "log", "html"));
 
     private final FtpFileService ftpFileService;
     private final FileParseService fileParseService;
@@ -123,11 +123,11 @@ public class FileUploadController {
         if (originalFileName == null || originalFileName.trim().isEmpty()) {
             return error(HttpStatus.BAD_REQUEST, "FILE_NO_NAME", "文件名为空");
         }
-        // 文件类型校验：仅允许 doc, docx, xls, xlsx, txt, md
+        // 文件类型校验：仅允许 doc, docx, xls, xlsx, csv, txt, md, log, html
         String ext = extractExtension(originalFileName);
         if (ext == null || !ALLOWED_EXTENSIONS.contains(ext)) {
             return error(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "FILE_TYPE_NOT_ALLOWED",
-                    "不支持的文件类型：" + ext + "，仅支持 doc/docx/xls/xlsx/txt/md");
+                    "不支持的文件类型：" + ext + "，仅支持 doc/docx/xls/xlsx/csv/txt/md/log/html");
         }
 
         // 2. userId 校验（FileAccessInterceptor 已保证 X-User-Id 存在）
@@ -468,8 +468,19 @@ public class FileUploadController {
         }
 
         try {
-            java.io.InputStream in = ftpFileService.openForDownload(userId, uf.getFileName());
-            long size = uf.getFileSize() == null ? -1L : uf.getFileSize();
+            // 兜底：如果历史数据的 fileName 与 ftp_path 不一致（修复前的旧 bug 产物），
+            // 从 ftp_path 解析正确的 FTP 存储名，避免下载到旧内容。
+            String storageName = uf.getFileName();
+            String ftpPath = uf.getFtpPath();
+            if (ftpPath != null && ftpPath.contains("/")) {
+                String pathName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
+                if (!pathName.equals(storageName)) {
+                    log.warn("downloadFile: fileName={} != ftp_path storage={}, using ftp_path", storageName, pathName);
+                    storageName = pathName;
+                }
+            }
+            byte[] bytes = ftpFileService.downloadFile(userId, storageName).toByteArray();
+            long size = bytes.length;
 
             HttpHeaders headers = new HttpHeaders();
             String downloadName = uf.getOriginalFileName() != null ? uf.getOriginalFileName() : uf.getFileName();
@@ -479,13 +490,16 @@ public class FileUploadController {
                             .build());
             MediaType ct = resolveContentType(uf);
             headers.setContentType(ct);
-            if (size > 0) {
-                headers.setContentLength(size);
-            }
+            headers.setContentLength(size);
+            // 同 fileId 多次写入后 content 已变，但 downloadUrl（含 token）不变，
+            // 浏览器/代理可能命中 HTTP 缓存返回旧内容，必须强制禁止缓存。
+            headers.setCacheControl("no-store, no-cache, must-revalidate, max-age=0");
+            headers.setPragma("no-cache");
+            headers.setExpires(0);
 
             return ResponseEntity.ok()
                     .headers(headers)
-                    .body(new InputStreamResource(in));
+                    .body(bytes);
         } catch (java.io.IOException e) {
             log.error("File download failed: user={}, fileId={}, name={}", userId, id, uf.getFileName(), e);
             return error(HttpStatus.INTERNAL_SERVER_ERROR, "DOWNLOAD_FAILED", "Download failed: " + e.getMessage());
@@ -520,7 +534,8 @@ public class FileUploadController {
         if (lower.endsWith(".ppt"))  return MediaType.parseMediaType("application/vnd.ms-powerpoint");
         if (lower.endsWith(".pdf"))  return MediaType.parseMediaType("application/pdf");
         if (lower.endsWith(".csv")) return MediaType.parseMediaType("text/csv");
-        if (lower.endsWith(".md") || lower.endsWith(".txt")) return MediaType.TEXT_PLAIN;
+        if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".log")) return MediaType.TEXT_PLAIN;
+        if (lower.endsWith(".html") || lower.endsWith(".htm")) return MediaType.parseMediaType("text/html");
         if (lower.endsWith(".json")) return MediaType.APPLICATION_JSON;
         if (lower.endsWith(".png"))  return MediaType.IMAGE_PNG;
         if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return MediaType.IMAGE_JPEG;

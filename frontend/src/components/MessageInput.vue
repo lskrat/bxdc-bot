@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ChatSender as TChatSender } from '@tdesign-vue-next/chat'
-import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
+import { DialogPlugin, MessagePlugin, Switch as TSwitch } from 'tdesign-vue-next'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
 import { useChat } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { useConversations } from '../composables/useConversations'
 import { useFileUpload } from '../composables/useFileUpload'
+import { useMemory } from '../composables/useMemory'
 import { fileService } from '../services/fileService'
 import { apiUrl } from '../services/config'
 import { FILE_INPUT_ACCEPT, FILE_TYPE_ICONS, FILE_TYPE_LABELS } from '../types/fileUpload'
@@ -16,6 +17,19 @@ const { sendMessage, isThinking, stop } = useChat()
 const { currentUser } = useUser()
 const { currentConversationId } = useConversations()
 const fileUpload = useFileUpload()
+const memoryApi = useMemory()
+
+/**
+ * 是否启用记忆：默认开启；关闭后本次对话既不读记忆也不写入记忆
+ * 挂载时从后端 /memory status 同步 MEM0_ENABLED 状态，用户手动操作后不再被覆盖
+ */
+const memoryEnabled = ref(true)
+/** 全局记忆开关（来自 MEM0_ENABLED）：为 false 时本页开关被锁住为 off，不可手动开启 */
+const memoryGloballyEnabled = ref(true)
+/** 用户是否已手动操作过开关：true 后不再用 status 响应覆盖 */
+let _userToggledMemory = false
+/** 标记 status 接口是否已回来；避免请求未回时用户手改又被回包覆盖 */
+let _memoryStatusLoaded = false
 
 // 会话切换时：同步 conversationId + 清空文件（每个会话独立选择，首次挂载不清空）
 let _watchSessionInitial = true
@@ -60,6 +74,58 @@ function onDocumentClickForAttachMenu(e: MouseEvent) {
   showAttachMenu.value = false
 }
 onMounted(() => document.addEventListener('click', onDocumentClickForAttachMenu))
+
+/**
+ * 拉取后端 /memory/status 同步 MEM0_ENABLED。
+ * 只在用户没手动切过、status 还没回过时覆盖 memoryEnabled。
+ * 早返前置：用户已操作过就不再发请求，节省一次 RPC。
+ */
+async function syncMemoryStatusFromBackend() {
+  if (_userToggledMemory || _memoryStatusLoaded) return
+  const uid = currentUser.value?.id
+  if (!uid) return
+  try {
+    const status = await memoryApi.getMemoryStatus(uid)
+    // await 期间用户可能已切换过开关
+    if (_userToggledMemory || _memoryStatusLoaded) return
+    _memoryStatusLoaded = true
+    const globalEnabled = status.enabled !== false
+    memoryGloballyEnabled.value = globalEnabled
+    // 全局禁用时本页开关强制为 off，避免"UI 显示 on 但后端不读不写"的记忆混乱
+    memoryEnabled.value = globalEnabled
+  } catch (e) {
+    // 拉失败保持默认（true），不阻塞对话
+    console.warn('[MessageInput] getMemoryStatus failed, keep default true:', e)
+    _memoryStatusLoaded = true
+  }
+}
+
+/** 用户手动切换开关：标记为"用户已操作"，后续 status 响应不再覆盖 */
+function onMemoryToggleChange() {
+  _userToggledMemory = true
+  _memoryStatusLoaded = true
+}
+
+/**
+ * 全局禁用约束：MEM0_ENABLED=false 时不允许 memoryEnabled 被拨到 on。
+ * 用 watch 而非 @change 处理，避免 v-model 和 @change 时序竞争（v-model 后到会覆盖 @change 里的赋值）。
+ */
+watch([memoryEnabled, memoryGloballyEnabled], ([memVal, globalVal]) => {
+  if (!globalVal && memVal === true) {
+    memoryEnabled.value = false
+  }
+})
+onMounted(() => {
+  syncMemoryStatusFromBackend()
+})
+// 登录/切换用户时重新拉一次
+watch(currentUser, () => {
+  _userToggledMemory = false
+  _memoryStatusLoaded = false
+  memoryGloballyEnabled.value = true
+  memoryEnabled.value = true
+  syncMemoryStatusFromBackend()
+})
 onBeforeUnmount(() => document.removeEventListener('click', onDocumentClickForAttachMenu))
 
 /** 「+」菜单 → 上传新文件 */
@@ -416,9 +482,9 @@ async function doSendMessage(text: string) {
 
   const files = allFiles.value
   if (files.length > 0) {
-    await sendMessage(text, currentUser.value?.id, files)
+    await sendMessage(text, currentUser.value?.id, files, memoryEnabled.value)
   } else {
-    await sendMessage(text, currentUser.value?.id)
+    await sendMessage(text, currentUser.value?.id, undefined, memoryEnabled.value)
   }
 }
 
@@ -621,6 +687,23 @@ async function handleSend(value: string) {
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- 记忆开关：默认开启，关闭后本次对话既不读记忆也不写记忆 -->
+    <div class="memory-toggle-row">
+      <TSwitch
+        v-model="memoryEnabled"
+        size="small"
+        :disabled="!memoryGloballyEnabled"
+        @change="onMemoryToggleChange"
+      />
+      <span class="memory-toggle-label">启用记忆</span>
+      <span v-if="!memoryGloballyEnabled" class="memory-toggle-hint memory-toggle-hint--disabled">
+        后端记忆功能已被禁用（MEM0_ENABLED=false），开关不可开启
+      </span>
+      <span v-else class="memory-toggle-hint">
+        关闭后本次对话不使用之前的记忆，且不写入新记忆
+      </span>
     </div>
 
     <!-- 文本输入区 + 按钮组 -->
@@ -901,6 +984,32 @@ async function handleSend(value: string) {
 .chat-sender-row {
   position: relative;
   width: 100%;
+}
+
+/* ---------- 记忆开关行 ---------- */
+.memory-toggle-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+}
+
+.memory-toggle-label {
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+  user-select: none;
+}
+
+.memory-toggle-hint {
+  color: var(--td-text-color-placeholder);
+  font-size: 11px;
+}
+
+.memory-toggle-hint--disabled {
+  color: var(--td-error-color);
 }
 
 /* ---------- 左侧「+」按钮 + 菜单（位于 TChatSender 的 footer-prefix 插槽内，与发送按钮同行） ---------- */

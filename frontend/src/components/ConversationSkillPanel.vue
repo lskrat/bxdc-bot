@@ -209,6 +209,7 @@ async function save() {
   isSaving.value = true
   const selectedSkillIds = skills.value.filter((s) => s._checked).map((s) => s.id)
   const selectedFileIds = files.value.filter((f) => f._checked).map((f) => f.id)
+
   try {
     await updateConversation(
       currentUser.value.id,

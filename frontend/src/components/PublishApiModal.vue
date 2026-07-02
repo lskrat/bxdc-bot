@@ -63,8 +63,7 @@ function handleDone() {
 
 async function copyApiKey() {
   if (!publishResult.value?.apiKey) return
-  // 修复内网浏览器兼容：navigator.clipboard.writeText 在内网/IE/http iframe 场景可能
-  // 不可用，复制失败但用户无感知。改用三层兜底工具（navigator → textarea execCommand）。
+  // 使用 textarea + execCommand('copy')，兼容内网/老浏览器
   const ok = await copyTextToClipboard(publishResult.value.apiKey)
   if (ok) {
     MessagePlugin.success('已复制到剪贴板')

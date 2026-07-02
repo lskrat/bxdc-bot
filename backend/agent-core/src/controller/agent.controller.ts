@@ -567,8 +567,10 @@ export class AgentController {
    */
   @Post('run')
   @Sse()
-  async runTask(@Body() body: { instruction: string; context: any; history?: any[]; enabledSkillIds?: number[]; conversationId?: string }): Promise<Observable<MessageEvent>> {
+  async runTask(@Body() body: { instruction: string; context: any; history?: any[]; enabledSkillIds?: number[]; conversationId?: string; memoryEnabled?: boolean }): Promise<Observable<MessageEvent>> {
     const { instruction, context, history, enabledSkillIds, conversationId } = body;
+    // 记忆开关：默认 true；为 false 时本次对话不读记忆也不写入记忆
+    const memoryEnabled = body.memoryEnabled !== false;
     const safeHistory = Array.isArray(history) ? history : [];
     const sanitizedHistory = sanitizeHistoryForAgent(safeHistory as Array<{ role?: string; content?: unknown }>);
     console.log('[DEBUG] Sanitized history roles:', sanitizedHistory.map(m => m?.role));
@@ -615,14 +617,14 @@ export class AgentController {
               llmApiKey: llmConfig.llmApiKey,
             };
           }
-          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId, memoryEnabled);
         })
         .catch((e) => {
           console.error('[agent] Error fetching LLM config:', e);
-          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId, memoryEnabled);
         });
     } else {
-      this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+      this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId, memoryEnabled);
     }
 
     return subject.asObservable();
@@ -676,6 +678,7 @@ export class AgentController {
     apiToken: string,
     enabledSkillIds?: number[],
     conversationId?: string,
+    memoryEnabled: boolean = true,
   ) {
     const llm = pickMergedLlm(llmContext);
     const openAiApiKey = llm.apiKey;
@@ -735,8 +738,11 @@ export class AgentController {
             userId,
           );
 
-          const memories = await this.memoryService.searchMemories(instruction, userId, 10);
-          console.log(`[Memory] Retrieved ${memories.length} memories for user ${userId}`);
+          // 记忆开关：关闭时不检索记忆（保持远端 c8d9330 的 new structure 不变）
+          const memories = memoryEnabled
+            ? await this.memoryService.searchMemories(instruction, userId, 10)
+            : [];
+          console.log(`[Memory] memoryEnabled=${memoryEnabled}, retrieved ${memories.length} memories for user ${userId}`);
           if (memories.length > 0) {
             console.log(`[Memory] First memory: ${memories[0]}`);
           }
@@ -746,12 +752,21 @@ export class AgentController {
             : '';
 
           const staticSystemPrompt = buildStaticSystemPrompt();
-          const profileDetails = await this.memoryService.fetchUserProfile(userId);
-          const systemParts: string[] = [staticSystemPrompt];
-          if (memoryContext) {
-            systemParts.push(memoryContext);
-          }
-          const systemContent = systemParts.join('\n\n');
+          // 记忆开关：关闭时跳过 profile 检索（systemContent 回退到 c8d9330 兜底文案）
+          const profileDetails = memoryEnabled
+            ? await this.memoryService.fetchUserProfile(userId)
+            : '';
+
+          // system 消息：只放长期记忆/个人特征
+          const systemContent = profileDetails || '你是与本平台 Skill Gateway 集成的智能助手，请根据用户的指令和可用工具完成任务。';
+
+          // user 消息：静态提示词 + 技能上下文 + 对话记忆 + 当前指令
+          const userContent = [
+            `System:\n${staticSystemPrompt}`,
+            skillContext || '',
+            memoryContext || '',
+            `User Instruction:\n${instruction}`,
+          ].filter(s => s).join('\n\n');
   
           const allowedHistoryRoles = new Set(['user', 'assistant']);
           const validHistory = sanitizedHistory
@@ -764,14 +779,12 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          const userTurnContentWithSystem = `System:\n${systemContent}\n\n${skillContext}User Instruction:\n${instruction}`;
-
-          // dreamsearch 内容注入到 messageList 最前面，作为独立 system 消息
-          const messages: any[] = [];
-          if (profileDetails) {
-            messages.push({ role: 'system', content: `[个人特征信息]\n${profileDetails}` });
-          }
-          messages.push(...(validHistory as any[]), { role: 'user', content: userTurnContentWithSystem });
+          // 首条唯一的 system 消息，对话记忆放在 user 消息中
+          const messages: any[] = [
+            { role: 'system', content: systemContent },
+            ...(validHistory as any[]),
+            { role: 'user', content: userContent },
+          ];
 
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
           console.log('[DEBUG] Final messages count:', messages.length);
@@ -1028,7 +1041,7 @@ export class AgentController {
           const safeAssistantResponse = (fullAssistantResponse && typeof fullAssistantResponse === 'string') ? fullAssistantResponse : ' ';
           console.log(`[Memory] Analysis started. User: "${instruction}", Agent: "${safeAssistantResponse.slice(0, 50)}..."`);
 
-          if (instruction) {
+          if (instruction && memoryEnabled) {
             await this.memoryService.processTurn({
               sessionId,
               userId,

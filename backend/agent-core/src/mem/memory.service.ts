@@ -203,8 +203,8 @@ export class MemoryService implements OnModuleInit {
   }
 
   async fetchUserProfile(userId: string): Promise<string> {
-    const enabled = process.env.MEM0_ENABLED?.trim().toLowerCase();
-    if (enabled === 'false' || enabled === '0' || enabled === 'off' || enabled === 'no') {
+    // 对齐 service 内其他方法：使用构造时缓存的 this.mem0Enabled，避免每次现读 process.env
+    if (!this.mem0Enabled) {
       return '';
     }
     if (!userId) {
