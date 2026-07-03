@@ -20,28 +20,34 @@ import { getLoggingFetchOrUndefined, type LlmFetchHttpLogContext } from './llm-r
  * 此函数在 SSE 流中拦截 + 清洗这两类异常块，避免污染下游。
  */
 function normalizeChunk(chunk: any): any {
-  if (!chunk.choices || !Array.isArray(chunk.choices)) return chunk;
-  for (const choice of chunk.choices) {
-    // 1) 智谱特有字段 stop_reason（数字枚举 154827）→ 删除，LangChain 不认
-    if ('stop_reason' in choice) {
-      delete choice.stop_reason;
+    if (!chunk?.choices || !Array.isArray(chunk.choices)) return chunk;
+    for (const choice of chunk.choices) {
+        // 关键：过滤 null / undefined 的 choice，杜绝 undefined.message 报错
+        if (!choice) continue;
+
+        // 1) 删除智谱独有 stop_reason 字段，兼容 LangChain
+        if ('stop_reason' in choice) {
+            delete choice.stop_reason;
+        }
+
+        // 判断是否为流式分片（存在delta）
+        const isStreaming = choice.delta != null;
+
+        // 2) 流式 chunk：补全 delta.role（标准模型首行已有，不影响）
+        if (isStreaming && typeof choice.delta === 'object') {
+            if (!('role' in choice.delta) || choice.delta.role === undefined) {
+                choice.delta.role = 'assistant';
+            }
+        } else {
+            // 非流式响应：不存在message属性时，自动补全占位对象
+            if (!('message' in choice)) {
+                choice.message = { role: 'assistant', content: '' };
+            }
+        }
+        // finish_reason 不补：标准模型中间帧本来就没有，LangChain 已用 != null 兼容
     }
-    // 2) 流式 chunk：注入 delta.role（虽然智谱第1行有 role，但稳妥起见所有 chunk 都补）
-    if (choice.delta && typeof choice.delta === 'object') {
-      if (choice.delta.role === undefined) {
-        choice.delta.role = 'assistant';
-      }
-    }
-    // 3) 非流式：message 缺失补占位
-    if (choice.message === undefined) {
-      choice.message = { role: 'assistant', content: '' };
-    }
-    // 4) 智谱内网版缺少 finish_reason，LangChain 期望字段；补 null 占位
-    if (choice.finish_reason === undefined) {
-      choice.finish_reason = null;
-    }
-  }
-  return chunk;
+
+    return chunk;
 }
 
 /**
@@ -90,35 +96,55 @@ function filterEmptyChoicesFromSSE(response: Response): Response {
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
+          // 最后一段可能不完整，保留到下次循环
           buffer = lines.pop() || '';
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const payload = line.slice(6);
-              if (payload === '[DONE]') {
-                controller.enqueue(encoder.encode(line + '\n'));
-                continue;
-              }
-              try {
-                const chunk = JSON.parse(payload);
-                // 跳过不含有效 choices 的 SSE 块（智谱等非标准实现会在流末尾
-                // 发送 choices:[] 或缺少 choices 字段的 usage 统计块，
-                // LangChain ChatOpenAI 解析时 choices[0] 为 undefined 会崩溃）
-                if (
-                  !chunk.choices ||
-                  !Array.isArray(chunk.choices) ||
-                  chunk.choices.length === 0
-                ) {
-                  continue;
-                }
-                // 清洗智谱非标准字段（stop_reason 数字枚举、缺失的 message 等）
-                normalizeChunk(chunk);
-              } catch {
-                // non-JSON data line: pass through unchanged
-              }
+
+          for (const rawLine of lines) {
+            const line = rawLine.trimEnd();
+
+            // 1) 空行（SSE 事件分隔符）→ 原样转发
+            if (!line) {
+              controller.enqueue(encoder.encode('\n'));
+              continue;
             }
-            controller.enqueue(encoder.encode(line + '\n'));
+            // 2) [DONE] 结束帧（流边界，原样转发不解析）
+            if (line === 'data: [DONE]') {
+              controller.enqueue(encoder.encode(line + '\n'));
+              continue;
+            }
+            // 3) 非 data: 行（SSE 注释、event:、id: 等）→ 原样转发
+            if (!line.startsWith('data: ')) {
+              controller.enqueue(encoder.encode(line + '\n'));
+              continue;
+            }
+
+            // 4) 尝试解析 JSON 残缺帧 → 跳过，不让 LangChain 看到
+            const payload = line.slice(6);
+            let chunk: any;
+            try {
+              chunk = JSON.parse(payload);
+            } catch {
+              continue;
+            }
+
+            // 5) choices 为空帧（usage-only chunk）：
+//    标准 OpenAI 末尾 usage 块（仅含 usage）会被 LangChain 跳过处理（line 160 if (!choice) continue），
+//    但 LangChain 会在循环外读取累积的 usage。丢弃这一帧会导致其他模型的 token 用量统计丢失。
+//    改为：把 usage 字段复制到顶层字段后再转发，让 LangChain 能正常读到。
+const choices = chunk?.choices;
+if (!Array.isArray(choices) || choices.length === 0) {
+  // usage-only chunk：保留（不带任何清洗，避免破坏 usage 字段）
+  controller.enqueue(encoder.encode(line + '\n'));
+  continue;
+}
+
+            // 6) 清洗智谱非标准字段（stop_reason 数字、缺失 message/role 等）
+            normalizeChunk(chunk);
+            // 必须用修改后的 chunk 重新序列化后转发，不能用原始 line
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n`));
           }
         }
+        // 收尾时把残留的最后一帧也送出去
         if (buffer) {
           controller.enqueue(encoder.encode(buffer));
         }
