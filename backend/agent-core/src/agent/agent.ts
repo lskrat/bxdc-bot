@@ -61,6 +61,22 @@ import type { SkillManager } from "../skills/skill.manager";
 const sharedAgentCheckpointer = new MemorySaver();
 
 /**
+ * 决定 ChatOpenAI 是否用流式响应
+ * - 内网 GLM 模型强制非流式：智谱 GLM 流式响应有 stop_reason 数字等
+ *   非标准字段 + 缺 message 字段，会导致 LangChain ChatOpenAI 解析时崩
+ *   `Cannot read properties of undefined (reading 'message')`。虽然
+ *   llm-request-role-normalize.ts 已做 SSE 写回清洗，但最稳妥的做法是
+ *   直接关闭 GLM 的流式，走非流式 JSON 响应（标准 OpenAI 格式，有 message）
+ * - 其他模型按 .env AGENT_STREAMING 决定（默认 true 流式）
+ */
+function shouldStreamModel(modelName: string): boolean {
+  if (!modelName) return true;
+  // 匹配 GLM-4 / GLM_4 / glm-4 / glm4 系列（含 GLM-4.5 / 4.6 / 4.7 / 4-Flash 等）
+  if (/^glm[-_]?4\b/i.test(modelName)) return false;
+  return String(process.env.AGENT_STREAMING ?? "true").toLowerCase() !== "false";
+}
+
+/**
  * Agent 工厂类
  * 
  * 职责：封装 Agent 创建逻辑，提供统一的 Agent 实例化接口
@@ -123,18 +139,22 @@ export class AgentFactory {
       sessionId: config?.sessionId,
     });
 
-    const agentStreaming = String(process.env.AGENT_STREAMING ?? "true").toLowerCase() !== "false";
+    const effectiveModelName = config?.modelName || "gpt-4";
+    const useStreaming = shouldStreamModel(effectiveModelName);
+    if (effectiveModelName && !useStreaming) {
+      console.log(`[LLM] ${effectiveModelName} 强制非流式（内网 GLM 单独适配）`);
+    }
 
     // 创建 LLM 模型实例
     const model = new ChatOpenAI({
-      modelName: config?.modelName || "gpt-4",
+      modelName: effectiveModelName,
       apiKey: openAiApiKey,
       ...(Object.keys(openAiConfiguration).length > 0
         ? { configuration: openAiConfiguration }
         : {}),
       temperature: 0,
       callbacks: config?.callbacks,
-      streaming: agentStreaming,
+      streaming: useStreaming,
     });
 
     // 构建主 Agent 的工具列表
@@ -226,18 +246,22 @@ export class AgentFactory {
       sessionId: config?.sessionId,
     });
 
-    const agentStreaming = String(process.env.AGENT_STREAMING ?? "true").toLowerCase() !== "false";
+    const effectiveModelName = config?.modelName || "gpt-4";
+    const useStreaming = shouldStreamModel(effectiveModelName);
+    if (effectiveModelName && !useStreaming) {
+      console.log(`[LLM] ${effectiveModelName} 强制非流式（内网 GLM 单独适配）`);
+    }
 
     // 创建 LLM 模型实例
     const model = new ChatOpenAI({
-      modelName: config?.modelName || "gpt-4",
+      modelName: effectiveModelName,
       apiKey: openAiApiKey,
       ...(Object.keys(openAiConfiguration).length > 0
         ? { configuration: openAiConfiguration }
         : {}),
       temperature: 0,
       callbacks: config?.callbacks,
-      streaming: agentStreaming,
+      streaming: useStreaming,
     });
 
     // 子 Agent 只加载指定的技能，不加载基础工具
@@ -322,11 +346,16 @@ export class AgentFactory {
     // streaming 默认开启，启用流式输出实现打字机效果。
     // 内网环境若受 LangChain tiktoken 网络访问影响（导致每次响应卡 30s+），
     // 可通过 .env 设置 AGENT_STREAMING=false 关闭流式响应。
-    const agentStreaming = String(process.env.AGENT_STREAMING ?? "true").toLowerCase() !== "false";
+    // 内网 GLM 模型（智谱）强制非流式（见 shouldStreamModel 注释）。
+    const effectiveModelName = config?.modelName || "gpt-4";
+    const useStreaming = shouldStreamModel(effectiveModelName);
+    if (effectiveModelName && !useStreaming) {
+      console.log(`[LLM] ${effectiveModelName} 强制非流式（内网 GLM 单独适配）`);
+    }
 
     // 创建 LLM 模型实例
     const model = new ChatOpenAI({
-      modelName: config?.modelName || "gpt-4", // 或使用 OneAPI 兼容模型
+      modelName: effectiveModelName, // 或使用 OneAPI 兼容模型
       // 注意：@langchain/openai v1 使用 apiKey 而非 openAIApiKey
       apiKey: openAiApiKey,
       ...(Object.keys(openAiConfiguration).length > 0
@@ -334,7 +363,7 @@ export class AgentFactory {
         : {}),
       temperature: 0, // 使用确定性输出，便于调试和复现
       callbacks: config?.callbacks,
-      streaming: agentStreaming, // 流式输出开关
+      streaming: useStreaming, // 流式输出开关（GLM 强制 false）
     });
 
     // 获取内置技能路由模式
