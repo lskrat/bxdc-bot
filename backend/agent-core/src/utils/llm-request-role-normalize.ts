@@ -182,8 +182,13 @@ function filterEmptyChoicesFromSSE(response: Response): Response {
  * + SSE empty-choices filter for Zhipu compatibility.
  */
 export function composeOpenAiCompatibleFetch(ctx?: LlmFetchHttpLogContext): typeof fetch {
-  const inner = globalThis.fetch.bind(globalThis);
-  const loggingFetch = getLoggingFetchOrUndefined(ctx) ?? inner;
+  // 关键：不 bind，必须每次调用都 lookup 最新的 globalThis.fetch
+  // 否则 OpenAI SDK 启动时捕获的 fetch 引用在 module init 阶段就固定了，
+  // 后续 module load 顺序变化会导致 wrapper 捕获的是过时的 fetch。
+  // 这里直接传函数名（不调用），让它在每次调用时才查 globalThis.fetch
+  const lookupInner = (input: RequestInfo | URL, init?: RequestInit) =>
+    globalThis.fetch(input as any, init);
+  const loggingFetch = getLoggingFetchOrUndefined(ctx) ?? lookupInner;
   return async (input, init) => {
     let response = await loggingFetch(input, init);
     // 非流式 JSON 响应：智谱非标准字段清洗（stop_reason 数字等）
