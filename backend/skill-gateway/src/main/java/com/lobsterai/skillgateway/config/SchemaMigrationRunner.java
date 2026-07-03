@@ -11,6 +11,7 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashSet;
 import java.util.Set;
@@ -44,6 +45,7 @@ public class SchemaMigrationRunner implements InitializingBean {
         try (Connection conn = dataSource.getConnection()) {
             migrateAsyncTasks(conn);
             migrateSkills(conn);
+            migrateSkillOwnerType(conn);
             migrateUserFiles(conn);
             migrateConversationApiColumns(conn);
             migrateAsyncTaskChatReply(conn);
@@ -189,6 +191,61 @@ public class SchemaMigrationRunner implements InitializingBean {
         // 复合索引：team_id 字段的查询加速（add-skill-team-visibility 引入的 idx_skills_team_id）
         ensureIndex(conn, table, "idx_skills_team_id", existingIndexes,
                 "ALTER TABLE skills ADD INDEX idx_skills_team_id (team_id)");
+    }
+
+    /**
+     * skills 表：把系统内置能力从 owner_type=1 重新分类为 owner_type=2。
+     *
+     * 背景：旧库里所有 extension 类技能都被存为 owner_type=1（用户自建），
+     * 与 FileToolSeeder 期望的系统能力 owner_type=2 不匹配，导致
+     * FileToolSeeder 启动时 SELECT owner_type=2 找不到同名行，走 INSERT 又触发
+     * name 唯一键冲突 `Duplicate entry 'excel_validate' for key 'skills.name'`，
+     * 升级时系统能力的 schema/description 不会更新。
+     *
+     * 幂等性：SQL 限定 {@code WHERE name = ? AND skill_owner_type = 1}，
+     * 已经是 2 的行不会受影响；行不存在时 SQL 不报错。
+     * 名册与 FileToolSeeder.seedFileManage / seedFileOperate 保持完全一致。
+     */
+    private void migrateSkillOwnerType(Connection conn) throws SQLException {
+        String[] systemSkillNames = {
+                // file_manage 族（4）
+                "file_list", "file_delete", "file_clear_all", "file_detail",
+                // word_operate 族（6）
+                "word_read", "word_write", "word_extract_content",
+                "word_search_keyword", "word_replace_text", "word_template_fill",
+                // txt_operate 族（10）
+                "txt_read", "txt_write", "txt_keyword_lines", "txt_regex",
+                "txt_line_range", "txt_section", "txt_stats",
+                "txt_distinct_lines", "txt_sort_lines", "txt_keyword_freq",
+                // md_operate 族（12）
+                "md_init_temp", "md_read", "md_write", "md_images",
+                "md_headings", "md_table", "md_list_items", "md_tasks",
+                "md_emphasis", "md_toc", "md_filter_section", "md_merge",
+                // excel_operate 族（12）
+                "excel_read", "excel_write", "excel_init_temp", "excel_filter",
+                "excel_sort", "excel_aggregate", "excel_pivot", "excel_calculate",
+                "excel_select_columns", "excel_clean", "excel_convert_format",
+                "excel_validate"
+        };
+
+        // 关键：WHERE 子句限定 owner_type=1，无差异数据（已经是 2）不会被触碰
+        String sql = "UPDATE skills SET skill_owner_type = 2 WHERE name = ? AND skill_owner_type = 1";
+        int migrated = 0;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (String name : systemSkillNames) {
+                ps.setString(1, name);
+                int n = ps.executeUpdate();
+                if (n > 0) {
+                    migrated += n;
+                    log.info("[SchemaMigration] Reclassified system skill '{}' owner_type 1->2", name);
+                }
+            }
+        }
+        if (migrated > 0) {
+            log.info("[SchemaMigration] Migrated {} system skills owner_type 1->2", migrated);
+        } else {
+            log.debug("[SchemaMigration] No system skills need reclassification (already owner_type=2)");
+        }
     }
 
     /**
