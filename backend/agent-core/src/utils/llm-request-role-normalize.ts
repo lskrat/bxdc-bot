@@ -40,6 +40,17 @@ function normalizeChunk(chunk: any): any {
     if (choice.finish_reason === undefined) {
       choice.finish_reason = null;
     }
+    // 5) CoT 模型（qwen3.6 等）的推理内容放在 delta.reasoning，
+    //    LangChain 只读 delta.content 会丢推理；拼接到 content 前
+    if (
+      choice.delta &&
+      typeof choice.delta === 'object' &&
+      typeof choice.delta.reasoning === 'string' &&
+      choice.delta.reasoning.length > 0
+    ) {
+      const existing = typeof choice.delta.content === 'string' ? choice.delta.content : '';
+      choice.delta.content = choice.delta.reasoning + existing;
+    }
   }
   return chunk;
 }
@@ -92,31 +103,39 @@ function filterEmptyChoicesFromSSE(response: Response): Response {
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
           for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const payload = line.slice(6);
-              if (payload === '[DONE]') {
-                controller.enqueue(encoder.encode(line + '\n'));
-                continue;
-              }
-              try {
-                const chunk = JSON.parse(payload);
-                // 跳过不含有效 choices 的 SSE 块（智谱等非标准实现会在流末尾
-                // 发送 choices:[] 或缺少 choices 字段的 usage 统计块，
-                // LangChain ChatOpenAI 解析时 choices[0] 为 undefined 会崩溃）
-                if (
-                  !chunk.choices ||
-                  !Array.isArray(chunk.choices) ||
-                  chunk.choices.length === 0
-                ) {
-                  continue;
-                }
-                // 清洗智谱非标准字段（stop_reason 数字枚举、缺失的 message 等）
-                normalizeChunk(chunk);
-              } catch {
-                // non-JSON data line: pass through unchanged
-              }
+            if (!line.startsWith('data: ')) {
+              controller.enqueue(encoder.encode(line + '\n'));
+              continue;
             }
-            controller.enqueue(encoder.encode(line + '\n'));
+            const payload = line.slice(6);
+            if (payload === '[DONE]') {
+              controller.enqueue(encoder.encode(line + '\n'));
+              continue;
+            }
+            let parsed: any;
+            try {
+              parsed = JSON.parse(payload);
+            } catch {
+              // 非 JSON data 行 → 透传
+              controller.enqueue(encoder.encode(line + '\n'));
+              continue;
+            }
+            // 1) 跳过不含有效 choices 的 SSE 块（智谱等非标准实现会在流末尾
+            //    发送 choices:[] 或缺少 choices 字段的 usage 统计块，
+            //    LangChain ChatOpenAI 解析时 choices[0] 为 undefined 会崩溃）
+            if (
+              !parsed.choices ||
+              !Array.isArray(parsed.choices) ||
+              parsed.choices.length === 0
+            ) {
+              continue;
+            }
+            // 2) 清洗智谱非标准字段（stop_reason 数字枚举、缺失的 message 等）
+            normalizeChunk(parsed);
+            // 3) 重新 stringify 写回（修复：原代码 normalize 后用原始 line 输出，
+            //    导致清洗无效，LangChain 仍收到缺 message 的原 chunk）
+            const newPayload = JSON.stringify(parsed);
+            controller.enqueue(encoder.encode('data: ' + newPayload + '\n'));
           }
         }
         if (buffer) {
