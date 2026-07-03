@@ -10,6 +10,68 @@ import { getLoggingFetchOrUndefined, type LlmFetchHttpLogContext } from './llm-r
  * This filter intercepts SSE content-type responses and drops data lines
  * whose JSON payload has an empty choices array.
  */
+/**
+ * Zhipu 内网版（非标准 OpenAI 兼容）在流末尾会发送带有特殊字段的统计块：
+ *   - choices: []
+ *   - 或者带非标准的 stop_reason（如数字 154827）
+ * LangChain ChatOpenAI 解析器对 choices[0] 为 undefined 或 message 缺失时崩溃：
+ *   "Cannot read properties of undefined (reading 'message')"
+ *
+ * 此函数在 SSE 流中拦截 + 清洗这两类异常块，避免污染下游。
+ */
+function normalizeChunk(chunk: any): any {
+  if (!chunk.choices || !Array.isArray(chunk.choices)) return chunk;
+  for (const choice of chunk.choices) {
+    // 1) 智谱特有字段 stop_reason（数字枚举 154827）→ 删除，LangChain 不认
+    if ('stop_reason' in choice) {
+      delete choice.stop_reason;
+    }
+    // 2) 流式 chunk：注入 delta.role（虽然智谱第1行有 role，但稳妥起见所有 chunk 都补）
+    if (choice.delta && typeof choice.delta === 'object') {
+      if (choice.delta.role === undefined) {
+        choice.delta.role = 'assistant';
+      }
+    }
+    // 3) 非流式：message 缺失补占位
+    if (choice.message === undefined) {
+      choice.message = { role: 'assistant', content: '' };
+    }
+    // 4) 智谱内网版缺少 finish_reason，LangChain 期望字段；补 null 占位
+    if (choice.finish_reason === undefined) {
+      choice.finish_reason = null;
+    }
+  }
+  return chunk;
+}
+
+/**
+ * 对 JSON 完整响应做智谱非标准字段清洗（stop_reason 数字、缺失 message 等）。
+ * 非流式响应不走 SSE 分支，需要单独处理。
+ */
+async function normalizeJsonResponse(response: Response): Promise<Response> {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('text/event-stream')) return response;
+  if (!contentType.includes('application/json')) return response;
+
+  // 必须 clone 才能读取 body（body 是单次消费流）
+  const cloned = response.clone();
+  try {
+    const text = await cloned.text();
+    if (!text) return response;
+    const json = JSON.parse(text);
+    if (json && Array.isArray(json.choices)) {
+      normalizeChunk(json);
+    }
+    return new Response(JSON.stringify(json), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch {
+    return response;
+  }
+}
+
 function filterEmptyChoicesFromSSE(response: Response): Response {
   const contentType = response.headers.get('content-type') || '';
   if (!contentType.includes('text/event-stream')) return response;
@@ -38,9 +100,18 @@ function filterEmptyChoicesFromSSE(response: Response): Response {
               }
               try {
                 const chunk = JSON.parse(payload);
-                if (Array.isArray(chunk.choices) && chunk.choices.length === 0) {
+                // 跳过不含有效 choices 的 SSE 块（智谱等非标准实现会在流末尾
+                // 发送 choices:[] 或缺少 choices 字段的 usage 统计块，
+                // LangChain ChatOpenAI 解析时 choices[0] 为 undefined 会崩溃）
+                if (
+                  !chunk.choices ||
+                  !Array.isArray(chunk.choices) ||
+                  chunk.choices.length === 0
+                ) {
                   continue;
                 }
+                // 清洗智谱非标准字段（stop_reason 数字枚举、缺失的 message 等）
+                normalizeChunk(chunk);
               } catch {
                 // non-JSON data line: pass through unchanged
               }
@@ -73,7 +144,11 @@ export function composeOpenAiCompatibleFetch(ctx?: LlmFetchHttpLogContext): type
   const inner = globalThis.fetch.bind(globalThis);
   const loggingFetch = getLoggingFetchOrUndefined(ctx) ?? inner;
   return async (input, init) => {
-    const response = await loggingFetch(input, init);
-    return filterEmptyChoicesFromSSE(response);
+    let response = await loggingFetch(input, init);
+    // 非流式 JSON 响应：智谱非标准字段清洗（stop_reason 数字等）
+    response = await normalizeJsonResponse(response);
+    // SSE 流式响应：过滤 choices:[] 块 + 注入 delta.role
+    response = filterEmptyChoicesFromSSE(response);
+    return response;
   };
 }
