@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, h, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ChatSender as TChatSender } from '@tdesign-vue-next/chat'
-import { DialogPlugin, MessagePlugin, Switch as TSwitch } from 'tdesign-vue-next'
+import { DialogPlugin, Button as TButton, MessagePlugin, Switch as TSwitch } from 'tdesign-vue-next'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
 import { useChat } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
@@ -507,45 +507,25 @@ async function handleSend(value: string) {
     return
   }
 
-  // 有 parsing 文件 → 弹 t-dialog 三选一
+  // 有 parsing 文件 → 弹 dialog 三选一（VNode 渲染，不依赖 DOM 查询）
   const parsingCount = files.filter((f) => f.status === 'parsing').length
   const result = await new Promise<'wait' | 'now' | 'cancel'>((resolve) => {
     const dlg = DialogPlugin({
       header: '文件正在解析',
       body: `${parsingCount} 个文件正在解析，是否等待解析完成后发送？`,
-      footer: false, // 使用自定义 footer
-      onClose: () => resolve('cancel'),
-    })
-    // TDesign Dialog 渲染后通过 DOM 注入 3 个按钮
-    nextTick(() => {
-      const root = document.querySelector(`.t-dialog__ctx [role="dialog"]`) as HTMLElement | null
-      if (!root) {
-        resolve('cancel')
-        dlg.destroy?.()
-        return
-      }
-      const footer = document.createElement('div')
-      footer.className = 'parsing-confirm-footer'
-      footer.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;padding:16px 0 0;'
-      const makeBtn = (label: string, theme: 'primary' | 'default' | 'danger', value: 'wait' | 'now' | 'cancel') => {
-        const btn = document.createElement('button')
-        btn.textContent = label
-        btn.className = `t-button t-button--theme-${theme} t-button--variant-base`
-        btn.style.cssText = 'padding:6px 16px;border-radius:6px;border:1px solid var(--td-component-border);background:var(--td-bg-color-container);color:var(--td-text-color-primary);cursor:pointer;'
-        if (theme === 'primary') {
-          btn.style.background = 'var(--td-brand-color)'
-          btn.style.color = 'var(--td-text-color-anti)'
-          btn.style.borderColor = 'var(--td-brand-color)'
-        }
-        btn.onclick = () => { resolve(value); dlg.destroy?.() }
-        return btn
-      }
-      footer.appendChild(makeBtn('取消', 'default', 'cancel'))
-      footer.appendChild(makeBtn('立即发送', 'default', 'now'))
-      footer.appendChild(makeBtn('等待解析', 'primary', 'wait'))
-      // 找到 dialog body 容器
-      const body = root.querySelector('.t-dialog__body') || root.querySelector('.t-dialog__main') || root
-      body.appendChild(footer)
+      closeOnOverlayClick: false,
+      closeOnEscKeydown: false,
+      closeBtn: false,
+      footer: () =>
+        h(
+          'div',
+          { style: 'display:flex;gap:8px;justify-content:flex-end' },
+          [
+            h(TButton, { theme: 'default', onClick: () => { resolve('cancel'); dlg.destroy() } }, () => '取消'),
+            h(TButton, { theme: 'default', onClick: () => { resolve('now'); dlg.destroy() } }, () => '立即发送'),
+            h(TButton, { theme: 'primary', onClick: () => { resolve('wait'); dlg.destroy() } }, () => '等待解析'),
+          ],
+        ),
     })
   })
 
