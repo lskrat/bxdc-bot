@@ -223,6 +223,83 @@ test("filterEmptyChoicesFromSSE: standard OpenAI chunk passes through unchanged"
   }
 });
 
+test("filterEmptyChoicesFromSSE: GLM-4.7-Flash real output (data: 无空格)", async () => {
+  // 真实内网 GLM 输出：data: 后面无空格、含大量 delta chunk、无 stop_reason / message / finish_reason
+  // 这是用户提供的真实流式输出样本
+  const glmChunk = (content) =>
+    `data:{"created":1783046177,"model":"GLM-4.7-Flash","id":"20260703_c5f531dbc1d04c06b9067eabd12102e0","choices":[{"delta":{"content":"${content}"},"index":0}],"object":"chat.completion.chunk"}`;
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    sseResponse([
+      'data:{"created":1783046177,"model":"GLM-4.7-Flash","id":"abc","choices":[{"delta":{"role":"assistant","content":""},"index":0}],"object":"chat.completion.chunk"}',
+      glmChunk("**"),
+      glmChunk("大"),
+      glmChunk("语言"),
+      glmChunk("模型"),
+      glmChunk("是"),
+      "data:[DONE]",
+    ]);
+
+  try {
+    const wrappedFetch = composeOpenAiCompatibleFetch();
+    const upstreamRes = await wrappedFetch("http://example.com/v1/chat/completions");
+    const out = await readBodyText(upstreamRes);
+
+    // 关键断言：GLM 真实格式（无空格）下 normalize 应该生效
+    assert.ok(out.includes("大"), "GLM 真实 chunk 应被处理（含 '大'）");
+    assert.ok(!out.includes("delta\\\":{"), "normalize 后应只剩完整 JSON 行");
+
+    // 解析每个 data 行的 JSON，验证注入
+    const dataLines = out
+      .split("\n")
+      .filter((l) => l.startsWith("data:") && !l.startsWith("data: [DONE]"));
+    assert.ok(dataLines.length >= 3, `应至少有 3 个 data 行，实际 ${dataLines.length}`);
+
+    // 第一帧：注入 role / message / finish_reason
+    const first = JSON.parse(dataLines[0].slice(dataLines[0].startsWith("data: ") ? 6 : 5));
+    assert.equal(first.choices[0].delta.role, "assistant");
+    assert.equal(first.choices[0].message.role, "assistant");
+    assert.equal(first.choices[0].message.content, "");
+    assert.equal(first.choices[0].finish_reason, null);
+
+    // 后续帧：delta.content 保留，message / finish_reason 也注入
+    const second = JSON.parse(dataLines[1].slice(dataLines[1].startsWith("data: ") ? 6 : 5));
+    assert.equal(second.choices[0].delta.content, "**");
+    assert.equal(second.choices[0].message.role, "assistant");
+    assert.equal(second.choices[0].finish_reason, null);
+
+    // [DONE] 透传（注意无空格 'data:[DONE]' 形式）
+    assert.ok(out.includes("[DONE]"), "[DONE] 应被透传");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("filterEmptyChoicesFromSSE: CRLF (\\r\\n) line endings", async () => {
+  // 真实 HTTP 服务常用 CRLF；split('\n') 会留下 \r
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      'data: {"choices":[{"delta":{"role":"assistant","content":""},"index":0,"stop_reason":154827}],"object":"chat.completion.chunk"}\r\n' +
+        'data: {"choices":[{"delta":{"content":"你好"},"index":0,"stop_reason":154827}],"object":"chat.completion.chunk"}\r\n' +
+        "data: [DONE]\r\n",
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+
+  try {
+    const wrappedFetch = composeOpenAiCompatibleFetch();
+    const upstreamRes = await wrappedFetch("http://example.com/v1/chat/completions");
+    const out = await readBodyText(upstreamRes);
+
+    assert.ok(!out.includes("stop_reason"), "CRLF 流下 stop_reason 也应被清洗");
+    assert.ok(out.includes("你好"), "CRLF 流下 content 应保留");
+    assert.ok(out.includes("[DONE]"), "CRLF 流下 [DONE] 应透传");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("normalizeJsonResponse: clean non-streaming JSON response", async () => {
   const originalFetch = globalThis.fetch;
   // 智谱非流式 JSON：含 stop_reason 数字、缺 message

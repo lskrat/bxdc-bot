@@ -103,11 +103,16 @@ function filterEmptyChoicesFromSSE(response: Response): Response {
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
           for (const line of lines) {
-            if (!line.startsWith('data: ')) {
+            // 兼容 'data: payload' 和 'data:payload'（智谱 GLM 等内网 LLM 输出无空格）
+            if (!line.startsWith('data:')) {
               controller.enqueue(encoder.encode(line + '\n'));
               continue;
             }
-            const payload = line.slice(6);
+            // 跳过 'data:'（5 字符）+ 可选前导空格
+            let payload = line.slice(5);
+            if (payload.startsWith(' ')) payload = payload.slice(1);
+            // 去除尾部 \r（CRLF 流末尾的 \r\n 被 split('\n') 切成 \r）
+            if (payload.endsWith('\r')) payload = payload.slice(0, -1);
             if (payload === '[DONE]') {
               controller.enqueue(encoder.encode(line + '\n'));
               continue;
