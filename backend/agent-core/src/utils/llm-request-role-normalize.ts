@@ -58,21 +58,38 @@ function normalizeChunk(chunk: any): any {
 /**
  * 对 JSON 完整响应做智谱非标准字段清洗（stop_reason 数字、缺失 message 等）。
  * 非流式响应不走 SSE 分支，需要单独处理。
+ *
+ * 内网 LLM（如智谱 GLM）有时会：1) content-type 是 text/event-stream 但 body 是
+ * 单 chunk JSON；2) content-type 不规范。本函数放宽检查：只要 body 能 parse 成
+ * JSON 且含 choices 数组，就做 normalize。
  */
 async function normalizeJsonResponse(response: Response): Promise<Response> {
   const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('text/event-stream')) return response;
-  if (!contentType.includes('application/json')) return response;
-
-  // 必须 clone 才能读取 body（body 是单次消费流）
+  // 真正的 SSE 多行流式响应（每行 "data: ..."）不在此处理，由 filterEmptyChoicesFromSSE 处理
   const cloned = response.clone();
   try {
     const text = await cloned.text();
     if (!text) return response;
-    const json = JSON.parse(text);
-    if (json && Array.isArray(json.choices)) {
-      normalizeChunk(json);
+    // SSE 格式特征：以 "data:" 开头且有多行（实际流式才有；非流式 JSON 一定以 "{" 开头）
+    if (text.startsWith('data:') && text.includes('\n')) {
+      return response;  // 让 filterEmptyChoicesFromSSE 处理 SSE
     }
+    // 不是 JSON：透传
+    const trimmed = text.trimStart();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      return response;
+    }
+    let json: any;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return response;  // 非 JSON 透传
+    }
+    if (!json || !Array.isArray(json.choices)) {
+      return response;  // 非 OpenAI 格式透传
+    }
+    normalizeChunk(json);
+    // 重新构造响应，保留原 status/headers（含 content-type, content-length 等）
     return new Response(JSON.stringify(json), {
       status: response.status,
       statusText: response.statusText,

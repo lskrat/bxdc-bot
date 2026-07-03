@@ -300,6 +300,88 @@ test("filterEmptyChoicesFromSSE: CRLF (\\r\\n) line endings", async () => {
   }
 });
 
+test("normalizeJsonResponse: real GLM non-stream response with non-standard content-type", async () => {
+  // 真实 GLM-4.7-Flash 完整 JSON 响应（用户提供）
+  const glmChunk = {
+    id: "20260703_029acffaad8b4c698c1d3ee118502ab0",
+    model: "GLM-4.7-Flash",
+    choices: [{
+      index: 0,
+      stop_reason: 154827,
+      finish_reason: "stop",
+      message: {
+        role: "assistant",
+        content: "**大语言模型** 是一种基于深度学习的人工智能技术",
+        reasoning_content: null,
+        function_call: null,
+        refusal: null,
+        annotations: null,
+        tool_calls: [],
+        audio: null,
+      },
+      logprobs: null,
+      token_ids: null,
+    }],
+    usage: {
+      completion_tokens: 702,
+      prompt_tokens: 19,
+      total_tokens: 721,
+      prompt_tokens_details: null,
+    },
+    object: "chat.completion",
+    created: 1783045979,
+  };
+
+  const originalFetch = globalThis.fetch;
+
+  // 测试 1: 标准 content-type
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(glmChunk), {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+
+  try {
+    const wrappedFetch = composeOpenAiCompatibleFetch();
+    const r = await wrappedFetch("http://test/x");
+    const json = await r.json();
+    assert.ok(!("stop_reason" in json.choices[0]), "stop_reason 应被删除");
+    assert.equal(json.choices[0].message.content, glmChunk.choices[0].message.content);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // 测试 2: 诡异的 content-type（GLM 内网版可能不规范）
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(glmChunk), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },  // 标 SSE 但 body 是 JSON
+    });
+
+  try {
+    const wrappedFetch = composeOpenAiCompatibleFetch();
+    const r = await wrappedFetch("http://test/x");
+    const json = await r.json();
+    assert.ok(!("stop_reason" in json.choices[0]), "SSE 标但 body 是 JSON 也要 normalize");
+    assert.equal(json.choices[0].message.content, glmChunk.choices[0].message.content);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // 测试 3: 无 content-type
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(glmChunk), { status: 200, headers: {} });
+
+  try {
+    const wrappedFetch = composeOpenAiCompatibleFetch();
+    const r = await wrappedFetch("http://test/x");
+    const json = await r.json();
+    assert.ok(!("stop_reason" in json.choices[0]), "无 content-type 也要 normalize");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("normalizeJsonResponse: clean non-streaming JSON response", async () => {
   const originalFetch = globalThis.fetch;
   // 智谱非流式 JSON：含 stop_reason 数字、缺 message
