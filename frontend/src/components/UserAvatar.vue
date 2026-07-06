@@ -3,7 +3,6 @@ import { computed, ref, watch } from 'vue';
 import {
   avatarDisplayUrl,
   emojiToTwemojiPngUrl,
-  neutralAvatarPlaceholderDataUri,
 } from '../utils/twemojiAvatar';
 
 const props = withDefaults(
@@ -28,11 +27,13 @@ const props = withDefaults(
 
 const display = computed(() => props.avatar || '👤');
 const imgSrc = ref(avatarDisplayUrl(display.value));
+const showFallbackEmoji = ref(false);
 
 watch(
   display,
   (d) => {
     imgSrc.value = avatarDisplayUrl(d);
+    showFallbackEmoji.value = false;
   },
   { immediate: true },
 );
@@ -54,13 +55,15 @@ function onImgError() {
     imgSrc.value = png;
     return;
   }
-  imgSrc.value = neutralAvatarPlaceholderDataUri();
+  // 内网无 Twemoji 静态资源时，直接显示原始 emoji 字符
+  showFallbackEmoji.value = true;
 }
 </script>
 
 <template>
   <div :class="rootClass" :style="sizeStyle">
-    <img class="avatar-img" :src="imgSrc" alt="" loading="lazy" @error="onImgError" />
+    <img v-if="!showFallbackEmoji" class="avatar-img" :src="imgSrc" alt="" loading="lazy" @error="onImgError" />
+    <span v-else class="avatar-emoji-fallback">{{ display }}</span>
   </div>
 </template>
 
@@ -153,5 +156,18 @@ function onImgError() {
   object-fit: contain;
   object-position: center;
   display: block;
+}
+
+.avatar-emoji-fallback {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: inherit;
+  line-height: 1;
 }
 </style>

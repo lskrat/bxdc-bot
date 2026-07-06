@@ -53,6 +53,9 @@
 
 ## 9. Commit & Archive
 
-- [ ] 9.1 Commit 改动（不包含同事名字）；建议分 2-3 个 commit（prompt 改动 / agent 改动 / 新工具）
-- [ ] 9.2 PR 推到 fork
+- [x] 9.1 Commit 改动（不包含同事名字）；建议分 2-3 个 commit（prompt 改动 / agent 改动 / 新工具）→ 实际 3 个 commit:
+  - `546421b` feat(agent-core): prompt layering + filesystem skill lazy loading (5 files, +299/-57)
+  - `61e9cb8` feat(agent-core): main agent tool unification + instruction-as-user-role (4 files, +87/-45)
+  - `a960cfb` docs(agent-core + openspec): rollback docs for prompt/mounting change (.env.example + openspec/)
+- [x] 9.2 PR 推到 fork（57e435d..a960cfb temp -> temp，gitee 远程仓库）
 - [ ] 9.3 等内网环境 60 天稳定后，archive 此 change（届时移除 `AGENT_LEGACY_DIRECT_TOOLS` 分支）

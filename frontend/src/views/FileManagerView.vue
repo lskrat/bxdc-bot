@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { fileService } from '../services/fileService'
 import type { UserFileRecord } from '../types/fileUpload'
+import { FILE_INPUT_ACCEPT, FILE_UPLOAD_CONFIG } from '../types/fileUpload'
 import { MessagePlugin } from 'tdesign-vue-next'
 import {
   DownloadIcon, DeleteIcon, RefreshIcon, UploadIcon,
@@ -67,15 +68,15 @@ async function handleUpload(event: Event) {
   const file = input.files?.[0]
   if (!file) return
 
-  if (file.size > 10 * 1024 * 1024) {
-    MessagePlugin.error('文件大小超过限制（最大 10 MiB）')
+  if (file.size > FILE_UPLOAD_CONFIG.MAX_SIZE_PER_FILE.word) {
+    MessagePlugin.error(FILE_UPLOAD_CONFIG.MESSAGES.FILE_TOO_LARGE)
     input.value = ''
     return
   }
-  const allowed = ['.doc', '.docx', '.xls', '.xlsx', '.txt', '.md']
+  const allowed = Object.values(FILE_UPLOAD_CONFIG.ACCEPTED_EXTENSIONS).flat()
   const ext = '.' + file.name.split('.').pop()?.toLowerCase()
   if (!allowed.includes(ext)) {
-    MessagePlugin.error('不支持的文件类型')
+    MessagePlugin.error(FILE_UPLOAD_CONFIG.MESSAGES.UNSUPPORTED_TYPE)
     input.value = ''
     return
   }
@@ -243,7 +244,7 @@ onMounted(() => {
         ref="fileInputRef"
         type="file"
         style="display:none"
-        accept=".doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt,.md,.log,.html,.py,.png,.jpg,.jpeg,.webp"
+        :accept="FILE_INPUT_ACCEPT"
         @change="handleUpload"
       />
     </div>

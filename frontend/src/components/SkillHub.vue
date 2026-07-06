@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { AddIcon, DeleteIcon, EditIcon, DownloadIcon, BrowseIcon } from 'tdesign-icons-vue-next'
 import { useSkillHub, BUILT_IN_SKILLS, extendedSkillEmoji, getExecutionModeLabel, getConfigSummary, canManageGatewaySkill, canViewButNotManageSkill, type Skill } from '../composables/useSkillHub'
@@ -51,6 +51,50 @@ function onImported() {
   closeImportDialog()
   void refreshSkills()
 }
+
+/** === 滚动位置保持 === */
+type ScrollSnapshot = { windowY: number; tops: Array<{ el: HTMLElement; top: number }> }
+
+let _scrollSnapshot: ScrollSnapshot | null = null
+let _lastScrollTop: { el: HTMLElement; top: number } | null = null
+let _lastWindowY = 0
+
+window.addEventListener('scroll', (e: Event) => {
+  const target = e.target as HTMLElement
+  if (target) _lastScrollTop = { el: target, top: target.scrollTop }
+  _lastWindowY = window.scrollY
+}, true)
+
+function _takeScrollSnapshot() {
+  const tops: Array<{ el: HTMLElement; top: number }> = []
+  if (_lastScrollTop && _lastScrollTop.top > 0) tops.push(_lastScrollTop)
+  _scrollSnapshot = { windowY: _lastWindowY, tops }
+}
+
+/** 恢复滚动（接受参数避免首次执行清空快照导致延迟重试失效） */
+function _restoreScrollSnapshot(snapshot: ScrollSnapshot) {
+  const { windowY, tops } = snapshot
+  if (windowY > 0) window.scrollTo(0, windowY)
+  for (const { el, top } of tops) {
+    if (el.scrollTop !== top) el.scrollTop = top
+  }
+}
+
+watch(isLoading, (loading) => {
+  if (!loading && _scrollSnapshot) {
+    const snapshot = _scrollSnapshot
+    _scrollSnapshot = null
+    // 三层恢复：rAF、100ms、300ms，覆盖 layout / transition 延迟
+    nextTick(() => {
+      requestAnimationFrame(() => {
+        _restoreScrollSnapshot(snapshot)
+        requestAnimationFrame(() => _restoreScrollSnapshot(snapshot))
+      })
+      setTimeout(() => _restoreScrollSnapshot(snapshot), 100)
+      setTimeout(() => _restoreScrollSnapshot(snapshot), 300)
+    })
+  }
+})
 
 function canManageRow(skill: Skill): boolean {
   return canManageGatewaySkill(skill, currentUser.value?.id)
@@ -130,14 +174,17 @@ async function handleDeleteSkill(skill: Skill) {
 }
 
 function openCreateForm() {
+  _takeScrollSnapshot()
   skillMgmtRef.value?.openCreateForm()
 }
 
 function openEditForm(skill: Skill) {
+  _takeScrollSnapshot()
   skillMgmtRef.value?.openEditForm(skill)
 }
 
 function openViewForm(skill: Skill) {
+  _takeScrollSnapshot()
   skillMgmtRef.value?.openViewForm(skill)
 }
 
@@ -240,11 +287,11 @@ watch(isSkillHubVisible, (v) => {
                     title="导出 Skill 为 JSON 文件"
                     @click.stop="handleExport(skill)"
                   >
-                    <DownloadIcon :size="16" strokeColor="var(--td-text-color-primary, #0052d9)" />
+                    <DownloadIcon size="16" strokeColor="var(--td-text-color-primary, #0052d9)" />
                   </t-button>
                   <t-tooltip v-else-if="isSystemSeedSkill(skill)" content="系统种子 Skill 不可导出">
                     <t-button variant="text" shape="square" size="small" disabled>
-                      <DownloadIcon :size="16" strokeColor="var(--td-text-color-disabled, #c5c5c5)" />
+                      <DownloadIcon size="16" strokeColor="var(--td-text-color-disabled, #c5c5c5)" />
                     </t-button>
                   </t-tooltip>
                   <t-button

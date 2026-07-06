@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, h, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ChatSender as TChatSender } from '@tdesign-vue-next/chat'
-import { DialogPlugin, Button as TButton, MessagePlugin, Switch as TSwitch } from 'tdesign-vue-next'
+import { DialogPlugin, MessagePlugin, Switch as TSwitch } from 'tdesign-vue-next'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
 import { useChat } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
@@ -19,17 +19,75 @@ const { currentConversationId } = useConversations()
 const fileUpload = useFileUpload()
 const memoryApi = useMemory()
 
-/**
- * 是否启用记忆：默认开启；关闭后本次对话既不读记忆也不写入记忆
- * 挂载时从后端 /memory status 同步 MEM0_ENABLED 状态，用户手动操作后不再被覆盖
- */
-const memoryEnabled = ref(true)
-/** 全局记忆开关（来自 MEM0_ENABLED）：为 false 时本页开关被锁住为 off，不可手动开启 */
+/** localStorage key prefix，按 userId 隔离记忆开关偏好 */
+const MEMORY_LS_PREFIX = 'memoryEnabled:'
+const readStoredMemory = (uid?: string) => {
+  if (!uid) return null
+  const raw = localStorage.getItem(MEMORY_LS_PREFIX + uid)
+  if (raw === 'false') return false
+  if (raw === 'true') return true
+  return null
+}
+const writeStoredMemory = (uid: string, val: boolean) => {
+  localStorage.setItem(MEMORY_LS_PREFIX + uid, String(val))
+}
+
+/** 记忆开关：默认 true，用 localStorage 覆盖默认值避免刷新闪烁 */
+const memoryEnabled = ref(readStoredMemory(currentUser.value?.id) ?? true)
+/** 全局记忆开关（MEM0_ENABLED）；false 时本页开关被强制为 off */
 const memoryGloballyEnabled = ref(true)
-/** 用户是否已手动操作过开关：true 后不再用 status 响应覆盖 */
+/** 用户是否已手动操作过；true 后不再用 backend status 覆盖 */
 let _userToggledMemory = false
-/** 标记 status 接口是否已回来；避免请求未回时用户手改又被回包覆盖 */
+/** status 接口是否已回来，避免请求未归时用户手改被覆盖 */
 let _memoryStatusLoaded = false
+
+/** 从 backend /memory/status 同步 MEM0_ENABLED 状态 */
+async function syncMemoryStatusFromBackend() {
+  if (_userToggledMemory || _memoryStatusLoaded) return
+  const uid = currentUser.value?.id
+  if (!uid) return
+  try {
+    const status = await memoryApi.getMemoryStatus(uid)
+    if (_userToggledMemory || _memoryStatusLoaded) return
+    _memoryStatusLoaded = true
+    memoryGloballyEnabled.value = status.enabled !== false
+    if (!memoryGloballyEnabled.value) {
+      memoryEnabled.value = false
+      writeStoredMemory(uid, false)
+    }
+  } catch {
+    console.warn('[MessageInput] getMemoryStatus failed, keep default')
+    _memoryStatusLoaded = true
+  }
+}
+
+/** 用户手动切换开关：标记 + 持久化 */
+function onMemoryToggleChange() {
+  _userToggledMemory = true
+  _memoryStatusLoaded = true
+  const uid = currentUser.value?.id
+  if (uid) writeStoredMemory(uid, memoryEnabled.value)
+}
+
+/** 全局禁用时强制置 off，并持久化 */
+watch([memoryEnabled, memoryGloballyEnabled], ([memVal, globalVal]) => {
+  if (!globalVal && memVal === true) {
+    memoryEnabled.value = false
+    const uid = currentUser.value?.id
+    if (uid) writeStoredMemory(uid, false)
+  }
+})
+
+onMounted(() => { syncMemoryStatusFromBackend() })
+
+/** 切换用户时重置状态，读新用户的 localStorage 偏好 */
+watch(currentUser, () => {
+  _userToggledMemory = false
+  _memoryStatusLoaded = false
+  memoryGloballyEnabled.value = true
+  memoryEnabled.value = readStoredMemory(currentUser.value?.id) ?? true
+  syncMemoryStatusFromBackend()
+})
 
 // 会话切换时：同步 conversationId + 清空文件（每个会话独立选择，首次挂载不清空）
 let _watchSessionInitial = true
@@ -74,58 +132,6 @@ function onDocumentClickForAttachMenu(e: MouseEvent) {
   showAttachMenu.value = false
 }
 onMounted(() => document.addEventListener('click', onDocumentClickForAttachMenu))
-
-/**
- * 拉取后端 /memory/status 同步 MEM0_ENABLED。
- * 只在用户没手动切过、status 还没回过时覆盖 memoryEnabled。
- * 早返前置：用户已操作过就不再发请求，节省一次 RPC。
- */
-async function syncMemoryStatusFromBackend() {
-  if (_userToggledMemory || _memoryStatusLoaded) return
-  const uid = currentUser.value?.id
-  if (!uid) return
-  try {
-    const status = await memoryApi.getMemoryStatus(uid)
-    // await 期间用户可能已切换过开关
-    if (_userToggledMemory || _memoryStatusLoaded) return
-    _memoryStatusLoaded = true
-    const globalEnabled = status.enabled !== false
-    memoryGloballyEnabled.value = globalEnabled
-    // 全局禁用时本页开关强制为 off，避免"UI 显示 on 但后端不读不写"的记忆混乱
-    memoryEnabled.value = globalEnabled
-  } catch (e) {
-    // 拉失败保持默认（true），不阻塞对话
-    console.warn('[MessageInput] getMemoryStatus failed, keep default true:', e)
-    _memoryStatusLoaded = true
-  }
-}
-
-/** 用户手动切换开关：标记为"用户已操作"，后续 status 响应不再覆盖 */
-function onMemoryToggleChange() {
-  _userToggledMemory = true
-  _memoryStatusLoaded = true
-}
-
-/**
- * 全局禁用约束：MEM0_ENABLED=false 时不允许 memoryEnabled 被拨到 on。
- * 用 watch 而非 @change 处理，避免 v-model 和 @change 时序竞争（v-model 后到会覆盖 @change 里的赋值）。
- */
-watch([memoryEnabled, memoryGloballyEnabled], ([memVal, globalVal]) => {
-  if (!globalVal && memVal === true) {
-    memoryEnabled.value = false
-  }
-})
-onMounted(() => {
-  syncMemoryStatusFromBackend()
-})
-// 登录/切换用户时重新拉一次
-watch(currentUser, () => {
-  _userToggledMemory = false
-  _memoryStatusLoaded = false
-  memoryGloballyEnabled.value = true
-  memoryEnabled.value = true
-  syncMemoryStatusFromBackend()
-})
 onBeforeUnmount(() => document.removeEventListener('click', onDocumentClickForAttachMenu))
 
 /** 「+」菜单 → 上传新文件 */
@@ -507,25 +513,45 @@ async function handleSend(value: string) {
     return
   }
 
-  // 有 parsing 文件 → 弹 dialog 三选一（VNode 渲染，不依赖 DOM 查询）
+  // 有 parsing 文件 → 弹 t-dialog 三选一
   const parsingCount = files.filter((f) => f.status === 'parsing').length
   const result = await new Promise<'wait' | 'now' | 'cancel'>((resolve) => {
     const dlg = DialogPlugin({
       header: '文件正在解析',
       body: `${parsingCount} 个文件正在解析，是否等待解析完成后发送？`,
-      closeOnOverlayClick: false,
-      closeOnEscKeydown: false,
-      closeBtn: false,
-      footer: () =>
-        h(
-          'div',
-          { style: 'display:flex;gap:8px;justify-content:flex-end' },
-          [
-            h(TButton, { theme: 'default', onClick: () => { resolve('cancel'); dlg.destroy() } }, () => '取消'),
-            h(TButton, { theme: 'default', onClick: () => { resolve('now'); dlg.destroy() } }, () => '立即发送'),
-            h(TButton, { theme: 'primary', onClick: () => { resolve('wait'); dlg.destroy() } }, () => '等待解析'),
-          ],
-        ),
+      footer: false, // 使用自定义 footer
+      onClose: () => resolve('cancel'),
+    })
+    // TDesign Dialog 渲染后通过 DOM 注入 3 个按钮
+    nextTick(() => {
+      const root = document.querySelector(`.t-dialog__ctx [role="dialog"]`) as HTMLElement | null
+      if (!root) {
+        resolve('cancel')
+        dlg.destroy?.()
+        return
+      }
+      const footer = document.createElement('div')
+      footer.className = 'parsing-confirm-footer'
+      footer.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;padding:16px 0 0;'
+      const makeBtn = (label: string, theme: 'primary' | 'default' | 'danger', value: 'wait' | 'now' | 'cancel') => {
+        const btn = document.createElement('button')
+        btn.textContent = label
+        btn.className = `t-button t-button--theme-${theme} t-button--variant-base`
+        btn.style.cssText = 'padding:6px 16px;border-radius:6px;border:1px solid var(--td-component-border);background:var(--td-bg-color-container);color:var(--td-text-color-primary);cursor:pointer;'
+        if (theme === 'primary') {
+          btn.style.background = 'var(--td-brand-color)'
+          btn.style.color = 'var(--td-text-color-anti)'
+          btn.style.borderColor = 'var(--td-brand-color)'
+        }
+        btn.onclick = () => { resolve(value); dlg.destroy?.() }
+        return btn
+      }
+      footer.appendChild(makeBtn('取消', 'default', 'cancel'))
+      footer.appendChild(makeBtn('立即发送', 'default', 'now'))
+      footer.appendChild(makeBtn('等待解析', 'primary', 'wait'))
+      // 找到 dialog body 容器
+      const body = root.querySelector('.t-dialog__body') || root.querySelector('.t-dialog__main') || root
+      body.appendChild(footer)
     })
   })
 
@@ -669,7 +695,7 @@ async function handleSend(value: string) {
       </div>
     </div>
 
-    <!-- 记忆开关：默认开启，关闭后本次对话既不读记忆也不写记忆 -->
+    <!-- 记忆开关行 -->
     <div class="memory-toggle-row">
       <TSwitch
         v-model="memoryEnabled"
@@ -966,32 +992,6 @@ async function handleSend(value: string) {
   width: 100%;
 }
 
-/* ---------- 记忆开关行 ---------- */
-.memory-toggle-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
-}
-
-.memory-toggle-label {
-  font-weight: 500;
-  color: var(--td-text-color-primary);
-  user-select: none;
-}
-
-.memory-toggle-hint {
-  color: var(--td-text-color-placeholder);
-  font-size: 11px;
-}
-
-.memory-toggle-hint--disabled {
-  color: var(--td-error-color);
-}
-
 /* ---------- 左侧「+」按钮 + 菜单（位于 TChatSender 的 footer-prefix 插槽内，与发送按钮同行） ---------- */
 .attach-menu-container {
   position: relative;
@@ -1266,6 +1266,32 @@ async function handleSend(value: string) {
 .chat-sender {
   flex: 1;
   min-width: 0;
+}
+
+/* ---------- 记忆开关行 ---------- */
+.memory-toggle-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+}
+
+.memory-toggle-label {
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+  user-select: none;
+}
+
+.memory-toggle-hint {
+  color: var(--td-text-color-placeholder);
+  font-size: 11px;
+}
+
+.memory-toggle-hint--disabled {
+  color: var(--td-error-color);
 }
 
 /* ---------- 通用样式 ---------- */
