@@ -222,3 +222,8 @@ mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
   2. `cd frontend && npm run build` 必须 exit 0
   3. 关注 vite 输出的 chunk size warning（如新增大依赖需说明）
 - 教训来源：commit `53def51` 一次性删了 4 处 TS6133 declaration 才让 build 通过；之前 `vue-tsc --noEmit` 不报，但 `vue-tsc -b` 必报
+
+### 5.7 agent-core 新增接口必须统一以 `/agent` 开头
+- agent-core（NestJS）对外暴露的 HTTP 端点**必须**以 `/agent` 为路径前缀（如 `/agent/run`、`/agent/confirm`），**禁止**新增其他顶层路径前缀
+- 原因：`frontend/vite.config.ts` 已配置 `/agent → http://127.0.0.1:3000` 的代理规则，新增 `/agent/*` 路径无需改 proxy 配置即可生效；若新增其他前缀（如 `/memory`、`/tool/*`），则必须在 vite.config.ts 中逐条新增 proxy 规则，增加代理配置的维护成本
+- **例外**：已有非 `/agent` 前缀的端点（如 `/memory` proxy 规则）可保留，但不再新增此类例外
