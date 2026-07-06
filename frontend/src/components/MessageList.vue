@@ -24,6 +24,8 @@ const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
 const downloadLoading = ref(false)
+/** 按消息 ID 追踪下载中状态，避免一个消息下载时所有消息都转圈 */
+const downloadingMsgIds = ref(new Set<string>())
 const expandedThinkBlockKeys = ref(new Set<string>())
 
 // Scroll-to-top pagination for conversation history
@@ -991,7 +993,8 @@ watch(chatItems, (items) => {
 })
 
 async function handleDownload(format: 'md' | 'pdf', msg: Message) {
-  downloadLoading.value = true
+  if (downloadingMsgIds.value.has(msg.id)) return
+  downloadingMsgIds.value.add(msg.id)
   try {
     if (format === 'md') {
       downloadMarkdown(msg)
@@ -1002,7 +1005,7 @@ async function handleDownload(format: 'md' | 'pdf', msg: Message) {
     console.error('Download failed:', e)
     MessagePlugin.error('下载失败，请重试')
   } finally {
-    downloadLoading.value = false
+    downloadingMsgIds.value.delete(msg.id)
   }
 }
 
@@ -1369,9 +1372,9 @@ async function copyContent(text: string) {
             </t-button>
           </t-tooltip>
           <span class="chat-actions-divider"></span>
-          <t-dropdown trigger="click" :disabled="downloadLoading">
+          <t-dropdown trigger="click" :disabled="downloadingMsgIds.has(item.id)">
             <t-tooltip content="下载">
-              <t-button theme="default" size="small" variant="text" :loading="downloadLoading">
+              <t-button theme="default" size="small" variant="text" :loading="downloadingMsgIds.has(item.id)">
                 <template #icon><DownloadIcon /></template>
               </t-button>
             </t-tooltip>
