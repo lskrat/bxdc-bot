@@ -31,9 +31,9 @@ export class ManageTasksTool extends DynamicStructuredTool {
     super({
       name: "manage_tasks",
       description:
-        "Track the progress of multi-step work. " +
-        "Call this to register new sub-tasks (status=pending/in_progress) or mark them completed/cancelled. " +
-        "The system uses this to avoid repeating finished work and to keep you focused on remaining items.",
+        "Track multi-step work: register/update sub-tasks. " +
+        "Use short stable IDs (e.g. 'check-disk'). " +
+        "Hint: pending/in_progress before work, completed after; never repeat completed work.",
       schema: manageTasksInputSchema,
       func: async (input: z.infer<typeof manageTasksInputSchema>) => {
         const lines = input.updates.map(

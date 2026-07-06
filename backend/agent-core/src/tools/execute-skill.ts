@@ -148,18 +148,9 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
     super({
       name: "execute_skill_with_context",
       description:
-        "Create or reuse a sub-agent with specific skills and execute the user's task. " +
-        "WORKFLOW: First call search_tools to find relevant skills, then extract the 'id' numbers " +
-        "from the returned skills array and pass them here as skillIds. " +
-        "The sub-agent will be dynamically created with only those specific skills loaded, " +
-        "executes the userInput task, and returns the result. " +
-        "SUPPORT MULTI-STEP: The sub-agent is cached and can handle multiple steps. " +
-        "For subsequent steps with the same skills, set continueConversation to true " +
-        "to continue the conversation instead of creating a new sub-agent. " +
-        "After receiving the result, you can continue planning or summarize for the user. " +
-        "FILE TASKS: if the task operates on a file, the userInput you pass MUST carry the concrete file id(s) " +
-        "(resolve them from file_list / previous tool results / conversation context before calling this tool); " +
-        "only pass it without a file id when none is genuinely available.",
+        "Run task in sub-agent via skillIds. First search_tools/search_filesystem_skills to find ids; " +
+        "continueConversation=true for follow-ups. " +
+        "Hint: confirmation skills/SSH approved via in-app UI buttons only—don't ask 'yes/confirmed'.",
       schema: executeSkillInputSchema,
       func: async (args) => {
         // thinkId / thinkStarted 声明在 try 外部，供 catch 块引用

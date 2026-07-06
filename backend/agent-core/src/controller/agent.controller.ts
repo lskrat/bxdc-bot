@@ -64,7 +64,7 @@ import { pickMergedLlm } from '../utils/llm-merge';
 import { logAgentRunRawIfEnabled } from '../utils/agent-run-raw-log';
 import { sanitizeHistoryForAgent } from '../utils/history-sanitize';
 import { Command, INTERRUPT } from '@langchain/langgraph';
-import { buildStaticSystemPrompt, Prompts } from '../prompts';
+import { buildStaticSystemPrompt, resolvePromptLevel, Prompts } from '../prompts';
 import { ConversationLogger } from '../utils/conversation-logger';
 import { gatewayCompactClient } from '../services/gateway-compact-client';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
@@ -751,7 +751,10 @@ export class AgentController {
             ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
             : '';
 
-          const staticSystemPrompt = buildStaticSystemPrompt();
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // 显式读取 AGENT_PROMPT_LEVEL（默认 'short'）。fallback 逻辑在 resolvePromptLevel 内部。
+          const promptLevel = resolvePromptLevel();
+          const staticSystemPrompt = buildStaticSystemPrompt(promptLevel);
           // 记忆开关：关闭时跳过 profile 检索（systemContent 回退到 c8d9330 兜底文案）
           const profileDetails = memoryEnabled
             ? await this.memoryService.fetchUserProfile(userId)
@@ -760,13 +763,26 @@ export class AgentController {
           // system 消息：只放长期记忆/个人特征
           const systemContent = profileDetails || '你是与本平台 Skill Gateway 集成的智能助手，请根据用户的指令和可用工具完成任务。';
 
-          // user 消息：静态提示词 + 技能上下文 + 对话记忆 + 当前指令
+          // user 消息：静态提示词 + 技能上下文 + 对话记忆（不含当前 instruction）
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // instruction 单独开一个 user role，避免和 prompt 上下文拼到一条 user 消息里
+          // （LLM 看到 "System:\n..." + "User Instruction:\n..." 在同一条 message 里容易混淆）
           const userContent = [
             `System:\n${staticSystemPrompt}`,
             skillContext || '',
             memoryContext || '',
-            `User Instruction:\n${instruction}`,
           ].filter(s => s).join('\n\n');
+
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // 监控 prompt 体积（内网模型负载关键指标）
+          const historyChars = sanitizedHistory.reduce((sum, m) => {
+            const c = m?.content;
+            if (typeof c === 'string') return sum + c.length;
+            if (Array.isArray(c)) return sum + JSON.stringify(c).length;
+            return sum;
+          }, 0);
+          const totalPromptChars = systemContent.length + userContent.length + historyChars + instruction.length;
+          console.log(`[LLM] Prompt level=${promptLevel}, static=${staticSystemPrompt.length}, skillCtx=${(skillContext || '').length}, memoryCtx=${(memoryContext || '').length}, system=${systemContent.length}, userCtx=${userContent.length}, instruction=${instruction.length}, history=${historyChars}, total=${totalPromptChars}`);
   
           const allowedHistoryRoles = new Set(['user', 'assistant']);
           const validHistory = sanitizedHistory
@@ -779,11 +795,14 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          // 首条唯一的 system 消息，对话记忆放在 user 消息中
+          // 首条唯一的 system 消息 + user 消息（prompt 上下文） + user 消息（实际指令）
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // instruction 单独作为一条 user 消息，结构更清晰
           const messages: any[] = [
             { role: 'system', content: systemContent },
             ...(validHistory as any[]),
             { role: 'user', content: userContent },
+            { role: 'user', content: instruction },
           ];
 
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));

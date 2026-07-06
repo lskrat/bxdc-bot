@@ -44,9 +44,11 @@ import {
 import { JavaSkillGeneratorTool } from "../tools/skill-generator";
 import { ManageTasksTool } from "../tools/manage-tasks";
 import { SearchToolsTool } from "../tools/search-tools";
+import { SearchFilesystemSkillsTool } from "../tools/search-filesystem-skills";
 import { ExecuteSkillWithContextTool } from "../tools/execute-skill";
 import { AgentAnnotation, preModelHook } from "./tasks-state";
 import type { SkillManager } from "../skills/skill.manager";
+import { SkillManager as SkillManagerImpl } from "../skills/skill.manager";
 
 /**
  * 共享的进程内检查点存储
@@ -86,6 +88,21 @@ function shouldStreamModel(modelName: string): boolean {
  * - 调用方只需提供必要的配置参数，无需了解内部实现细节
  */
 export class AgentFactory {
+  // open spec: optimize-agent-prompt-and-skill-mounting
+  // Class-level state for one-shot startup logs and warnings.
+  private static legacyWarned = false;
+  private static toolListLogged = false;
+  // SkillManager is used by SearchFilesystemSkillsTool inside the main agent.
+  // Constructed lazily on first createMainAgent call (reads SKILLs/ directory
+  // from disk; cheap to construct but we cache to avoid repeat disk scans).
+  private static sharedSkillManager: SkillManager | null = null;
+
+  private static getSkillManager(): SkillManager {
+    if (!AgentFactory.sharedSkillManager) {
+      AgentFactory.sharedSkillManager = new SkillManagerImpl();
+    }
+    return AgentFactory.sharedSkillManager;
+  }
   /**
    * 创建主 Agent（携带基础工具和用户自定义技能）
    * 
@@ -158,17 +175,16 @@ export class AgentFactory {
     });
 
     // 构建主 Agent 的工具列表
-    // 主 Agent 负责规划和协调，包含：
-    // 1. 技能搜索工具（search_tools）- 检索相关技能列表
-    // 2. 技能执行工具（execute_skill_with_context）- 创建子 Agent 执行技能
-    // 3. 技能生成工具（skill_generator）- 生成新技能
-    // 4. 基础计算工具（compute）- 数学计算
-    // 5. 服务器查询工具（server_lookup）- 服务器信息查询
-    // 6. 任务管理工具（manage_tasks）- 任务状态管理
-    // 7. 用户自定义技能（从 Gateway 获取）
+    // open spec: optimize-agent-prompt-and-skill-mounting
+    // 主 Agent 负责规划和协调。新行为：固定 7 个 baseTools，不再直接挂载 gateway extended tools。
+    // 所有 gateway 技能（用户技能 + 系统技能）通过 search_tools → execute_skill_with_context 路径触发。
+    // filesystem skills 通过 search_filesystem_skills → execute_skill_with_context 路径触发。
+    //
+    // 回退：AGENT_LEGACY_DIRECT_TOOLS=true 走旧行为（gateway extended tools 直接挂主 Agent）。
     const builtinDispatch = getAgentBuiltinSkillDispatch();
     const baseTools: BindableAgentTool[] = [
       new SearchToolsTool(gatewayUrl, apiToken, userId),
+      new SearchFilesystemSkillsTool(AgentFactory.getSkillManager()),
       new ExecuteSkillWithContextTool(gatewayUrl, apiToken, openAiApiKey, {
         modelName: config?.modelName,
         baseUrl: config?.baseUrl,
@@ -179,24 +195,40 @@ export class AgentFactory {
       new ManageTasksTool(),
     ];
 
-    // 加载用户自定义技能（skill_owner_type=1）
-    // 优先按当前会话勾选的技能加载：有 conversationId 时调 /api/skills/by-conversation，
-    // 由 gateway 查会话表 enabled_skills 并按用户可见性过滤返回；
-    // 无 conversationId（如直连调用）时回退到 by-owner-type=1 全量加载。
-    const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
-      plannerModel: model,
-      availableTools: baseTools,
-      sessionId: config?.sessionId,
-      conversationId: config?.conversationId,
-      loadFromConversation: true,
-      skillOwnerType: 1, // 用户技能（无 conversationId 时的兜底）
-    });
+    // 决定是否走旧行为（gateway extended tools 直接挂主 Agent）
+    const legacyDirectTools = (process.env.AGENT_LEGACY_DIRECT_TOOLS || "").trim().toLowerCase() === "true";
+    if (legacyDirectTools && !AgentFactory.legacyWarned) {
+      console.warn(
+        `[LLM] AGENT_LEGACY_DIRECT_TOOLS=true: main agent mounting extended tools directly (legacy mode). ` +
+        `This will increase prompt size; set AGENT_LEGACY_DIRECT_TOOLS=false (default) to use the unified search→execute path.`
+      );
+      AgentFactory.legacyWarned = true;
+    }
 
-    // 合并工具
-    const tools: BindableAgentTool[] = [
-      ...baseTools,
-      ...gatewayExtendedTools,
-    ];
+    let tools: BindableAgentTool[];
+    if (legacyDirectTools) {
+      // 加载用户自定义技能（skill_owner_type=1）
+      // 优先按当前会话勾选的技能加载：有 conversationId 时调 /api/skills/by-conversation，
+      // 由 gateway 查会话表 enabled_skills 并按用户可见性过滤返回；
+      // 无 conversationId（如直连调用）时回退到 by-owner-type=1 全量加载。
+      const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
+        plannerModel: model,
+        availableTools: baseTools,
+        sessionId: config?.sessionId,
+        conversationId: config?.conversationId,
+        loadFromConversation: true,
+        skillOwnerType: 1, // 用户技能（无 conversationId 时的兜底）
+      });
+      tools = [...baseTools, ...gatewayExtendedTools];
+    } else {
+      tools = baseTools;
+    }
+
+    // 启动时打印一次主 Agent 工具列表，便于诊断
+    if (!AgentFactory.toolListLogged) {
+      console.log(`[LLM] Main agent tools: [${tools.map((t) => t.name).join(", ")}] (count=${tools.length})`);
+      AgentFactory.toolListLogged = true;
+    }
 
     // 创建主 Agent
     const agent = createReactAgent({
