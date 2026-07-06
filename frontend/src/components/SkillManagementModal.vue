@@ -375,6 +375,7 @@ function resetForm() {
   parseError.value = null;
   rawConfiguration.value = '{}';
   configDraft.value = createDefaultSkillDraft('CONFIG');
+  syncDraftToConfigForm();
 }
 
 function openCreateForm() {
