@@ -795,12 +795,23 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // 去重：客户端会把当前 instruction 也写进 history 末尾（导致 user 重复发送）。
+          // 保留末尾的 instruction，移除 history 里内容相同的末条 user role。
+          const trimmedHistory =
+            validHistory.length > 0
+              && validHistory[validHistory.length - 1].role === 'user'
+              && typeof validHistory[validHistory.length - 1].content === 'string'
+              && (validHistory[validHistory.length - 1].content as string).trim() === instruction.trim()
+              ? validHistory.slice(0, -1)
+              : validHistory;
+
           // 首条唯一的 system 消息 + user 消息（prompt 上下文） + user 消息（实际指令）
           // open spec: optimize-agent-prompt-and-skill-mounting
           // instruction 单独作为一条 user 消息，结构更清晰
           const messages: any[] = [
             { role: 'system', content: systemContent },
-            ...(validHistory as any[]),
+            ...(trimmedHistory as any[]),
             { role: 'user', content: userContent },
             { role: 'user', content: instruction },
           ];
