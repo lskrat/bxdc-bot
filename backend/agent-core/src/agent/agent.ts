@@ -176,11 +176,13 @@ export class AgentFactory {
 
     // 构建主 Agent 的工具列表
     // open spec: optimize-agent-prompt-and-skill-mounting
-    // 主 Agent 负责规划和协调。新行为：固定 7 个 baseTools，不再直接挂载 gateway extended tools。
-    // 所有 gateway 技能（用户技能 + 系统技能）通过 search_tools → execute_skill_with_context 路径触发。
-    // filesystem skills 通过 search_filesystem_skills → execute_skill_with_context 路径触发。
+    // 主 Agent 负责规划和协调。新行为：
+    //   - 固定 7 个 baseTools
+    //   - **前端会话勾选的技能**仍然直接挂载（user 明确选择的工具，少量；保持直接调用低延迟）
+    //   - 其他 gateway 技能（系统技能 + 未勾选用户技能）通过 search_tools → execute_skill_with_context 路径触发
+    //   - filesystem skills 通过 search_filesystem_skills → execute_skill_with_context 路径触发
     //
-    // 回退：AGENT_LEGACY_DIRECT_TOOLS=true 走旧行为（gateway extended tools 直接挂主 Agent）。
+    // 回退：AGENT_LEGACY_DIRECT_TOOLS=true 走旧行为（全量挂载 gateway user skills）
     const builtinDispatch = getAgentBuiltinSkillDispatch();
     const baseTools: BindableAgentTool[] = [
       new SearchToolsTool(gatewayUrl, apiToken, userId),
@@ -207,26 +209,39 @@ export class AgentFactory {
 
     let tools: BindableAgentTool[];
     if (legacyDirectTools) {
-      // 加载用户自定义技能（skill_owner_type=1）
-      // 优先按当前会话勾选的技能加载：有 conversationId 时调 /api/skills/by-conversation，
-      // 由 gateway 查会话表 enabled_skills 并按用户可见性过滤返回；
-      // 无 conversationId（如直连调用）时回退到 by-owner-type=1 全量加载。
+      // 旧行为：全量加载用户技能（skill_owner_type=1），无 conversationId 时的兜底。
       const gatewayExtendedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
         plannerModel: model,
         availableTools: baseTools,
         sessionId: config?.sessionId,
         conversationId: config?.conversationId,
         loadFromConversation: true,
-        skillOwnerType: 1, // 用户技能（无 conversationId 时的兜底）
+        skillOwnerType: 1,
       });
       tools = [...baseTools, ...gatewayExtendedTools];
+    } else if (config?.conversationId) {
+      // 新行为：仅加载前端会话**勾选**的技能（gateway 查会话表 enabled_skills）。
+      // 未勾选的技能仍走 search_tools → execute_skill_with_context，保持 prompt 体积优势。
+      const conversationEnabledTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
+        plannerModel: model,
+        availableTools: baseTools,
+        sessionId: config?.sessionId,
+        conversationId: config?.conversationId,
+        loadFromConversation: true,
+      });
+      tools = [...baseTools, ...conversationEnabledTools];
     } else {
+      // 无 conversationId（如直连调用）：不挂任何 gateway 扩展工具，全部走 search 路径
       tools = baseTools;
     }
 
-    // 启动时打印一次主 Agent 工具列表，便于诊断
+    // 每次都打印工具数量 + 首次打印完整列表，便于诊断前端勾选技能是否挂载
+    const extendedNames = tools.filter((t) => t.name.startsWith("extended_")).map((t) => t.name);
+    console.log(
+      `[LLM] Main agent tools: count=${tools.length} base=7 extended=${extendedNames.length} (${extendedNames.join(", ") || "none"})`,
+    );
     if (!AgentFactory.toolListLogged) {
-      console.log(`[LLM] Main agent tools: [${tools.map((t) => t.name).join(", ")}] (count=${tools.length})`);
+      console.log(`[LLM] Main agent tools (full): [${tools.map((t) => t.name).join(", ")}]`);
       AgentFactory.toolListLogged = true;
     }
 
