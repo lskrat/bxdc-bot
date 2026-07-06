@@ -1,11 +1,17 @@
 /**
  * 中文系统提示词定义
- * 
+ *
  * 模块职责：
  * 1. 提供中文版本的系统提示词，适配中文大模型
  * 2. 与英文版本保持语义完全一致
  * 3. 使用地道的中文表达，便于中文模型理解
- * 
+ *
+ * open spec: optimize-agent-prompt-and-skill-mounting
+ * - 7 段策略精简为 4 段（agentRole / skillDiscovery / skillGenerator / extendedSkillRouting）
+ * - 3 段策略（taskTracking / confirmationUI / downloadUrl）降级为单行 hint，
+ *   由对应工具的 description 引用或后端输出守卫强制
+ * - 完整 7 段策略仍保留在变量里，供 buildStaticSystemPrompt('full') 走老路径回退用
+ *
  * @module ChinesePrompts
  * @author Agent Core Team
  * @since 1.0.0
@@ -39,8 +45,9 @@ const skillGeneratorPolicy = `[技能生成策略]
 
 /**
  * 策略提示词：任务跟踪策略
- * 
- * 指导 Agent 在多任务场景下跟踪和管理子任务状态
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 manage_tasks 工具 description 引用 taskTrackingHint 一行版。
  */
 const taskTrackingPolicy = `[任务跟踪策略]
 当用户的请求涉及多个不同的子任务时（例如"检查磁盘 AND 重启 nginx AND 查看日志"）：
@@ -53,14 +60,25 @@ const taskTrackingPolicy = `[任务跟踪策略]
 `;
 
 /**
+ * 任务跟踪策略的精简版（一行 hint），供 manage_tasks 工具 description 引用
+ */
+const taskTrackingHint = `多子任务场景下用 manage_tasks 注册/更新状态：开始前待处理或进行中，完成后已完成；不要重复执行已完成项。`;
+
+/**
  * 策略提示词：确认 UI 策略
- * 
- * 明确告知 Agent 高风险操作需通过 UI 按钮确认
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 execute_skill_with_context 工具 description 引用 confirmationHint 一行版。
  */
 const confirmationUIPolicy = `[确认策略]
 标记为需要确认的扩展技能和高风险 SSH 命令只能通过聊天 UI 中的应用内确认按钮进行审批。不要告诉用户输入"yes"、"confirm"，或发送带有"confirmed": true 的 JSON 作为唯一的继续方式——客户端会在用户点击确认后通过独立通道发送审批。
 
 `;
+
+/**
+ * 确认 UI 策略的精简版（一行 hint），供 execute_skill_with_context 工具 description 引用
+ */
+const confirmationHint = `高风险/需确认的扩展技能和 SSH 命令只能通过聊天 UI 中的应用内按钮审批；不要让用户回 "yes/confirmed"。`;
 
 /**
  * 策略提示词：技能发现策略
@@ -83,18 +101,20 @@ const skillDiscoveryPolicy = `[技能发现策略]
  * 优先使用扩展技能而非内置工具，规范参数传递方式
  */
 const extendedSkillRoutingPolicy = `[扩展技能路由策略]
-当本次运行中 SkillGateway 扩展工具可用时（名称通常以"extended_"开头），对于落在该技能描述能力范围内的请求，你必须调用匹配的扩展工具。
-扩展工具使用结构化参数：按照工具模式将字段作为顶层工具参数传递（而不是单个"input" JSON 字符串）。
-对于远程 shell 任务，优先使用扩展 SSH 技能；内置的 ssh_executor 工具在认证会话中可能不可用——请使用扩展 SSH 技能和 server_lookup 来查找服务器别名。
-除非满足以下条件，否则不要使用 ssh_executor、linux_script_executor、compute 或 server_lookup 等内置工具来绕过此类扩展技能：(1) 用户明确要求使用低层级/内置路径；(2) 没有扩展技能合理地匹配该请求；或 (3) 扩展工具失败且内置回退明显必要（简要说明回退原因）。
-不要依赖之前消息中记住的 URL、主机或命令片段来跳过扩展工具——当扩展工具适用时，使用明确的参数调用它。
+当 SkillGateway 扩展工具可用时（名称通常以"extended_"开头），对落在该技能描述能力范围内的请求，必须调用匹配的扩展工具。扩展工具使用结构化参数（按工具模式顶层传参，而非单个"input" JSON）。
+远程 shell 优先用扩展 SSH 技能（内置 ssh_executor 在认证会话中可能不可用），用 server_lookup 查服务器别名。
+除非以下情况，不要用 ssh_executor / linux_script_executor / compute / server_lookup 绕过扩展技能：(1) 用户明确要求低层级/内置路径；(2) 没有扩展技能合理匹配；(3) 扩展工具失败且内置回退明显必要（简要说明）。
+不要依赖之前消息记住的 URL / 主机 / 命令片段跳过扩展工具——适用时用明确参数调用它。
+注意：主 Agent 没有直接挂载任何扩展工具。所有 Gateway 技能（用户技能和系统技能）只能通过 search_tools / search_filesystem_skills → execute_skill_with_context 路径触发。
 
 `;
 
 /**
  * 策略提示词：下载链接策略
- * 
- * 禁止编造 downloadUrl/fileId，必须逐字来自本轮工具返回
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 downloadUrlHint 一行版替代；后端输出守卫额外兜底：
+ * agent-core 在 controller 层强制剥离非白名单 downloadUrl/fileId。
  */
 const downloadUrlPolicy = `[下载链接策略]
 涉及文件下载链接（downloadUrl）和文件 ID（fileId）时，你必须严格遵守：
@@ -104,6 +124,12 @@ const downloadUrlPolicy = `[下载链接策略]
 4. 记忆或历史消息中出现过的旧 downloadUrl/fileId 不能直接当作本轮结果使用——需要时重新调用工具获取最新真实值。
 
 `;
+
+/**
+ * 下载链接策略的精简版（一行 hint）。
+ * 后端输出守卫（agent.controller.ts）仍强制 downloadUrl/fileId 必须来自工具结果。
+ */
+const downloadUrlHint = `downloadUrl/fileId 必须逐字来自本轮工具返回，禁止编造/拼接/猜测；后端会强制剥离非白名单链接。`;
 
 /**
  * 任务状态中文映射
@@ -144,7 +170,7 @@ function buildTasksSummary(tasks: TasksStatusMap): string {
 
 /**
  * 中文系统提示词导出对象
- * 
+ *
  * 实现了 SystemPrompts 接口的所有属性
  */
 export const ChinesePrompts: SystemPrompts = {
@@ -156,4 +182,18 @@ export const ChinesePrompts: SystemPrompts = {
   extendedSkillRoutingPolicy,
   downloadUrlPolicy,
   buildTasksSummary,
+};
+
+/**
+ * 中文策略提示词的精简 hint（一行版），供工具 description 引用，避免在主 prompt 里全文展开。
+ *
+ * open spec: optimize-agent-prompt-and-skill-mounting
+ * - taskTrackingHint → manage_tasks tool description
+ * - confirmationHint → execute_skill_with_context tool description
+ * - downloadUrlHint → 后端输出守卫已兜底，hint 只作为 model 软约束
+ */
+export const ChinesePromptHints = {
+  taskTrackingHint,
+  confirmationHint,
+  downloadUrlHint,
 };

@@ -1,11 +1,17 @@
 /**
  * 英文系统提示词定义
- * 
+ *
  * 模块职责：
  * 1. 提供英文版本的系统提示词
  * 2. 作为默认语言回退选项
  * 3. 与中文版本保持结构一致
- * 
+ *
+ * open spec: optimize-agent-prompt-and-skill-mounting
+ * - 7 段策略精简为 4 段（agentRole / skillDiscovery / skillGenerator / extendedSkillRouting）
+ * - 3 段策略（taskTracking / confirmationUI / downloadUrl）降级为单行 hint，
+ *   由对应工具的 description 引用或后端输出守卫强制
+ * - 完整 7 段策略仍保留在变量里，供 buildStaticSystemPrompt('full') 走老路径回退用
+ *
  * @module EnglishPrompts
  * @author Agent Core Team
  * @since 1.0.0
@@ -39,8 +45,9 @@ Do not reach for skill_generator as a default. Prefer existing tools and loaded 
 
 /**
  * 策略提示词：任务跟踪策略
- * 
- * 指导 Agent 在多任务场景下跟踪和管理子任务状态
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 manage_tasks 工具 description 引用 taskTrackingHint 一行版。
  */
 const taskTrackingPolicy = `[Task tracking policy]
 When the user's request involves multiple distinct sub-tasks (e.g. "check disk AND restart nginx AND verify logs"):
@@ -53,14 +60,25 @@ Use short, stable IDs (e.g. "check-disk", "restart-nginx") so the system can tra
 `;
 
 /**
+ * Task-tracking policy one-liner hint, referenced by manage_tasks tool description.
+ */
+const taskTrackingHint = `For multi-sub-task requests, register/update each via manage_tasks: pending/in_progress before work, completed after; never repeat completed work.`;
+
+/**
  * 策略提示词：确认 UI 策略
- * 
- * 明确告知 Agent 高风险操作需通过 UI 按钮确认
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 execute_skill_with_context 工具 description 引用 confirmationHint 一行版。
  */
 const confirmationUIPolicy = `[Confirmation policy]
 Extension skills marked as requiring confirmation and high-risk SSH commands are approved only through the in-app confirmation buttons in the chat UI. Do NOT tell the user to type "yes", "confirm", or to send JSON with "confirmed": true as the only way to proceed — the client sends approval via a separate channel after they click Confirm.
 
 `;
+
+/**
+ * Confirmation-UI policy one-liner hint, referenced by execute_skill_with_context tool description.
+ */
+const confirmationHint = `High-risk / confirmation-required extension skills and SSH commands are approved only through the in-app chat-UI buttons; do NOT ask the user to reply "yes/confirmed".`;
 
 /**
  * 策略提示词：技能发现策略
@@ -83,18 +101,18 @@ When your built-in tools (search_tools, execute_skill_with_context, skill_genera
  * 优先使用扩展技能而非内置工具，规范参数传递方式
  */
 const extendedSkillRoutingPolicy = `[Extended skill routing]
-When SkillGateway extension tools are available in this run (names usually start with "extended_"), you MUST call the matching extension tool for requests that fall within that skill's described capability.
-Extension tools use structured parameters: pass fields as top-level tool arguments per the tool schema (not a single "input" JSON string).
-For remote shell tasks, prefer extension SSH skills; the built-in ssh_executor tool may be unavailable in authenticated sessions—use extended SSH skills and server_lookup for server aliases.
-Do NOT use built-in tools such as ssh_executor, linux_script_executor, compute, or server_lookup to bypass such an extension skill unless: (1) the user explicitly asks for the low-level/built-in path; (2) no extension skill reasonably matches the request; or (3) the extension tool failed and a built-in fallback is clearly necessary (state briefly when you fall back).
-Do not rely on URLs, hosts, or command fragments remembered from earlier messages to skip the extension tool—invoke the extension tool with explicit parameters when it applies.
+Call matching extension tools (names often start with "extended_") for in-scope requests; use structured params per the tool schema. Prefer extension SSH skills for remote shell. Do NOT bypass with built-in tools (ssh_executor / linux_script_executor / compute / server_lookup) unless the user asks for the built-in path, no extension skill matches, or the extension failed and a built-in fallback is necessary (state briefly).
+Do not reuse URLs/hosts/commands from earlier messages to skip the extension tool.
+Note: the main agent has NO extension tools directly mounted. All gateway skills (user and system) are reachable only via search_tools / search_filesystem_skills → execute_skill_with_context.
 
 `;
 
 /**
  * 策略提示词：下载链接策略
- * 
- * 禁止编造 downloadUrl/fileId，必须逐字来自本轮工具返回
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 downloadUrlHint 一行版替代；后端输出守卫额外兜底：
+ * agent-core 在 controller 层强制剥离非白名单 downloadUrl/fileId。
  */
 const downloadUrlPolicy = `[Download link policy]
 When dealing with file download links (downloadUrl) and file IDs (fileId), you MUST strictly follow:
@@ -104,6 +122,12 @@ When dealing with file download links (downloadUrl) and file IDs (fileId), you M
 4. Old downloadUrl/fileId values that appeared in memory or earlier messages must NOT be reused as this turn's result — re-invoke the tool to fetch the latest real value when needed.
 
 `;
+
+/**
+ * Download-link policy one-liner hint.
+ * The output guard in agent.controller.ts still enforces this at runtime.
+ */
+const downloadUrlHint = `downloadUrl/fileId must come verbatim from this turn's tool results; never construct/infer; backend strips non-whitelisted URLs.`;
 
 /**
  * 构建任务状态摘要
@@ -134,7 +158,7 @@ function buildTasksSummary(tasks: TasksStatusMap): string {
 
 /**
  * 英文系统提示词导出对象
- * 
+ *
  * 实现了 SystemPrompts 接口的所有属性
  */
 export const EnglishPrompts: SystemPrompts = {
@@ -146,4 +170,16 @@ export const EnglishPrompts: SystemPrompts = {
   extendedSkillRoutingPolicy,
   downloadUrlPolicy,
   buildTasksSummary,
+};
+
+/**
+ * English policy one-liner hints, referenced by tool descriptions to avoid
+ * duplicating full policy text in every prompt.
+ *
+ * open spec: optimize-agent-prompt-and-skill-mounting
+ */
+export const EnglishPromptHints = {
+  taskTrackingHint,
+  confirmationHint,
+  downloadUrlHint,
 };
