@@ -22,8 +22,28 @@ const memoryApi = useMemory()
 /**
  * 是否启用记忆：默认开启；关闭后本次对话既不读记忆也不写入记忆
  * 挂载时从后端 /memory status 同步 MEM0_ENABLED 状态，用户手动操作后不再被覆盖
+ * 用户的开关选择会持久化到 localStorage（按 userId 隔离），刷新页面后仍生效
+ * 初始值同步从 localStorage 读取，避免"先开再关"的闪烁
  */
-const memoryEnabled = ref(true)
+const MEMORY_STORAGE_KEY_PREFIX = 'memoryEnabled:'
+function readStoredMemoryEnabledSync(uid: string | undefined): boolean | null {
+  if (!uid) return null
+  try {
+    const raw = localStorage.getItem(MEMORY_STORAGE_KEY_PREFIX + uid)
+    if (raw === 'true' || raw === 'false') return raw === 'true'
+  } catch {}
+  return null
+}
+function readStoredMemoryEnabled(uid?: string): boolean | null {
+  return readStoredMemoryEnabledSync(uid)
+}
+function writeStoredMemoryEnabled(uid: string | undefined, value: boolean) {
+  if (!uid) return
+  try { localStorage.setItem(MEMORY_STORAGE_KEY_PREFIX + uid, String(value)) } catch {}
+}
+
+// 初始值：setup 时同步读 localStorage（如已有 userId），避免首帧渲染后再切换造成闪烁
+const memoryEnabled = ref(readStoredMemoryEnabledSync(currentUser.value?.id) ?? true)
 /** 全局记忆开关（来自 MEM0_ENABLED）：为 false 时本页开关被锁住为 off，不可手动开启 */
 const memoryGloballyEnabled = ref(true)
 /** 用户是否已手动操作过开关：true 后不再用 status 响应覆盖 */
@@ -92,38 +112,60 @@ async function syncMemoryStatusFromBackend() {
     const globalEnabled = status.enabled !== false
     memoryGloballyEnabled.value = globalEnabled
     // 全局禁用时本页开关强制为 off，避免"UI 显示 on 但后端不读不写"的记忆混乱
-    memoryEnabled.value = globalEnabled
+    // 但如果 localStorage 里有用户保存的偏好，优先尊重用户选择
+    const stored = readStoredMemoryEnabled(uid)
+    if (stored !== null) {
+      // 用户曾保存过偏好：仅在全局禁用时强制回 false
+      memoryEnabled.value = globalEnabled ? stored : false
+    } else {
+      memoryEnabled.value = globalEnabled
+    }
   } catch (e) {
-    // 拉失败保持默认（true），不阻塞对话
-    console.warn('[MessageInput] getMemoryStatus failed, keep default true:', e)
+    // 拉失败尝试从 localStorage 恢复用户偏好
+    const stored = readStoredMemoryEnabled(currentUser.value?.id)
+    if (stored !== null) memoryEnabled.value = stored
+    console.warn('[MessageInput] getMemoryStatus failed, fallback to stored/default:', e)
     _memoryStatusLoaded = true
   }
 }
 
-/** 用户手动切换开关：标记为"用户已操作"，后续 status 响应不再覆盖 */
+/** 用户手动切换开关：标记为"用户已操作"，后续 status 响应不再覆盖；同时持久化到 localStorage */
 function onMemoryToggleChange() {
   _userToggledMemory = true
   _memoryStatusLoaded = true
+  writeStoredMemoryEnabled(currentUser.value?.id, memoryEnabled.value)
 }
 
 /**
  * 全局禁用约束：MEM0_ENABLED=false 时不允许 memoryEnabled 被拨到 on。
  * 用 watch 而非 @change 处理，避免 v-model 和 @change 时序竞争（v-model 后到会覆盖 @change 里的赋值）。
+ * 被强制回 off 时也同步持久化，避免下次刷新又被 backend 推回 on
  */
 watch([memoryEnabled, memoryGloballyEnabled], ([memVal, globalVal]) => {
   if (!globalVal && memVal === true) {
     memoryEnabled.value = false
   }
+  // 任何变化都同步到 localStorage（仅当用户已操作过，或已有存储值）
+  if (_userToggledMemory || readStoredMemoryEnabled(currentUser.value?.id) !== null) {
+    writeStoredMemoryEnabled(currentUser.value?.id, memoryEnabled.value)
+  }
 })
 onMounted(() => {
+  // 挂载时优先恢复 localStorage 里的偏好，避免被 backend 默认值覆盖
+  const stored = readStoredMemoryEnabled(currentUser.value?.id)
+  if (stored !== null) {
+    memoryEnabled.value = stored
+  }
   syncMemoryStatusFromBackend()
 })
-// 登录/切换用户时重新拉一次
+// 登录/切换用户时：恢复该用户的偏好，然后重新拉 status
 watch(currentUser, () => {
   _userToggledMemory = false
   _memoryStatusLoaded = false
   memoryGloballyEnabled.value = true
-  memoryEnabled.value = true
+  // 恢复该用户上次保存的偏好；没有则默认 true
+  const stored = readStoredMemoryEnabled(currentUser.value?.id)
+  memoryEnabled.value = stored !== null ? stored : true
   syncMemoryStatusFromBackend()
 })
 onBeforeUnmount(() => document.removeEventListener('click', onDocumentClickForAttachMenu))
