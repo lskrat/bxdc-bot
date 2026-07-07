@@ -4,9 +4,9 @@ Currently, when a user wants to invoke a specific frontend-checked skill, they m
 
 ## What Changes
 
-- Add a frontend `/` picker that lists the user-checked skills (sourced from the same `loadFromConversation` set already used by `createMainAgent`) and lets the user pick one before sending.
-- After the user selects a skill and submits, the request still goes through `/agent/run`, but `instruction` is prefixed with `/<skill-name> ` and the user-typed remainder is appended as natural-language arguments.
-- agent-core detects the `/<skill-name> ` prefix at the top of `instruction`. When `AGENT_SLASH_SKILL_INVOCATION=true` is set, it appends a directive to the static system prompt forcing the LLM to call exactly that skill and to extract arguments from the trailing natural language.
+- Add a frontend `/` (or `#`) picker that lists the user-checked skills (sourced from the same `loadFromConversation` set already used by `createMainAgent`) and lets the user pick one before sending.
+- After the user selects a skill and submits, the request still goes through `/agent/run`, but `instruction` is prefixed with `/<skill-name> ` (or `#<skill-name> `) and the user-typed remainder is appended as natural-language arguments. The two trigger characters are aliases — no semantic difference.
+- agent-core detects the leading `/` or `#` trigger character at the top of `instruction`. When `AGENT_SLASH_SKILL_INVOCATION=true` is set, it appends a directive to the static system prompt forcing the LLM to call exactly that skill and to extract arguments from the trailing natural language.
 - A new env `AGENT_SLASH_SKILL_INVOCATION` (default `false`) gates the whole feature. When the flag is off the controller behaves exactly as today: no detection, no prompt injection, no UI change.
 
 ## Capabilities

@@ -28,7 +28,7 @@
 ## Decisions
 
 ### Decision 1: Detection 在 agent-core 而不是 frontend
-**做法**：frontend 只构造 `/技能名 参数` instruction + 普通字段，**不发**特殊字段（如 `forcedSkillId`）。agent-core 用正则 `/^\\/([^\\s]+)\\s+(.*)$/s` 解析。
+**做法**：frontend 只构造 `/技能名 参数`（或 `#技能名 参数`）instruction + 普通字段，**不发**特殊字段（如 `forcedSkillId`）。agent-core 用正则 `/^[/#]([^\\s]+)\\s*(.*)$/s` 解析。`/` 和 `#` 是别名，无语义差异。
 
 **为什么**：
 - 单一职责：agent-core 决定 prompt injection，frontend 只管 UI
@@ -93,7 +93,7 @@ JSON schema.
 | **R3: prompt injection 增大 prompt 体积** | 注入文本 ~150 字符，只在 slash 模式生效；未 slash 模式不受影响 |
 | **R4: 误触 `/` 字符** | 用户输入纯文本带 `/` 不会被识别（必须有 `/技能名 ` 模式——即 `/` 后跟一个 token 然后空格）；regex 严格 |
 | **R5: 用户想用未勾选的技能** | 严格 fallback：未匹配到就跳过 slash 逻辑，**完全走老 search_tools 路径** |
-| **R6: regex 与多语言冲突** | regex 用 `/^\\/([^\\s]+)\\s+(.*)$/s`，`[^\\s]+` 匹配任何非空白字符（含中文）；trim 后比对 name |
+| **R6: regex 与多语言冲突** | regex 用 `/^[/#]([^\\s]+)\\s*(.*)$/s`，`[^\\s]+` 匹配任何非空白字符（含中文）；trim 后比对 name |
 | **R7: Skill 名带空格** | 限制为单 token（无空格）；**有空格的名字需要在 Skill Hub 重命名**（前端已有约束）|
 
 ## Migration Plan
