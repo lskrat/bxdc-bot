@@ -17,7 +17,7 @@ import { fetchConversationEnabledSkills, type ConversationEnabledSkill } from '.
 
 const { sendMessage, isThinking, stop } = useChat()
 const { currentUser } = useUser()
-const { currentConversationId } = useConversations()
+const { currentConversationId, currentConversation } = useConversations()
 const fileUpload = useFileUpload()
 const memoryApi = useMemory()
 
@@ -123,9 +123,16 @@ async function refreshSlashSkills(cid: string | null | undefined) {
   }
   slashSkills.value = await fetchConversationEnabledSkills(cid)
 }
+// 会话切换 OR 当前会话的 enabled_skills 字段变更（用户在配置面板勾选/取消）都要重拉
 watch(currentConversationId, (cid) => {
   refreshSlashSkills(cid)
 }, { immediate: true })
+watch(
+  () => currentConversation.value?.enabled_skills,
+  () => {
+    if (currentConversationId.value) refreshSlashSkills(currentConversationId.value)
+  },
+)
 
 function parseSlashTrigger(value: string): { trigger: '/' | '#'; query: string } | null {
   if (typeof value !== 'string' || value.length === 0) return null
