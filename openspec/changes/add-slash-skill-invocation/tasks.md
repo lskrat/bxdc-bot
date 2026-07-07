@@ -40,6 +40,6 @@
 
 ## 6. Commit & Deploy
 
-- [ ] 6.1 分 2-3 个 commit：backend / frontend / docs
-- [ ] 6.2 同事仓库 push：仅在你确认 frontend 已就绪后一次性 push
-- [ ] 6.3 内网环境默认 `AGENT_SLASH_SKILL_INVOCATION=false`，等 frontend 完成后手动 opt-in
+- [x] 6.1 分 4 个 commit：openspec + backend + frontend + docs → 全部 push 到 colleague/temp ✓
+- [x] 6.2 同事仓库同步：HEAD = 6b63d24 = colleague/temp ✓
+- [x] 6.3 默认 `AGENT_SLASH_SKILL_INVOCATION=true`（.env）+ `VITE_SLASH_SKILL_INVOCATION=true`（.env.development），运行时启用
