@@ -304,3 +304,34 @@ export async function fetchSkillUsageDetails(
   if (!response.ok) throw new Error('Failed to fetch skill usage details')
   return response.json()
 }
+
+// open spec: add-slash-skill-invocation
+// 拉取 conversation 当前勾选的技能（id + name），用于前端 slash / hash picker。
+// 返回空数组表示未勾选 / 出错（picker 自然隐藏）。
+export interface ConversationEnabledSkill {
+  id: number
+  name: string
+}
+
+export async function fetchConversationEnabledSkills(
+  conversationId: string,
+): Promise<ConversationEnabledSkill[]> {
+  if (!conversationId) return []
+  try {
+    const response = await fetch(apiUrl(`/api/skills/by-conversation?conversationId=${encodeURIComponent(conversationId)}`), {
+      headers: { 'X-User-Id': localStorage.getItem('user_id') || '' },
+    })
+    if (!response.ok) {
+      console.warn(`[SlashSkill] by-conversation returned ${response.status}`)
+      return []
+    }
+    const data = await response.json()
+    if (!Array.isArray(data)) return []
+    return data
+      .filter((s: any) => s && typeof s.id === 'number' && typeof s.name === 'string')
+      .map((s: any) => ({ id: s.id, name: s.name }))
+  } catch (e) {
+    console.warn(`[SlashSkill] fetchConversationEnabledSkills failed: ${(e as Error)?.message || e}`)
+    return []
+  }
+}

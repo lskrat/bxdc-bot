@@ -12,6 +12,8 @@ import { fileService } from '../services/fileService'
 import { apiUrl } from '../services/config'
 import { FILE_INPUT_ACCEPT, FILE_TYPE_ICONS, FILE_TYPE_LABELS } from '../types/fileUpload'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
+import SlashSkillPicker from './SlashSkillPicker.vue'
+import { fetchConversationEnabledSkills, type ConversationEnabledSkill } from '../services/api'
 
 const { sendMessage, isThinking, stop } = useChat()
 const { currentUser } = useUser()
@@ -100,6 +102,93 @@ watch(currentConversationId, (cid) => {
 }, { immediate: true })
 const input = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// open spec: add-slash-skill-invocation
+// Slash / hash picker 状态：会话切换时拉取 enabled_skills，输入框以 / 或 # 开头时显示 picker。
+// 开关默认关闭（VITE_SLASH_SKILL_INVOCATION 未设 → false），不打开就完全没行为，不影响原功能。
+const slashSkillPickerEnabled = computed(() => {
+  const raw = (import.meta.env.VITE_SLASH_SKILL_INVOCATION || '').toString().trim().toLowerCase()
+  return ['true', '1', 'yes', 'on'].includes(raw)
+})
+const slashSkills = ref<ConversationEnabledSkill[]>([])
+const showSlashPicker = ref(false)
+const slashTrigger = ref<'/' | '#'>('/')
+const slashQuery = ref('')
+const slashPickerRef = ref<InstanceType<typeof SlashSkillPicker> | null>(null)
+
+async function refreshSlashSkills(cid: string | null | undefined) {
+  if (!cid) {
+    slashSkills.value = []
+    return
+  }
+  slashSkills.value = await fetchConversationEnabledSkills(cid)
+}
+watch(currentConversationId, (cid) => {
+  refreshSlashSkills(cid)
+}, { immediate: true })
+
+function parseSlashTrigger(value: string): { trigger: '/' | '#'; query: string } | null {
+  if (typeof value !== 'string' || value.length === 0) return null
+  const head = value[0]
+  if (head !== '/' && head !== '#') return null
+  // 必须以 / 字符开头（无前缀空白），后续是 query；允许 query 含空格（用户在继续输入参数）
+  const rest = value.slice(1)
+  // query 取到第一个空格前；如果没空格，query = rest
+  const spaceIdx = rest.indexOf(' ')
+  const query = spaceIdx === -1 ? rest : rest.slice(0, spaceIdx)
+  return { trigger: head as '/' | '#', query }
+}
+
+watch(input, (value) => {
+  if (!slashSkillPickerEnabled.value) {
+    showSlashPicker.value = false
+    return
+  }
+  const parsed = parseSlashTrigger(value)
+  if (!parsed) {
+    showSlashPicker.value = false
+    return
+  }
+  slashTrigger.value = parsed.trigger
+  slashQuery.value = parsed.query
+  showSlashPicker.value = slashSkills.value.length > 0
+})
+
+function onSlashSkillSelected(skill: ConversationEnabledSkill) {
+  input.value = `${slashTrigger.value}${skill.name} `
+  showSlashPicker.value = false
+  slashQuery.value = ''
+}
+
+function closeSlashPicker() {
+  showSlashPicker.value = false
+  slashQuery.value = ''
+}
+
+function onSlashPickerKeydown(e: KeyboardEvent) {
+  if (!showSlashPicker.value) return false
+  if (e.key === 'ArrowDown') {
+    slashPickerRef.value?.moveDown()
+    e.preventDefault()
+    return true
+  }
+  if (e.key === 'ArrowUp') {
+    slashPickerRef.value?.moveUp()
+    e.preventDefault()
+    return true
+  }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    slashPickerRef.value?.pickActive()
+    e.preventDefault()
+    return true
+  }
+  if (e.key === 'Escape') {
+    closeSlashPicker()
+    e.preventDefault()
+    return true
+  }
+  return false
+}
 
 /** 等待解析时的 loading 状态（spinner） */
 const isWaitingForParse = ref(false)
@@ -504,6 +593,13 @@ async function handleSend(value: string) {
   const text = (typeof value === 'string' ? value : value?.text || '').trim()
   if (!text || isThinking.value) return
 
+  // open spec: add-slash-skill-invocation
+  // Picker 显示中按 Enter → 选当前 active skill 而不是发送消息。
+  if (showSlashPicker.value) {
+    slashPickerRef.value?.pickActive()
+    return
+  }
+
   const files = allFiles.value
   const hasParsing = files.some((f) => f.status === 'parsing')
 
@@ -714,6 +810,16 @@ async function handleSend(value: string) {
 
     <!-- 文本输入区 + 按钮组 -->
     <div class="chat-sender-row" data-ref="chat-input-area">
+      <!-- open spec: add-slash-skill-invocation: slash / hash picker（输入框以 / 或 # 开头时显示） -->
+      <SlashSkillPicker
+        ref="slashPickerRef"
+        :visible="showSlashPicker"
+        :trigger="slashTrigger"
+        :query="slashQuery"
+        :skills="slashSkills"
+        @select="onSlashSkillSelected"
+        @close="closeSlashPicker"
+      />
       <TChatSender
         v-model="input"
         class="chat-sender"
