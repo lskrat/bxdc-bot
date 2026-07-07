@@ -846,6 +846,7 @@ export class AgentController {
               ...(slashHit.matched ? { forcedSkillIds: [slashHit.skillId] } : {}),
             },
             userId,
+            enabledSkillIds,
           );
 
           // 记忆开关：关闭时不检索记忆（保持远端 c8d9330 的 new structure 不变）

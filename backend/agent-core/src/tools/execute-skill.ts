@@ -192,9 +192,9 @@ async function autoSearchSkills(
   query: string,
   gatewayUrl: string,
   apiToken: string,
+  enabledSkillIds?: number[],
 ): Promise<SkillMatchItem[]> {
   try {
-    // 并行：业务技能搜索 + 基础工具获取
     const [{ data }, utilitySkills] = await Promise.all([
       axios.post(
         `${gatewayUrl}/api/skills/match`,
@@ -204,11 +204,15 @@ async function autoSearchSkills(
       getUtilitySkills(gatewayUrl, apiToken),
     ]);
 
-    const matches = (data?.matches || []) as SkillMatchItem[];
+    let matches = (data?.matches || []) as SkillMatchItem[];
+
+    if (enabledSkillIds && enabledSkillIds.length > 0) {
+      matches = matches.filter((m) => enabledSkillIds!.includes(m.skillId));
+      console.log(`[autoSearchSkills] Filtered by enabledSkillIds: ${matches.length} skills remaining`);
+    }
 
     if (matches.length === 0 && utilitySkills.length === 0) return [];
 
-    // 合并基础工具去重（utility 加在末尾，让业务技能排在前面）
     const seenIds = new Set(matches.map((m) => m.skillId));
     for (const m of utilitySkills) {
       if (!seenIds.has(m.skillId)) {
@@ -251,6 +255,10 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
      * 隔离完全失效。
      */
     private readonly conversationId?: string,
+    /**
+     * 当前会话勾选的技能 ID 列表，用于过滤向量搜索结果
+     */
+    private readonly enabledSkillIds?: number[],
   ) {
     super({
       name: "execute_skill_with_context",
@@ -283,7 +291,7 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
           // ===== 向量搜索模式：通过 Gateway 自动匹配技能 =====
           // 使用 searchQuery 进行向量检索，如果没有提供则使用 userInput
           const queryForSearch = searchQuery || userInput;
-          const matchResult = await autoSearchSkills(queryForSearch, gatewayUrl, apiToken);
+          const matchResult = await autoSearchSkills(queryForSearch, gatewayUrl, apiToken, this.enabledSkillIds);
           if (matchResult.length === 0) {
             // 无匹配技能：返回话术让主 Agent 告知用户
             return JSON.stringify({

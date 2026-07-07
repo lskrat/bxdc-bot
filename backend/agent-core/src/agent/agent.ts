@@ -137,7 +137,8 @@ export class AgentFactory {
     apiToken: string,
     openAiApiKey: string,
     config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string, conversationId?: string, forcedSkillIds?: number[] },
-    userId?: string
+    userId?: string,
+    enabledSkillIds?: number[]
   ): Promise<{
     agent: ReturnType<typeof createReactAgent>;
     plannerModel: ChatOpenAI;
@@ -182,7 +183,7 @@ export class AgentFactory {
       new ExecuteSkillWithContextTool(gatewayUrl, apiToken, openAiApiKey, {
         modelName: config?.modelName,
         baseUrl: config?.baseUrl,
-      }, userId, config?.conversationId),
+      }, userId, config?.conversationId, enabledSkillIds),
       new JavaSkillGeneratorTool(gatewayUrl, apiToken, config?.conversationId, userId),
       new JavaComputeTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),
@@ -232,7 +233,25 @@ export class AgentFactory {
       });
       tools = [...baseTools, ...gatewayExtendedTools];
     } else {
-      tools = baseTools;
+      // 默认模式：base tools + 会话勾选的自定义技能
+      // 系统技能由 ExecuteSkillWithContextTool 走向量检索匹配，
+      // 但自定义技能（skill_owner_type=1）不在向量索引中，必须直接挂载到主 Agent
+      let conversationSkills: BindableAgentTool[] = [];
+      if (config?.conversationId && userId) {
+        try {
+          conversationSkills = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
+            plannerModel: model,
+            availableTools: baseTools,
+            sessionId: config?.sessionId,
+            conversationId: config?.conversationId,
+            loadFromConversation: true,
+          });
+          console.log(`[LLM] Loaded ${conversationSkills.length} custom skill(s) for conversation ${config?.conversationId}`);
+        } catch (e: any) {
+          console.warn(`[LLM] Failed to load custom skills for conversation:`, e?.message);
+        }
+      }
+      tools = [...baseTools, ...conversationSkills];
     }
 
     // 启动时打印一次主 Agent 工具列表，便于诊断
