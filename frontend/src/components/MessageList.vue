@@ -244,8 +244,29 @@ function collectDownloadInfos(item: any): DownloadInfo[] {
  * 也能保证用户每次写文件操作后都能看到一个稳定的 markdown 格式下载链接，
  * 与 word_write 的展示一致。点击走浏览器原生下载，不会有 fetch+blob 进度条卡死问题。
  */
+/**
+ * 渲染层 think 标签兜底剥离（处理 streaming 累积和历史消息两种情况）：
+ *   1) 移除所有完整闭合的 <think>...</think> 块
+ *   2) 移除末尾未闭合的 <think>... 块（避免 streaming 中途显示半个标签）
+ * 用法：在 markdown 渲染前对 rawContent 跑一遍，确保 UI 永远不会显示 <think> 原文。
+ */
+function stripThinkTagsForRender(content: string): string {
+  if (!content || typeof content !== 'string') return ''
+  let result = content.replace(/<think>[\s\S]*?<\/think>/gi, '')
+  // 末尾未闭合的 partial open tag（streaming 累积/历史消息中常见）
+  result = result.replace(/<think>[\s\S]*$/g, '')
+  return result
+}
+
 function assistantContentWithDownloads(item: any): string {
-  const rawContent = item?.rawContent || ''
+  // 渲染层兜底剥离 think 标签：
+  //   - streaming 阶段 useChat 可能因 token 拼接问题保留 partial <think>...
+  //   - 加载历史消息时 rawContent 已含 think 标签原文
+  // 这里统一处理（含末尾未闭合的 partial tag），保证 markdown 渲染层永远看不到 <think>。
+  let rawContent = item?.rawContent || ''
+  if (item?.role === 'assistant' && typeof rawContent === 'string') {
+    rawContent = stripThinkTagsForRender(rawContent)
+  }
   if (item?.role !== 'assistant') return rawContent
   const infos = collectDownloadInfos(item)
   if (infos.length === 0) return rawContent
