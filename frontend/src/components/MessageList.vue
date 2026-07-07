@@ -23,7 +23,6 @@ const { skills, fetchSkills } = useSkillHub()
 const { getSession } = useThinkingMode()
 const activeLogMessageId = ref<string | null>(null)
 const expandedPollingKeys = ref(new Set<string>())
-const downloadLoading = ref(false)
 /** 按消息 ID 追踪下载中状态，避免一个消息下载时所有消息都转圈 */
 const downloadingMsgIds = ref(new Set<string>())
 const expandedThinkBlockKeys = ref(new Set<string>())
@@ -262,75 +261,9 @@ function assistantContentWithDownloads(item: any): string {
   return rawContent + '\n\n' + links.join('\n\n')
 }
 
-/**
- * 从 message rawContent markdown 文本里抽取所有 fileId（兜底用）。
- * 匹配模式：'(fileId=123)' / 'fileId=123' / 'fileId：123' 等。
- */
-function extractFileIdsFromContent(content?: string): number[] {
-  if (!content) return []
-  const re = /fileId\s*[=:：]\s*(\d+)/gi
-  const ids: number[] = []
-  let m: RegExpExecArray | null
-  while ((m = re.exec(content)) !== null) {
-    const id = Number(m[1])
-    if (Number.isFinite(id) && id > 0 && !ids.includes(id)) ids.push(id)
-  }
-  return ids
-}
 
-/**
- * 触发 chat 内文件下载，效果与文件管理页完全一致。
- *
- * - 有 fileId：直接复用 fileService.downloadFile(fileId)，走和文件管理
- *   **完全相同**的代码路径（相对路径 /api/files/download/{id} + X-User-Id header，
- *   经 vite proxy 同源无 CORS）。
- * - 无 fileId（兜底）：用解析出的 downloadUrl。注意后端 buildDownloadUrl 返回的是
- *   绝对 URL（http://host:18080/...?token=xxx），直接 fetch 会跨端口触发 CORS，
- *   因此先剥离 origin 转成相对路径，让 vite proxy 转发。
- */
-async function handleToolDownload(info: DownloadInfo): Promise<void> {
-  if (downloadLoading.value) return
-  downloadLoading.value = true
-  try {
-    // 优先用 fileId 复用文件管理的下载实现，保证效果完全一致
-    if (typeof info.fileId === 'number') {
-      await fileService.downloadFile(info.fileId)
-      return
-    }
-    // 兜底：把绝对 URL 转相对路径（保留 path + query 的 token），避免跨端口 CORS
-    let requestUrl = info.url
-    try {
-      const parsed = new URL(info.url, window.location.origin)
-      requestUrl = parsed.pathname + parsed.search
-    } catch {
-      /* info.url 已是相对路径，原样使用 */
-    }
-    const res = await fetch(apiUrl(requestUrl), {
-      headers: { 'X-User-Id': localStorage.getItem('user_id') || '' },
-    })
-    if (!res.ok) throw new Error(`下载失败: ${res.status}`)
-    const blob = await res.blob()
-    const blobUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = blobUrl
-    // 优先用 Content-Disposition header 的文件名（与文件管理一致），兜底用解析出的 fileName
-    const disposition = res.headers.get('Content-Disposition')
-    const match = disposition?.match(/filename\*=UTF-8''(.+)/) || disposition?.match(/filename="?([^";]+)"?/)
-    a.download = match?.[1]
-      ? decodeURIComponent(match[1])
-      : info.fileName && info.fileName !== 'download'
-        ? info.fileName
-        : 'download'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(blobUrl)
-  } catch (e: any) {
-    MessagePlugin.error(e?.message || '下载失败')
-  } finally {
-    downloadLoading.value = false
-  }
-}
+
+
 
 /**
  * 改写一个 DOM 子树内的文件下载链接，使其不再开新页签。
@@ -392,12 +325,7 @@ function handleDownloadLinkCapture(e: MouseEvent): void {
   }
 }
 
-function formatSize(bytes?: number): string {
-  if (!bytes || bytes <= 0) return ''
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / 1024 / 1024).toFixed(2) + ' MB'
-}
+
 
 function formatTime(timestamp: number) {
   return new Intl.DateTimeFormat('zh-CN', {

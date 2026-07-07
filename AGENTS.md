@@ -32,98 +32,31 @@ cd frontend && npm run dev                    # Vite 实时编译
 
 ## 2. 本地开发配置
 
-### 数据库配置
-- `backend/skill-gateway/src/main/resources/application.properties` **已 gitignore**（不进 git）
-- 每个开发者自己 cp `.example` 模板 → 填入本机 MySQL 密码：
+### 数据库
+- `backend/skill-gateway/src/main/resources/application.properties` **已 gitignore**
+- 首次启动 cp 模板 + 改 MySQL 密码：
   ```bash
-  # 模板文件名是 application-prod.example.properties
   cp backend/skill-gateway/src/main/resources/application-prod.example.properties \
      backend/skill-gateway/src/main/resources/application.properties
   # 改 password= 为本机 MySQL root 密码
-```
-- MySQL 跑在 Docker 容器 `bxdc-mysql`（已开 8 天，端口 3306）
+  ```
+- MySQL 跑在 Docker 容器 `bxdc-mysql`（端口 3306）
 
 ### 服务端口
-- skill-gateway: 18080（Spring Boot）
-- agent-core: 3000（NestJS）
-- frontend: 5173（Vite dev）
-- MySQL: 3306（Docker）
+- skill-gateway: 18080 / agent-core: 3000 / frontend: 5173 / MySQL: 3306
 
-### 一键启动（3 个服务）
+### 一键启动（3 个服务，3 个 terminal）
 ```bash
-# 不同 terminal
-cd backend/skill-gateway && ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run
+(cd backend/skill-gateway && ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run)  # 必须 cd
 cd backend/agent-core && npm run start:dev
 cd frontend && npm run dev
 ```
 
-### 2.4 Maven 离线仓库 .m2/（gitignore 内 + 内网部署规范）
-- `backend/skill-gateway/.m2/` 目录**不进 git**（`.gitignore` 规则 `backend/skill-gateway/.m2/`)
-- `backend/skill-gateway/settings.xml` **进 git**（项目自带，配置 localRepository 指向 `./.m2/repository`)
-  - **不要**用 `${user.home}/.m2/repository`（用户家目录）—— 那意味着不同开发者共享用户家目录的 .m2，污染环境
-  - 用相对路径 `./.m2/repository` 是因为 mvn 必须从 `backend/skill-gateway/` 启动（与上面启动命令约定一致），`./` 解析为 mvn 进程的工作目录
-- settings.xml 同时配 aliyun maven mirror 作为兜底——`.m2/` 里**缺包**时 mvn 会自动从 aliyun 下载到 `.m2/repository/`
-- **本地开发** `.m2` 会被 mvn 启动时自动补全（缺啥下啥，约 100-200MB）
-- **内网部署**（生产环境无外网）：
-  1. 把 `~/Desktop/m2-offline-bundle.tar.{xz,gz,zst}`（117MB，gitignored）拷到内网
-  2. 解压到 `backend/skill-gateway/.m2/`
-  3. 启动 mvn 时**不要**加 `-o`（offline）—— `-o` 模式下缺包会 BUILD FAILURE，让 aliyun mirror 兜底更安全
-- 启动 mvn 必须用 `apache-maven-3.8.5`（与内网版本对齐）—— 3.9.x 的项目内 .m2 兼容，但内网只有 3.8.5
+### ⚠️ 启动 mvn 前必须 `cd backend/skill-gateway`（强警告）
 
-#### ⚠️ 启动 mvn 前必须 `cd backend/skill-gateway`（强警告）
+`settings.xml` 的 `<localRepository>.m2/repository</localRepository>` 是**相对路径**，解析为 mvn 进程的工作目录（cwd）。cwd 跑偏会在错误位置生成 .m2。AI agent 必须用 `bash -c 'cd ... && mvn ...'` 或 subshell，把 `cd` 一起带上（nohup mvn 时 mvn 进程继承父 shell 的 cwd，相对路径仍按 mvn 进程的 cwd 解析）。
 
-`settings.xml` 的 `<localRepository>.m2/repository</localRepository>` 是**相对路径**，解析为 mvn 进程的工作目录（cwd）。**cwd 一旦跑偏，就会在其他位置创建出错的 .m2 目录**：
-
-| 启动时的 cwd | localRepository 实际解析到 | 结果 |
-|---|---|---|
-| `<project_root>/backend/skill-gateway/` ✓ 正确 | `<project_root>/backend/skill-gateway/.m2/repository` | 正常 |
-| `<project_root>/` ❌ | `<project_root>/.m2/repository` | **错**（在项目根多出一个 .m2）|
-| `${HOME}/` ❌ | `${HOME}/.m2/repository` | **错**（污染用户家目录）|
-| 任何其他 cwd ❌ | `<cwd>/.m2/repository` | **错**（mvn 自动创建新 .m2 位置）|
-
-**因此启动 mvn 之前必须先 `cd backend/skill-gateway`**。**不要**用以下方式启动：
-- ❌ `cd bxdc-bot && mvn -s backend/skill-gateway/settings.xml -f backend/skill-gateway/pom.xml ...`
-- ❌ `mvn -s /abs/path/to/settings.xml ...` （在错误 cwd 下用绝对路径 settings.xml 但 relative path localRepository 仍然错）
-- ❌ 任何 cwd 不是 `backend/skill-gateway/` 的 mvn 命令
-
-**正确启动**（用 `cd` 进入 skill-gateway 目录）：
-```bash
-cd backend/skill-gateway
-./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run
-# 或者一行：
-(cd backend/skill-gateway && ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run)
-```
-
-**为什么不改 settings.xml 用绝对路径**：
-- 项目用相对路径是**有意为之**（AGENTS.md 2.4 顶部）—— 保证每个开发者有自己的项目内 .m2，不与系统其他 maven 项目共享
-- 改成 `${user.home}` 会跟系统其他项目共享 jar，可能被覆盖
-- 改成本机绝对路径（不可移植）写死对同事不通用
-
-**所以约束"启动 mvn 前必须 cd 到 skill-gateway"是项目内部约定**，跟 settings.xml 的相对路径配合使用。
-
-#### ⚠️ AI agent 启动 mvn 必须用 `bash -c 'cd ... && mvn ...'` 模式
-
-**坑**：`nohup mvn -s ./settings.xml ...` 或 `mvn ...` **mvn 进程继承父 shell 的 cwd**，即使 `-s` 用绝对路径指向 settings.xml，**settings.xml 里的相对路径 `<localRepository>.m2/repository</localRepository>` 仍然按 mvn 进程的 cwd 解析**，所以 cwd 错了仍会在错误位置生成 .m2。
-
-**唯一可靠的启动方式**（用 `bash -c` 或 subshell 把 `cd` 一起带上）：
-```bash
-# 方式 1：bash -c
-nohup bash -c 'cd backend/skill-gateway && ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run' > /tmp/gw.log 2>&1 &
-
-# 方式 2：subshell
-(cd backend/skill-gateway && nohup ./apache-maven-3.8.5/bin/mvn -s ./settings.xml spring-boot:run > /tmp/gw.log 2>&1 &)
-```
-
-**错误方式**（cwd 在项目根或别处）：
-```bash
-# ❌ 错误：mvn 进程 cwd 仍是项目根
-cd /Users/me/myproject
-nohup mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
-
-# ❌ 错误：cwd 是用户家
-cd ~
-mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
-```
+`.m2/` 目录不进 git（本地缺包 mvn 会从 aliyun mirror 补全；内网部署拷 `~/Desktop/m2-offline-bundle.tar.{xz,gz,zst}` 解压到 `backend/skill-gateway/.m2/` 即可，**不要**加 `-o`）。
 
 ---
 
@@ -227,39 +160,3 @@ mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
 - agent-core（NestJS）对外暴露的 HTTP 端点**必须**以 `/agent` 为路径前缀（如 `/agent/run`、`/agent/confirm`），**禁止**新增其他顶层路径前缀
 - 原因：`frontend/vite.config.ts` 已配置 `/agent → http://127.0.0.1:3000` 的代理规则，新增 `/agent/*` 路径无需改 proxy 配置即可生效；若新增其他前缀（如 `/memory`、`/tool/*`），则必须在 vite.config.ts 中逐条新增 proxy 规则，增加代理配置的维护成本
 - **例外**：已有非 `/agent` 前缀的端点（如 `/memory` proxy 规则）可保留，但不再新增此类例外
-
-## 6. Slash / Hash Skill Invocation
-
-> open spec: `openspec/changes/add-slash-skill-invocation/`
-
-让用户在对话窗口通过 `/技能名 参数` 或 `#技能名 参数` 强制锁定某个已勾选技能（不走 LLM 选技能的路径）。
-
-**默认关闭**。三个开关同时打开才生效：
-
-| 位置 | 变量 | 默认 | 作用 |
-|---|---|---|---|
-| `backend/agent-core/.env` | `AGENT_SLASH_SKILL_INVOCATION` | `false` | controller 检测 `/` / `#` 前缀并注入强制调用指令 |
-| `frontend/.env.production` | `VITE_SLASH_SKILL_INVOCATION` | 未设 | MessageInput 显示 slash picker（输入框以 `/` 或 `#` 开头时） |
-
-**检测规则**（regex `^[/#]([^\s]+)\s*(.*)$/s`）：
-- 必须以 `/` 或 `#` 开头（无前缀空白）；`/` 和 `#` 是别名，语义完全相同
-- token（紧跟 trigger 的非空白字符序列）匹配当前会话的 enabled_skill 列表里的 `name`（trim + case-insensitive equals）
-- 剩余部分是自然语言参数，由 LLM 提取成技能 schema 的 JSON 入参
-
-**Fallback 行为**：
-- 触发字符不在 position 0（如 `What is /usr/bin?`）→ 完全不检测，老路径不变
-- 触发字符在 position 0 但 token 不在 enabled 列表 → log warning + 走 search_tools 老路径
-- by-conversation 接口 404 / 400 / 异常 → log + 走 search_tools 老路径（不报错）
-- 关闭开关 → 完全不走 detection，连 log 都不打印
-
-**为什么仍走 LLM**（不绕过 LLM 提取参数）：
-- 用户的自然语言参数（如 `把今天时间戳给我`）由 LLM 理解并转成技能 schema
-- slash 只"锁定技能"不"锁定参数"，保留 LLM 处理自然语言的优势
-- 通过 prompt injection 强制 LLM 调用指定 skill + skillIds，**100% 命中**该技能
-
-**回退**：
-```bash
-AGENT_SLASH_SKILL_INVOCATION=false   # 在 backend/agent-core/.env
-# 重启 agent-core
-# 行为完全回到老路径（即便前端 picker 仍显示，detection 已关闭）
-```

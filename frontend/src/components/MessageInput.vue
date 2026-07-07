@@ -149,15 +149,29 @@ watch(input, (value) => {
     showSlashPicker.value = false
     return
   }
+  // open spec: add-slash-skill-invocation
+  // 如果值中已有空格（用户已选择技能并在输入参数），不再打开 picker。
+  // 否则 onSlashSkillSelected 写入 "/技能名 " 后 watch 再次触发会重新打开 picker，阻塞输入。
+  const rest = value.slice(1)
+  if (rest.includes(' ')) {
+    showSlashPicker.value = false
+    return
+  }
   slashTrigger.value = parsed.trigger
   slashQuery.value = parsed.query
   showSlashPicker.value = slashSkills.value.length > 0
 })
 
 function onSlashSkillSelected(skill: ConversationEnabledSkill) {
-  input.value = `${slashTrigger.value}${skill.name} `
+  // open spec: add-slash-skill-invocation
+  // 直接更新 Vue ref，让 v-model 驱动 TChatSender 内部状态同步
+  const newText = `${slashTrigger.value}${skill.name} `
+  input.value = newText
   showSlashPicker.value = false
   slashQuery.value = ''
+  nextTick(() => {
+    focusChatInputNextTick()
+  })
 }
 
 function closeSlashPicker() {
@@ -165,30 +179,47 @@ function closeSlashPicker() {
   slashQuery.value = ''
 }
 
-function onSlashPickerKeydown(e: KeyboardEvent) {
-  if (!showSlashPicker.value) return false
-  if (e.key === 'ArrowDown') {
-    slashPickerRef.value?.moveDown()
-    e.preventDefault()
-    return true
-  }
-  if (e.key === 'ArrowUp') {
-    slashPickerRef.value?.moveUp()
-    e.preventDefault()
-    return true
-  }
-  if (e.key === 'Enter' && !e.shiftKey) {
-    slashPickerRef.value?.pickActive()
-    e.preventDefault()
-    return true
-  }
-  if (e.key === 'Escape') {
-    closeSlashPicker()
-    e.preventDefault()
-    return true
-  }
-  return false
+function focusChatInputNextTick(newText?: string) {
+  nextTick(() => {
+    // TChatSender (TDesign) 实际 DOM: t-chat__footer__textarea > t-textarea > textarea
+    const candidates = [
+      '.chat-sender textarea',
+      '.t-chat__footer__textarea textarea',
+      '.chat-sender input',
+      'textarea',
+      'input',
+    ]
+    for (const sel of candidates) {
+      const el = document.querySelector(sel) as HTMLTextAreaElement | HTMLInputElement | null
+      if (el) {
+        // 如果给了 newText（来自 picker 选中），用 native setter 写入 + 触发 input 事件让 v-model 同步
+        if (newText !== undefined) {
+          const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+          if (setter) setter.call(el, newText)
+          else el.value = newText
+          // v-model: 通过 Vue 的 input 事件让它同步 ref
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+        el.focus()
+        if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+          const end = el.value.length
+          try {
+            el.setSelectionRange(end, end)
+          } catch {
+            // ignore
+          }
+        }
+        console.log(`[SlashSkill] focused ${sel}${newText ? ` with text '${newText}'` : ''}`)
+        return
+      }
+    }
+    console.warn('[SlashSkill] focusChatInputNextTick: no input/textarea found in chat-sender')
+  })
 }
+
+
 
 /** 等待解析时的 loading 状态（spinner） */
 const isWaitingForParse = ref(false)

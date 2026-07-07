@@ -6,7 +6,7 @@
   关闭：emit close() 或 v-if=false。
 -->
 <template>
-  <div v-if="visible" class="slash-skill-picker" @mousedown.prevent>
+  <div v-if="visible" class="slash-skill-picker">
     <div class="slash-skill-picker-header">
       <span class="slash-skill-picker-trigger">{{ trigger }}</span>
       <span class="slash-skill-picker-query">{{ query || '选择技能...' }}</span>
@@ -21,7 +21,7 @@
         :key="skill.id"
         class="slash-skill-picker-item"
         :class="{ 'is-active': idx === activeIndex }"
-        @click="onPick(skill)"
+        @mousedown.prevent="onPick(skill)"
         @mouseenter="activeIndex = idx"
       >
         <span class="slash-skill-picker-item-icon">⚡</span>

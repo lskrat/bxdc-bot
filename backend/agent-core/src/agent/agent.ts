@@ -136,7 +136,7 @@ export class AgentFactory {
     gatewayUrl: string,
     apiToken: string,
     openAiApiKey: string,
-    config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string, conversationId?: string },
+    config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string, conversationId?: string, forcedSkillIds?: number[] },
     userId?: string
   ): Promise<{
     agent: ReturnType<typeof createReactAgent>;
@@ -200,7 +200,24 @@ export class AgentFactory {
     }
 
     let tools: BindableAgentTool[];
-    if (legacyDirectTools) {
+    if (config?.forcedSkillIds && config.forcedSkillIds.length > 0) {
+      // open spec: add-slash-skill-invocation
+      // 单技能模式：用户在对话框通过 /技能名 显式锁定某个技能 → tools 只包含这一个技能的函数定义。
+      // 不要挂 base tools（compute / server_lookup / manage_tasks / search 类等），
+      // LLM 的唯一选择就是调用这个技能，从用户自然语言参数中抽取 schema 填充。
+      const forcedTools = await loadGatewayExtendedTools(gatewayUrl, apiToken, userId, {
+        plannerModel: model,
+        availableTools: [],
+        sessionId: config?.sessionId,
+        conversationId: config?.conversationId,
+        enabledSkillIds: config.forcedSkillIds,
+        loadFromConversation: false,
+      });
+      tools = forcedTools;
+      console.log(
+        `[LLM] Slash skill mode: forcedSkillIds=[${config.forcedSkillIds.join(", ")}] → ${forcedTools.length} forced tool(s), NO base tools mounted`,
+      );
+    } else if (legacyDirectTools) {
       // 加载用户自定义技能（skill_owner_type=1）
       // 优先按当前会话勾选的技能加载：有 conversationId 时调 /api/skills/by-conversation，
       // 由 gateway 查会话表 enabled_skills 并按用户可见性过滤返回；
