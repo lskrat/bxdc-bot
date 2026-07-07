@@ -12,7 +12,7 @@
 - [x] 2.3 内部 ref：`apiBase`、`modelName`、`apiKey`、`hasStoredKey`、`loading`、`saving`、`message`（`messageSuccess` 用于切换 t-alert 主题）
 - [x] 2.4 `watch(isLlmSettingsVisible, async (v) => ...)`：v=true 时 `if (!currentUser.value) return; loading=true; try { const s = await fetchLlmSettings(currentUser.value.id); apiBase=s.apiBase||''; modelName=s.modelName||''; hasStoredKey=s.hasApiKey; apiKey=''; } catch { message='加载失败'; } finally { loading=false; }`；v=false 时清 message
 - [x] 2.5 `handleSave()`：if (!currentUser.value) return; saving=true; try { const payload={apiBase:apiBase.value.trim(), modelName:modelName.value.trim()}; if (apiKey.value.trim()) payload.apiKey=apiKey.value.trim(); await saveLlmSettings(currentUser.value.id, payload); hasStoredKey=true; apiKey=''; message='已保存'; closeLlmSettings(); } catch (e:any) { message=e?.message||'保存失败'; } finally { saving=false; }
-- [x] 2.6 `clearStoredKey()`：saving=true; await saveLlmSettings(currentUser.value.id, { apiBase: apiBase.value.trim(), modelName: modelName.value.trim(), apiKey: '' }); hasStoredKey=false; message='已清除保存的 API Key'; catch 同上
+- [x] 2.6 ~~`clearStoredKey()`~~：用户决定不在弹窗暴露清除 API Key 操作；只允许覆盖更新。要清除需走 out-of-band admin path
 - [x] 2.7 template：用 `t-dialog`（`:visible="isLlmSettingsVisible"` + `@close="closeLlmSettings"` + `header="大模型连接"` + `width="560px"` + `:confirm-btn="{ content: '保存', loading: saving, theme: 'primary' }"` + `:cancel-btn="{ content: '取消' }"` + `@confirm="handleSave"` + `@cancel="closeLlmSettings"`）
 - [x] 2.8 表单用 `t-form` + 三个 `t-form-item`：`API Base URL` / `模型名称` / `API Key`（type="password"），placeholder 与原 SettingsView 一致
 - [x] 2.9 API Key `t-form-item` 加 `help`：v-if hasStoredKey 显示"当前已保存 API Key（仅显示状态，不回显明文）" + "清除已存密钥" t-link（移到表单下方，避免污染主操作流）

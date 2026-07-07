@@ -1,7 +1,7 @@
 <!--
   open spec: convert-llm-settings-to-modal
   大模型连接设置模态弹窗。从 Layout.vue 顶栏按钮触发，关闭后回到聊天上下文，
-  表单字段与原 SettingsView 等价（API Base URL / 模型名称 / API Key / 保存 / 清除已存密钥）。
+  表单字段与原 SettingsView 等价（API Base URL / 模型名称 / API Key / 保存）。
 -->
 <script setup lang="ts">
 import { ref, watch } from 'vue'
@@ -70,27 +70,6 @@ async function handleSave() {
     saving.value = false
   }
 }
-
-async function clearStoredKey() {
-  if (!currentUser.value) return
-  saving.value = true
-  message.value = ''
-  try {
-    await saveLlmSettings(currentUser.value.id, {
-      apiBase: apiBase.value.trim(),
-      modelName: modelName.value.trim(),
-      apiKey: '',
-    })
-    hasStoredKey.value = false
-    messageSuccess.value = true
-    message.value = '已清除保存的 API Key'
-  } catch (e: unknown) {
-    messageSuccess.value = false
-    message.value = e instanceof Error ? e.message : '操作失败'
-  } finally {
-    saving.value = false
-  }
-}
 </script>
 
 <template>
@@ -132,12 +111,7 @@ async function clearStoredKey() {
             placeholder="留空则不修改已保存的密钥"
             autocomplete="off"
           />
-          <div v-if="hasStoredKey" class="stored-key-row">
-            <span class="hint">当前已保存 API Key（仅显示状态，不回显明文）</span>
-            <t-link theme="danger" :disabled="saving" @click="clearStoredKey">
-              清除已存密钥
-            </t-link>
-          </div>
+          <p v-if="hasStoredKey" class="hint">当前已保存 API Key（仅显示状态，不回显明文）</p>
         </t-form-item>
       </t-form>
     </template>
@@ -158,16 +132,10 @@ async function clearStoredKey() {
 .alert-row {
   margin-bottom: 16px;
 }
-.stored-key-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 8px;
-}
 .hint {
   font-size: 13px;
   color: var(--td-text-color-secondary, #666);
+  margin: 8px 0 0;
 }
 .muted {
   color: var(--td-text-color-secondary, #666);

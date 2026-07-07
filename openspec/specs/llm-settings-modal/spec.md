@@ -34,16 +34,17 @@ The system SHALL expose the LLM connection settings (`apiBase` / `modelName` / `
 - **AND** on error, an error message is shown without closing the modal
 - **AND** the chat conversation view is still unchanged underneath
 
-#### Scenario: User clears a saved API Key from the modal
-- **WHEN** the user clicks "清除已存密钥" while `hasStoredKey` is `true`
-- **THEN** the frontend calls `PUT /api/users/{userId}/llm-settings` with `apiKey: ""` (via `useUser.saveLlmSettings`)
-- **AND** the "current API Key saved" hint disappears after success
-
 #### Scenario: User closes the modal
 - **WHEN** the user clicks the modal's close button (X), cancel button, or presses Escape, or clicks the backdrop
 - **THEN** the modal closes
 - **AND** the user returns to the chat conversation view at the exact scroll position they were at
 - **AND** no fetch or save request is triggered by closing
+
+#### Scenario: API Key cannot be cleared from the modal
+- **WHEN** the user opens the LLM settings modal and the response indicates `hasApiKey: true`
+- **THEN** the modal SHALL NOT expose any "clear stored key" / "delete key" / "reset key" action
+- **AND** the only way to change the API Key is to type a new value and click "保存" (which overwrites the stored key)
+- **AND** the saved API Key remains in the database until overwritten or removed via an out-of-band admin path
 
 ### Requirement: Legacy `/settings` Route Kept as Fallback
 
