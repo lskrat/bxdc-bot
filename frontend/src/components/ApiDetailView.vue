@@ -109,12 +109,17 @@ function cancelEditDescription() {
 
 async function saveDescription() {
   if (!currentUser.value) return
+  const desc = descriptionDraft.value.trim()
+  if (!desc) {
+    MessagePlugin.warning('请填写 API 描述')
+    return
+  }
   savingDescription.value = true
   try {
     const res = await updateApiDescription(
       currentUser.value.id,
       props.conversationId,
-      descriptionDraft.value.trim(),
+      desc,
     )
     // Update local cache
     if (res.conversation && conversations.conversations.value) {
@@ -158,7 +163,10 @@ function statusLabel(status: string): string {
   }
 }
 
-watch(() => props.conversationId, () => {
+watch(() => props.conversationId, async () => {
+  if (currentUser.value) {
+    await conversations.refreshConversations(currentUser.value.id)
+  }
   loadCallLogs()
   loadApiKey()
 }, { immediate: true })
