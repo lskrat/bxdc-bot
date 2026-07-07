@@ -32,6 +32,7 @@ import { AgentFactory } from "../agent/agent";
 import { HumanMessage, SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import { buildStaticSystemPrompt } from "../prompts";
 import { unwrapLangGraphStreamPayload } from "../controller/agent.controller";
+import axios from "axios";
 import {
   emitToolTraceEvent,
   emitThinkStartEvent,
@@ -73,27 +74,27 @@ function extractInterruptEntries(payload: unknown): Array<{ value?: unknown }> {
 }
 
 const executeSkillInputSchema = z.object({
-  skillIds: z
-    .array(z.number())
-    .min(1)
-    .describe("List of skill IDs to load in the sub-agent for execution. " +
-      "You can extract these IDs from the skills array returned by search_tools (each skill has an 'id' field)."),
   userInput: z
     .string()
     .min(1)
-    .describe("The user's input or task to be executed by the sub-agent. " +
-      "IMPORTANT: When the task is about operating on a file (read/edit/parse/convert/aggregate/download a document, Excel, Word, etc.), " +
-      "you MUST include the concrete file id(s) in this text (e.g. \"对 fileId=12 的 Excel 做汇总\"), " +
-      "extracting the file id mainly from prior tool results or the conversation context. " +
-      "Do NOT describe the file only by name or vaguely (e.g. \"处理那个 Excel\") — the sub-agent cannot reliably resolve which file without an id. " +
-      "Only omit the file id if no file id can be extracted from tool results or the conversation context; in that case explicitly state that the file id is unknown."),
+    .describe("The detailed task description for the sub-agent to execute. " +
+      "This includes specific instructions, file IDs, and complete workflow steps. " +
+      "For multi-step tasks, describe the FULL workflow so the sub-agent can plan the execution order internally. " +
+      "IMPORTANT: When the task is about operating on a file, you MUST include the concrete file id(s) in this text " +
+      "(e.g. \"对 fileId=12 的 Excel 做汇总\"), extracting the file id mainly from prior tool results or conversation context."),
+  searchQuery: z
+    .string()
+    .optional()
+    .describe("The search query for vector similarity skill matching. " +
+      "This should be a concise extraction of the operations needed (e.g., 'Excel统计 Word生成' or '文件读取 数据分析'). " +
+      "If not provided, the userInput will be used for vector search."),
   continueConversation: z
     .boolean()
     .optional()
     .default(false)
     .describe("Set to true to continue the previous conversation with the same sub-agent. " +
-      "When true, the sub-agent will reuse the previous conversation history. " +
-      "When false (default), a new conversation will start."),
+      "Use this when you need multiple rounds with the SAME skill set. " +
+      "When false (default), a new sub-agent is created with freshly matched skills."),
 });
 
 interface CachedSubAgent {
@@ -122,6 +123,112 @@ function cleanupExpiredAgents(): void {
 setInterval(cleanupExpiredAgents, 60 * 1000);
 
 /**
+ * Gateway 技能匹配返回的单项结构。
+ */
+interface SkillMatchItem {
+  skillId: number;
+  name: string;
+  description: string;
+  score: number;
+}
+
+/**
+ * 调用 Gateway 向量检索 API 自动匹配技能。
+ * @param query 用户任务文本，作为检索查询
+ * @param gatewayUrl Gateway 基础 URL
+ * @param apiToken X-API-Key 令牌
+ * @returns 匹配的技能列表；失败时返回空数组
+ */
+/**
+ * 基础工具缓存——在服务生命周期内只查一次 Gateway
+ */
+let cachedUtilitySkills: SkillMatchItem[] | null = null;
+let utilityFetchPromise: Promise<SkillMatchItem[]> | null = null;
+
+/**
+ * 获取基础工具技能（file_list, file_read）
+ *
+ * 这些是子 Agent 的基础能力，不管任务是什么都得有——就像 `ls`、`cat` 和 `write`。
+ * 在服务启动后首次调用时从 Gateway 拉取，之后全局缓存。
+ */
+async function getUtilitySkills(gatewayUrl: string, apiToken: string): Promise<SkillMatchItem[]> {
+  if (cachedUtilitySkills) return cachedUtilitySkills;
+  if (utilityFetchPromise) return utilityFetchPromise;
+
+  utilityFetchPromise = (async () => {
+    try {
+      const { data } = await axios.post(
+        `${gatewayUrl}/api/skills/match`,
+        { query: 'file_list file_read file_write', limit: 6 },
+        { headers: { 'X-API-Key': apiToken, 'Content-Type': 'application/json' } },
+      );
+      const matches = (data?.matches || []) as SkillMatchItem[];
+      const utils = matches.filter((m) => {
+        const name = (m.name || '').toLowerCase();
+        return name === 'file_list' || name === 'file_read' || name === 'file_write';
+      });
+      console.log(`[autoSearchSkills] Utility skills cached: ${utils.map((m) => m.name).join(', ')}`);
+      cachedUtilitySkills = utils;
+      return utils;
+    } catch (e: any) {
+      console.error('[autoSearchSkills] Failed to fetch utility skills:', e?.message);
+      return [];
+    } finally {
+      utilityFetchPromise = null;
+    }
+  })();
+
+  return utilityFetchPromise;
+}
+
+/**
+ * 自动技能匹配 + 基础工具注入
+ *
+ * 每个子 Agent 都自动获得 file_list + file_read + file_write 作为基础能力（相当于 ls + cat + write），
+ * 不依赖向量搜索匹配——即使搜索没返回这些技能，子 Agent 也能读写文件。
+ * 领域技能（Excel/Word/SSH 等）由向量搜索匹配。
+ */
+async function autoSearchSkills(
+  query: string,
+  gatewayUrl: string,
+  apiToken: string,
+): Promise<SkillMatchItem[]> {
+  try {
+    // 并行：业务技能搜索 + 基础工具获取
+    const [{ data }, utilitySkills] = await Promise.all([
+      axios.post(
+        `${gatewayUrl}/api/skills/match`,
+        { query, limit: 5 },
+        { headers: { 'X-API-Key': apiToken, 'Content-Type': 'application/json' } },
+      ),
+      getUtilitySkills(gatewayUrl, apiToken),
+    ]);
+
+    const matches = (data?.matches || []) as SkillMatchItem[];
+
+    if (matches.length === 0 && utilitySkills.length === 0) return [];
+
+    // 合并基础工具去重（utility 加在末尾，让业务技能排在前面）
+    const seenIds = new Set(matches.map((m) => m.skillId));
+    for (const m of utilitySkills) {
+      if (!seenIds.has(m.skillId)) {
+        matches.push({ skillId: m.skillId, name: m.name, description: m.description, score: 0 });
+        seenIds.add(m.skillId);
+      }
+    }
+
+    if (utilitySkills.length > 0) {
+      console.log(`[autoSearchSkills] Total skills: ${matches.length} (${matches.length - utilitySkills.length} matched + ${utilitySkills.length} utility)`);
+    }
+
+    return matches;
+  } catch (error: any) {
+    console.error('[autoSearchSkills] Gateway match failed:', error?.message);
+    return [];
+  }
+}
+
+/**
  * 技能执行工具（内置名：`execute_skill_with_context`）
  *
  * 根据指定的技能 ID 列表创建子 Agent，并执行用户任务。
@@ -148,32 +255,67 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
     super({
       name: "execute_skill_with_context",
       description:
-        "Run task in sub-agent via skillIds. First search_tools/search_filesystem_skills to find ids; " +
-        "continueConversation=true for follow-ups. " +
-        "Hint: confirmation skills/SSH approved via in-app UI buttons only—don't ask 'yes/confirmed'.",
+        "Auto-match skills via vector search, create sub-agent, and execute. " +
+        "PLANNING: 1) GROUP BY SKILL DOMAIN — split complex tasks into domain-specific calls. " +
+        "Each call should target at most 2 types of operations (e.g., 'Excel统计 数据筛选', 'Word生成'). " +
+        "When task involves ≥3 operation types (e.g., Excel+Word+SSH), call separately per domain. " +
+        "2) SAME DOMAIN MULTI-STEP: sub-agent handles multi-step operations within the same skill domain internally. " +
+        "3) FILE PREREQUISITE: sub-agent reads files before operating. " +
+        "4) RETRY on mismatch: rephrase userInput and call again. " +
+        "The system will auto-search for matching skills via vector similarity based on userInput/searchQuery — " +
+        "this is the only supported approach. " +
+        "Use continueConversation=true to continue a previous sub-agent conversation for multi-step operations. " +
+        "IMPORTANT: When the task involves operating on a file (read/edit/parse/convert/aggregate/download " +
+        "a document, Excel, Word, etc.), you MUST include the concrete file id(s) in the userInput " +
+        "(e.g. \"对 fileId=12 的 Excel 做汇总\"), extracting the file id mainly from prior tool results " +
+        "or the conversation context. Do NOT describe the file only by name — the sub-agent cannot reliably " +
+        "resolve which file without an id. Only omit the file id if no file id can be extracted from tool " +
+        "results or the conversation context; in that case explicitly state that the file id is unknown.",
       schema: executeSkillInputSchema,
       func: async (args) => {
         // thinkId / thinkStarted 声明在 try 外部，供 catch 块引用
         let thinkId = '';
         let thinkStarted = false;
+        let resolvedSkillIds: number[] = []; // 在 try 外部声明，供 catch 块使用
         try {
-          const { skillIds, userInput, continueConversation } = args;
-          const cacheKey = getCacheKey(skillIds, userId);
+          const { userInput, searchQuery, continueConversation } = args;
+
+          // ===== 向量搜索模式：通过 Gateway 自动匹配技能 =====
+          // 使用 searchQuery 进行向量检索，如果没有提供则使用 userInput
+          const queryForSearch = searchQuery || userInput;
+          const matchResult = await autoSearchSkills(queryForSearch, gatewayUrl, apiToken);
+          if (matchResult.length === 0) {
+            // 无匹配技能：返回话术让主 Agent 告知用户
+            return JSON.stringify({
+              status: "NO_MATCH",
+              message: `无法找到匹配"${queryForSearch}"的系统技能。请尝试：\n` +
+                "1. 用更具体的关键词重新描述任务（如 Excel数据汇总、MySQL数据库查询、SSH服务器执行 等）\n" +
+                "2. 确认管理员已启用相关系统技能（skill_owner_type=2 且 enabled=true）\n" +
+                "3. 若技能未配置向量检索权重（search_weight=0），将不参与自动匹配",
+            });
+          }
+          resolvedSkillIds = matchResult.map((m) => m.skillId);
+          const matchedSkillNames = matchResult.map((m) => `${m.name || 'skill_' + m.skillId}(${(m.score || 0).toFixed(2)})`);
+          console.log(`[SkillMatch] Matched ${matchedSkillNames.length} skills: ${matchedSkillNames.join(', ')}`);
+
+          const cacheKey = getCacheKey(resolvedSkillIds, userId);
 
           let agent: any;
           let messages: BaseMessage[];
 
+          const messagesRef: { messages: BaseMessage[] } = { messages: [] };
+
           if (continueConversation && subAgentCache.has(cacheKey)) {
             const cached = subAgentCache.get(cacheKey)!;
             agent = cached.agent;
-            messages = [...cached.messages];
-            messages.push(new HumanMessage(userInput));
+            messagesRef.messages = [...cached.messages];
+            messagesRef.messages.push(new HumanMessage(userInput));
           } else {
             const { agent: newAgent } = await AgentFactory.createSubAgent(
               gatewayUrl,
               apiToken,
               openAiApiKey,
-              skillIds,
+              resolvedSkillIds,
               {
                 modelName: llmConfig?.modelName || "gpt-4",
                 baseUrl: llmConfig?.baseUrl,
@@ -188,23 +330,36 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             // 子 Agent 负责调用工具完成操作，描述每步执行结果，但不做总结
             // 所有总结和概括由主 Agent 统一完成
             const subAgentSystemInstruction =
-              "【重要输出规范】\n" +
-              "• 你的工作是调用工具完成操作。每步工具调用完成后，简要描述执行了什么操作以及结果。\n" +
-              "• 不要做总结、推测或概括性陈述——所有总结由主 Agent 负责。\n" +
-              "• 不要在中间步骤说「现在进行下一步」「接下来...」等引导性文字。\n" +
-              "• 工具返回的结果中的详细数据和表格由主 Agent 后续呈现，你无需重复大段数据。\n" +
-              "• 【文件操作】优先使用任务（userInput）中已给出的 fileId；若未给出，则从工具返回内容或对话上下文中提取 fileId 再操作，" +
-              "不要凭空臆造 fileId。若从工具返回内容和对话上下文都无法提取到 fileId，如实说明文件 id 未知，不要随意选择文件。\n\n";
+              "【执行规范】\n" +
+              "• 你是一个执行者，只负责调用当前加载的工具来完成任务，不负责任务规划。\n" +
+              "• 你可以执行多步操作来完成任务——不需要主 Agent 逐步指挥你。\n" +
+              "• 每步工具调用完成后，简要描述操作和结果。\n" +
+              "• 不要做总结推测——所有总结由主 Agent 负责。\n" +
+              "• 工具返回的详细数据由主 Agent 呈现，你无需重复大段数据。\n\n" +
+              "【文件操作——MUST READ FIRST】\n" +
+              "• 对文件做任何操作之前，必须先用 file_list/file_read 读取文件，了解其结构和内容。\n" +
+              "• 优先使用 userInput 中已给出的 fileId。若未给出，用 file_list 列出可用文件查找。\n" +
+              "• 多步操作中的文件 ID 传递：上一步返回的 fileId（如临时文件）就是下一步的输入。\n" +
+              "• 工具返回中的 fileId/downloadUrl/fileRef 字段包含最新文件标识，从中提取。\n" +
+              "• 临时文件命名模式：'原文件名_temp_v1.xlsx'、'原文件名_temp_v2.xlsx'，注意用最新版本。\n\n" +
+              "【工具限制——MUST COMPLY】\n" +
+              "• ❌ 你绝对没有 execute_skill_with_context 工具，也没有任何技能搜索/发现能力。\n" +
+              "• ❌ 你不能调用 execute_skill_with_context，这是主 Agent 的专属工具。\n" +
+              "• ❌ 你不能尝试创建子 Agent 或调用任何代理工具。\n" +
+              "• ✅ 你只能使用当前已加载的工具列表来完成任务。\n" +
+              "• 如果当前加载的工具无法完成操作，返回 'TOOL_NOT_FOUND: 需要[具体能力描述]' 给主 Agent。\n" +
+              "• 不要尝试调用任何你工具列表中没有的工具——这会导致执行失败。\n\n";
             const baseSystemPrompt = buildStaticSystemPrompt();
-            messages = [
+            messagesRef.messages = [
               new SystemMessage(subAgentSystemInstruction + baseSystemPrompt),
               new HumanMessage(userInput),
             ];
+            messages = messagesRef.messages;
             subAgentCache.set(cacheKey, {
               agent,
-              messages,
+              messages: messagesRef.messages,
               createdAt: Date.now(),
-              skillIds,
+              skillIds: resolvedSkillIds,
             });
           }
 
@@ -230,19 +385,22 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
           );
           const iterator = stream[Symbol.asyncIterator]();
 
-          // Think 块：生成唯一 ID，用于关联前后端的 think 生命周期
+          // Think 块：以 parentToolId 为 key 存储 thinkId
+          // parentToolId 在单次工具调用内不变（含 LangGraph 确认恢复），故 thinkId 稳定；
+          // 不同并行调用有不同 parentToolId，各自独立 think 块，不会互相覆盖。
           const parentToolIdKey = parentToolId || 'execute_skill_with_context';
           const existingThinkId = getActiveThinkId(parentToolIdKey);
           if (existingThinkId) {
             thinkId = existingThinkId;
-            console.log(`[ThinkBlock] Reusing existing thinkId=${thinkId} for parentToolId=${parentToolIdKey}`);
+            thinkStarted = true; // 恢复场景，不重复发射 think_start
+            console.log(`[ThinkBlock] Reusing thinkId=${thinkId} for parentToolId=${parentToolIdKey} (resume)`);
           } else {
             thinkId = `think_${parentToolId || 'exec'}_${Date.now()}`;
+            thinkStarted = false;
           }
-          thinkStarted = !!existingThinkId;
           let subAgentTextAccum = '';
 
-          // 仅在没有现有思考块时发射 think_start 事件
+          // 仅在首次（非恢复）发射 think_start 事件
           if (!thinkStarted) {
             console.log(`[ThinkBlock] Emitting think_start: thinkId=${thinkId}, parentToolId=${parentToolIdKey}`);
             emitThinkStartEvent({
@@ -346,6 +504,8 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
             for (const msg of streamMessages) {
               const type = msg._getType?.() ?? (msg as any).type ?? "";
               console.log(`[ThinkBlock] Sub-agent msg type=${type}, toolCalls=${(msg as any).tool_calls?.length || 0}, contentLen=${typeof msg.content === 'string' ? msg.content.length : 'non-string'}`);
+
+              messagesRef.messages.push(msg);
 
               if (type === "ai" || type === "AIMessageChunk") {
                 const calls = (msg as any).tool_calls ?? [];
@@ -464,7 +624,7 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
               agent,
               messages: finalMessages as BaseMessage[],
               createdAt: Date.now(),
-              skillIds,
+              skillIds: resolvedSkillIds,
             });
           }
           const lastMessage = finalMessages[finalMessages.length - 1];
@@ -503,13 +663,38 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
 
           // 只返回精简结果给主 Agent——详细工具执行过程已通过 tool_status 事件流式推送到前台
           return JSON.stringify({
-            status: "SUCCESS",
-            message: "Sub-agent execution completed successfully",
-            executedSkillIds: skillIds,
-            result: output || "No output generated",
-            conversationCached: subAgentCache.has(cacheKey),
-          });
+          status: "SUCCESS",
+          message: `Sub-agent completed with ${resolvedSkillIds.length} skills: ${matchedSkillNames.join(', ')}`,
+          executedSkillIds: resolvedSkillIds,
+          matchedSkills: matchedSkillNames.map((name, i) => ({
+            id: resolvedSkillIds[i],
+            name,
+          })),
+          result: output || "No output generated",
+          conversationCached: subAgentCache.has(cacheKey),
+        });
         } catch (error) {
+          // 用户取消确认（confirmed: false）—— 不是错误，直接返回取消状态
+          // 不要让子 Agent 看到这个"错误"然后重试
+          if (error && typeof error === 'object' && (error as any).confirmed === false) {
+            const pid = getActiveParentToolId('execute_skill_with_context');
+            console.log(`[ThinkBlock] User cancelled confirmation, thinkStarted=${thinkStarted}`);
+            if (thinkStarted) {
+              emitThinkEndEvent({
+                type: 'think_end',
+                thinkId,
+                parentToolId: pid || 'execute_skill_with_context',
+                status: 'failed',
+              });
+              clearActiveThinkId(pid || 'execute_skill_with_context');
+            }
+            return JSON.stringify({
+              status: "CANCELLED",
+              message: "用户取消了操作",
+              result: "操作已取消",
+            });
+          }
+
           // 检测 LangGraph 中断信号，重新抛出以便主 Agent 处理确认请求
           // 注意：这里不发射 think_end，保持思考块活跃，确认后继续使用同一个思考块
           if (isGraphInterrupt(error) || (error && typeof error === 'object' && '__interrupt__' in error)) {
@@ -518,6 +703,11 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
 
           const errMsg = `Error executing skill: ${error instanceof Error ? error.message : String(error)}`;
           console.log(`[ThinkBlock] Sub-agent error: ${errMsg}, thinkStarted=${thinkStarted}`);
+          
+          // 检测子 Agent 调用了不存在的工具（如 execute_skill_with_context）
+          // 这种情况需要告知主 Agent 重新进行向量检索
+          const toolNotFound = errMsg.includes('Tool') && (errMsg.includes('not found') || errMsg.includes('not exist'));
+          
           try {
             const parentToolId = getActiveParentToolId('execute_skill_with_context');
             // 发射 think_end 通知前端 think 块失败
@@ -526,7 +716,7 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
                 type: 'think_end',
                 thinkId,
                 parentToolId: parentToolId || 'execute_skill_with_context',
-                status: 'failed',
+                status: toolNotFound ? 'retry' : 'failed',
               });
               clearActiveThinkId(parentToolId || 'execute_skill_with_context');
             }
@@ -543,10 +733,22 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
           } catch {
             // trace context may not be available at this point
           }
+          
+          if (toolNotFound) {
+            // 子 Agent 调用了不存在的工具，返回特殊状态让主 Agent 重新进行向量检索
+            return JSON.stringify({
+              status: "TOOL_NOT_FOUND",
+              message: `子 Agent 尝试调用不存在的工具: ${errMsg}。请尝试更换关键词重新检索技能，或确保所需技能已启用。`,
+              executedSkillIds: resolvedSkillIds || [],
+              result: "",
+              suggestRetry: true,
+            });
+          }
+          
           return JSON.stringify({
             status: "ERROR",
             message: errMsg,
-            executedSkillIds: args.skillIds,
+            executedSkillIds: resolvedSkillIds || [],
             result: "",
           });
         }

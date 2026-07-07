@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS skills (
     description CLOB,
     type VARCHAR(255) NOT NULL,
     skill_owner_type TINYINT DEFAULT 1,
+    search_weight DOUBLE DEFAULT 1.0,
     configuration CLOB,
     execution_mode VARCHAR(255) DEFAULT 'CONFIG',
     enabled BOOLEAN DEFAULT TRUE,

@@ -161,12 +161,6 @@ public class MdToolService {
                 return mdMerge(userFile, params, userId);
             }
         });
-        fileToolService.registerHandler("md_init_temp", new FileToolService.ToolHandler() {
-            @Override
-            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
-                return mdInitTemp(userFile, params, userId);
-            }
-        });
         fileToolService.registerHandler("md_read", new FileToolService.ToolHandler() {
             @Override
             public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
@@ -179,7 +173,7 @@ public class MdToolService {
                 return mdWrite(userFile, params, userId);
             }
         });
-        log.info("MdToolService registered 12 handlers: md_init_temp/read/write/images/headings/table/list_items/tasks/emphasis/toc/filter_section/merge");
+        log.info("MdToolService registered 11 handlers: md_read/write/images/headings/table/list_items/tasks/emphasis/toc/filter_section/merge");
     }
 
     // ================================================================
@@ -224,12 +218,12 @@ public class MdToolService {
      * 把 content 写到新文件 + 写 user_files 行，返回含 {originalFileId, newFileId, newFileName, downloadUrl, ...} 的响应。
      *
      * <p>
-     * 此方法已废弃：建议调用方先 md_init_temp 创建临时文件，再通过修改类操作（md_filter_section / md_merge）
+     * 此方法已废弃：建议调用方先 file_init_temp 创建临时文件，再通过修改类操作（md_filter_section / md_merge）
      * 就地覆盖同一个临时文件，最终返回 tempFileId 对应的 downloadUrl。
      * 保留此方法供 md_merge 等需要创建独立新文件的场景使用（当 sourceFileId 为空时先 init temp 更佳）。
      * </p>
      *
-     * @deprecated 推荐先 {@link #mdInitTemp} 后直接在临时文件上修改
+     * @deprecated 推荐先 file_init_temp 后直接在临时文件上修改
      */
     @Deprecated
     private FileToolResponse writeBackNewFile(UserFile userFile, String userId, String content) throws IOException {
@@ -342,73 +336,6 @@ public class MdToolService {
             sb.append(lines[i]);
         }
         return sb.toString();
-    }
-
-    // ================================================================
-    // md_init_temp — 初始化临时文件（创建副本，后续操作在其上进行）
-    // ================================================================
-
-    /**
-     * 根据源文件创建临时文件副本（上传到 FTP + 写 user_files 行），后续操作均在此临时文件上进行。
-     *
-     * @param userFile 源文件实体
-     * @param params   参数：无
-     * @param userId   用户 ID
-     * @return 临时文件信息，包含 fileId、sourceFileId、downloadUrl
-     */
-    public FileToolResponse mdInitTemp(UserFile userFile, Map<String, Object> params, String userId) {
-        ensureMdFile(userFile);
-        try {
-            Long sourceFileId = userFile.getId();
-
-            // 读取源文件内容
-            String content = readAllText(userFile);
-            byte[] fileBytes = content.getBytes(Charset.forName("UTF-8"));
-
-            // 生成临时文件名
-            String tempFileName = getTempFileName(userFile.getOriginalFileName());
-
-            // 上传临时文件到 FTP
-            String ftpPath = ftpFileService.uploadFile(userId, tempFileName, new ByteArrayInputStream(fileBytes));
-            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
-
-            // 在 user_files 表中创建新记录
-            UserFile tempUserFile = new UserFile();
-            tempUserFile.setUserId(userId);
-            tempUserFile.setOriginalFileName(tempFileName);
-            tempUserFile.setFileName(storageFileName);
-            tempUserFile.setFileSize((long) fileBytes.length);
-            tempUserFile.setFileType(userFile.getFileType());
-            tempUserFile.setFtpPath(ftpPath);
-            tempUserFile.setSourceFileId(sourceFileId);
-            tempUserFile.setIsToolGenerated(1);
-            tempUserFile.setConversationId(FileToolConversationContext.getConversationId());
-            tempUserFile.setUploadTime(java.time.LocalDateTime.now());
-            userFileMapper.insert(tempUserFile);
-
-            Long tempFileId = tempUserFile.getId();
-
-            // 生成带签名的下载 URL（浏览器可直接点击，无需 X-User-Id header）
-            String downloadUrl = ftpConfig.buildDownloadUrl(tempFileId, userId);
-            tempUserFile.setDownloadUrl(downloadUrl);
-            userFileMapper.updateById(tempUserFile);
-
-            log.info("md_init_temp created temp file: id={}, sourceFileId={}, tempFileName={}, downloadUrl={}",
-                    tempFileId, sourceFileId, tempFileName, downloadUrl);
-
-            Map<String, Object> result = new LinkedHashMap<String, Object>();
-            result.put("message", "临时文件初始化成功");
-            result.put("fileId", tempFileId);
-            result.put("sourceFileId", sourceFileId);
-            result.put("fileName", tempFileName);
-            result.put("filePath", ftpPath);
-            result.put("downloadUrl", downloadUrl);
-
-            return FileToolResponse.ok(result, tempFileName);
-        } catch (Exception e) {
-            log.error("md_init_temp failed for {}", userFile.getOriginalFileName(), e);
-            return FileToolResponse.error("md_init_temp failed: " + e.getMessage(), userFile.getOriginalFileName());
-        }
     }
 
     /**
@@ -623,7 +550,7 @@ public class MdToolService {
             userFile.setFileSize((long) bytes.length);
             userFile.setFtpPath(ftpPath);
             userFile.setDownloadUrl(downloadUrl);
-            // file-isolation-v2: 修复旧临时文件（md_init_temp 历史遗漏的 is_tool_generated/conversationId）
+            // file-isolation-v2: 修复旧临时文件（file_init_temp 历史遗漏的 is_tool_generated/conversationId）
             if (userFile.getIsToolGenerated() == null || userFile.getIsToolGenerated() != 1) {
                 userFile.setIsToolGenerated(1);
             }
@@ -646,7 +573,7 @@ public class MdToolService {
     }
 
     // ================================================================
-    // 9 个 md_* handler（+ md_init_temp 首个调用）
+    // 9 个 md_* handler（+ file_init_temp 首个调用）
     // ================================================================
 
     // ----- md_images -----

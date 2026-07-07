@@ -84,12 +84,6 @@ public class TxtToolService {
                 return txtRead(userFile, params, userId);
             }
         });
-        fileToolService.registerHandler("txt_init_temp", new FileToolService.ToolHandler() {
-            @Override
-            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
-                return txtInitTemp(userFile, params, userId);
-            }
-        });
         fileToolService.registerHandler("txt_write", new FileToolService.ToolHandler() {
             @Override
             public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
@@ -194,61 +188,6 @@ public class TxtToolService {
     // ================================================================
     // 5.4.2 txt_write — 写 TXT/MD 文件
     // ================================================================
-    // txt_init_temp — 初始化临时文件（创建副本，后续操作在其上进行）
-
-    public FileToolResponse txtInitTemp(UserFile userFile, Map<String, Object> params, String userId) {
-        try {
-            Long sourceFileId = userFile.getId();
-
-            // 读取源文件内容
-            byte[] fileBytes = ftpFileService.downloadFile(userId, userFile.getFileName()).toByteArray();
-
-            // 生成临时文件名
-            String tempFileName = generateTempOriginalName(userFile.getOriginalFileName());
-
-            // 上传临时文件到 FTP
-            String ftpPath = ftpFileService.uploadFileWithFileName(userId, tempFileName, new java.io.ByteArrayInputStream(fileBytes));
-            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
-
-            // 在 user_files 表中创建新记录
-            String conversationId = FileToolConversationContext.getConversationId();
-            UserFile tempUserFile = new UserFile();
-            tempUserFile.setUserId(userId);
-            tempUserFile.setOriginalFileName(tempFileName);
-            tempUserFile.setFileName(storageFileName);
-            tempUserFile.setFileSize((long) fileBytes.length);
-            tempUserFile.setFileType(userFile.getFileType());
-            tempUserFile.setFtpPath(ftpPath);
-            tempUserFile.setSourceFileId(sourceFileId);
-            tempUserFile.setIsToolGenerated(1);
-            tempUserFile.setConversationId(conversationId);
-            tempUserFile.setUploadTime(java.time.LocalDateTime.now());
-            userFileMapper.insert(tempUserFile);
-
-            Long tempFileId = tempUserFile.getId();
-
-            // 生成带签名的下载 URL
-            String downloadUrl = ftpConfig.buildDownloadUrl(tempFileId, userId);
-            tempUserFile.setDownloadUrl(downloadUrl);
-            userFileMapper.updateById(tempUserFile);
-
-            log.info("txt_init_temp created temp file: id={}, sourceFileId={}, tempFileName={}, downloadUrl={}",
-                    tempFileId, sourceFileId, tempFileName, downloadUrl);
-
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("message", "临时文件初始化成功");
-            result.put("fileId", tempFileId);
-            result.put("sourceFileId", sourceFileId);
-            result.put("fileName", tempFileName);
-            result.put("filePath", ftpPath);
-            result.put("downloadUrl", downloadUrl);
-
-            return FileToolResponse.ok(result, tempFileName);
-        } catch (Exception e) {
-            log.error("txt_init_temp failed for {}", userFile.getOriginalFileName(), e);
-            return FileToolResponse.error("txt_init_temp failed: " + e.getMessage(), userFile.getOriginalFileName());
-        }
-    }
 
     /**
      * 无源文件时创建全新 .txt 临时文件（对齐 md_write"不传 fileId 时创建全新文件"语义）。

@@ -1131,6 +1131,7 @@ async function copyContent(text: string) {
                   <div class="think-block-header" @click="toggleThinkBlockExpansion(seg.thinkId, item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status || 'completed')">
                     <span class="think-block-arrow">{{ isThinkBlockExpanded(seg.thinkId, item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status || 'completed') ? '▾' : '▸' }}</span>
                     <span class="think-block-label">思考</span>
+                    <span v-if="item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.summary" class="think-block-summary">{{ item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.summary }}</span>
                     <span v-if="item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status === 'running'" class="think-block-status think-block-status--running">running</span>
                     <span v-else-if="item.thinkBlocks?.find((t: any) => t.id === seg.thinkId)?.status === 'completed'" class="think-block-status">done</span>
                     <span v-else class="think-block-status think-block-status--failed">failed</span>
@@ -1844,12 +1845,25 @@ async function copyContent(text: string) {
 .think-block-label {
   font-weight: 400;
   color: var(--td-text-color-secondary);
+  flex-shrink: 0;
+}
+
+.think-block-summary {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
   flex: 1;
+  min-width: 0;
 }
 
 .think-block-status {
   font-size: 11px;
   color: var(--td-text-color-placeholder);
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .think-block-status--running {

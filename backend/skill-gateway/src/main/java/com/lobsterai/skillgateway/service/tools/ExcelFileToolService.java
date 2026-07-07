@@ -136,106 +136,7 @@ public class ExcelFileToolService {
                 return excelValidate(userFile, params, userId);
             }
         });
-        fileToolService.registerHandler("excel_init_temp", new FileToolService.ToolHandler() {
-            @Override
-            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) throws Exception {
-                return excelInitTemp(userFile, params, userId);
-            }
-        });
-        log.info("ExcelFileToolService registered 12 handlers: excel_read/write/filter/sort/aggregate/pivot/calculate/select_columns/clean/convert_format/validate/init_temp");
-    }
-
-    // ================================================================
-    // excel_init_temp — 初始化临时文件（创建临时文件副本）
-    // ================================================================
-
-    /**
-     * 根据原文件生成临时文件，上传到 FTP 并在 user_files 表中创建新记录。
-     * 
-     * <p>返回新临时文件的 ID，后续文件操作都使用这个临时文件 ID。</p>
-     * <p>后续 Excel 操作都在临时文件上进行覆盖更新，最终可将临时文件内容写回源文件。</p>
-     * 
-     * @param userFile 文件实体
-     * @param params   参数：无
-     * @param userId   用户 ID
-     * @return 临时文件信息，包含临时文件 ID、源文件 ID、下载路径和表头
-     */
-    public FileToolResponse excelInitTemp(UserFile userFile, Map<String, Object> params, String userId) {
-        ensureExcelFile(userFile);
-
-        try {
-            // 保存源文件 ID
-            Long sourceFileId = userFile.getId();
-            
-            // 读取原文件内容
-            byte[] fileBytes = downloadBytes(userFile);
-            int fileSize = fileBytes.length;
-            
-            // 生成临时文件名
-            String tempFileName = getTempFileName(userFile.getOriginalFileName());
-            
-            // 上传临时文件到 FTP（使用新生成的文件名）
-            String ftpPath = ftpFileService.uploadFile(userId, tempFileName, new ByteArrayInputStream(fileBytes));
-            
-            // 提取 FTP 存储的文件名（UUID + 扩展名）
-            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
-            
-            // 在 user_files 表中创建新记录
-            UserFile tempUserFile = new UserFile();
-            tempUserFile.setUserId(userId);
-            tempUserFile.setOriginalFileName(tempFileName);
-            tempUserFile.setFileName(storageFileName);
-            tempUserFile.setFileSize((long) fileSize);
-            tempUserFile.setFileType(userFile.getFileType());
-            tempUserFile.setFtpPath(ftpPath);
-            tempUserFile.setSourceFileId(sourceFileId);
-            tempUserFile.setIsToolGenerated(1);
-            tempUserFile.setConversationId(FileToolConversationContext.getConversationId());
-            tempUserFile.setUploadTime(LocalDateTime.now());
-            userFileMapper.insert(tempUserFile);
-            
-            Long tempFileId = tempUserFile.getId();
-            
-            // 生成完整下载 URL（包含域名和签名 token）
-            String downloadUrl = ftpConfig.buildDownloadUrl(tempFileId, userId);
-            tempUserFile.setDownloadUrl(downloadUrl);
-            userFileMapper.updateById(tempUserFile);
-            
-            log.info("excel_init_temp created temp file: id={}, sourceFileId={}, tempFileName={}, downloadUrl={}", 
-                    tempFileId, sourceFileId, tempFileName, downloadUrl);
-            
-            // 读取文件内容用于返回预览
-            Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
-            Sheet sheet = wb.getSheetAt(0);
-            
-            // 获取表头信息
-            List<String> headers = new ArrayList<String>();
-            Row headerRow = sheet.getRow(0);
-            if (headerRow != null) {
-                int cellCount = headerRow.getPhysicalNumberOfCells();
-                for (int j = 0; j < cellCount; j++) {
-                    Cell cell = headerRow.getCell(j);
-                    headers.add(getCellStringValue(cell));
-                }
-            }
-            
-            wb.close();
-
-            // 构建返回结果
-            Map<String, Object> result = new LinkedHashMap<String, Object>();
-            result.put("message", "临时文件初始化成功");
-            result.put("fileId", tempFileId);
-            result.put("sourceFileId", sourceFileId);
-            result.put("fileName", tempFileName);
-            result.put("filePath", ftpPath);
-            result.put("downloadUrl", downloadUrl);
-            result.put("headers", headers);
-
-            return FileToolResponse.ok(result, tempFileName);
-        } catch (Exception e) {
-            log.error("excel_init_temp failed for {}", userFile.getOriginalFileName(), e);
-            return FileToolResponse.error("excel_init_temp failed: " + e.getMessage(), userFile.getOriginalFileName());
-        }
+        log.info("ExcelFileToolService registered 11 handlers: excel_read/write/filter/sort/aggregate/pivot/calculate/select_columns/clean/convert_format/validate");
     }
 
     // ================================================================
@@ -556,13 +457,13 @@ public class ExcelFileToolService {
         String value = readStringParam(params, "value", null);
         String sheetName = readStringParam(params, "sheetName", null);
         int sheetIndex = readIntParam(params, "sheetIndex", 0);
+        boolean inPlace = readBooleanParam(params, "inPlace", true);
 
         if (column == null || value == null) {
             return FileToolResponse.error("params.column and params.value are required", userFile.getOriginalFileName());
         }
 
         try {
-            // 读取文件：优先读取临时文件，不存在则读取原文件
             byte[] fileBytes = downloadBytes(userFile);
             Workbook wb = createWorkbook(fileBytes, userFile.getOriginalFileName());
             Sheet sheet = getSheet(wb, sheetName, sheetIndex);
@@ -572,7 +473,6 @@ public class ExcelFileToolService {
                 return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
             }
 
-            // 执行筛选
             List<String> headers = new ArrayList<String>();
             List<List<Object>> filteredRows = new ArrayList<List<Object>>();
             int columnIndex = -1;
@@ -608,12 +508,15 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 结果写入新工作表，保留原始 sheet 不变
-            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_筛选");
-            Sheet resultSheet = wb.createSheet(resultSheetName);
-            writeDataToSheet(resultSheet, headers, filteredRows);
+            if (inPlace) {
+                clearSheet(sheet);
+                writeDataToSheet(sheet, headers, filteredRows);
+            } else {
+                String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_筛选");
+                Sheet resultSheet = wb.createSheet(resultSheetName);
+                writeDataToSheet(resultSheet, headers, filteredRows);
+            }
 
-            // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
             Map<String, Object> saveResult = saveAndReturnResult(wb, userFile, userId, tempFileName);
             wb.close();
@@ -650,6 +553,7 @@ public class ExcelFileToolService {
         String order = readStringParam(params, "order", "asc");
         String sheetName = readStringParam(params, "sheetName", null);
         int sheetIndex = readIntParam(params, "sheetIndex", 0);
+        boolean inPlace = readBooleanParam(params, "inPlace", true);
 
         if (column == null) {
             return FileToolResponse.error("params.column is required", userFile.getOriginalFileName());
@@ -665,7 +569,6 @@ public class ExcelFileToolService {
                 return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
             }
 
-            // 读取数据
             List<String> headers = new ArrayList<String>();
             List<List<Object>> rows = new ArrayList<List<Object>>();
             int columnIndex = -1;
@@ -696,7 +599,6 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 执行排序
             if (columnIndex >= 0) {
                 final int colIdx = columnIndex;
                 rows.sort(new Comparator<List<Object>>() {
@@ -710,12 +612,15 @@ public class ExcelFileToolService {
                 });
             }
 
-            // 结果写入新工作表，保留原始 sheet 不变
-            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_排序");
-            Sheet resultSheet = wb.createSheet(resultSheetName);
-            writeDataToSheet(resultSheet, headers, rows);
+            if (inPlace) {
+                clearSheet(sheet);
+                writeDataToSheet(sheet, headers, rows);
+            } else {
+                String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_排序");
+                Sheet resultSheet = wb.createSheet(resultSheetName);
+                writeDataToSheet(resultSheet, headers, rows);
+            }
 
-            // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
             Map<String, Object> saveResult = saveAndReturnResult(wb, userFile, userId, tempFileName);
             wb.close();
@@ -886,6 +791,7 @@ public class ExcelFileToolService {
         String valueColumn = readStringParam(params, "valueColumn", null);
         String sheetName = readStringParam(params, "sheetName", null);
         int sheetIndex = readIntParam(params, "sheetIndex", 0);
+        boolean inPlace = readBooleanParam(params, "inPlace", true);
 
         if (rowDimension == null || colDimension == null || valueColumn == null) {
             return FileToolResponse.error("params.rowDimension, params.colDimension and params.valueColumn are required", 
@@ -902,7 +808,6 @@ public class ExcelFileToolService {
                 return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
             }
 
-            // 执行透视
             Map<String, Map<String, Double>> pivot = new LinkedHashMap<String, Map<String, Double>>();
             Set<String> colValues = new LinkedHashSet<String>();
             
@@ -910,7 +815,6 @@ public class ExcelFileToolService {
 
             int rowCount = sheet.getPhysicalNumberOfRows();
 
-            // 第一行：解析表头，建立 行维度/列维度/值列 索引
             Row headerRow = sheet.getRow(0);
             if (headerRow != null) {
                 int cellCount = headerRow.getPhysicalNumberOfCells();
@@ -922,7 +826,6 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 数据行：每行只累加一次（修复此前在内层遍历每列时重复累加、放大列数倍的 bug）
             if (rowIdx >= 0 && colIdx >= 0 && valIdx >= 0) {
                 for (int i = 1; i < rowCount; i++) {
                     Row row = sheet.getRow(i);
@@ -942,7 +845,6 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 构建结果数据
             List<String> resultHeaders = new ArrayList<String>();
             resultHeaders.add(rowDimension);
             resultHeaders.addAll(colValues);
@@ -957,12 +859,15 @@ public class ExcelFileToolService {
                 resultRows.add(rowData);
             }
 
-            // 结果写入新工作表，保留原始 sheet 不变
-            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_透视");
-            Sheet resultSheet = wb.createSheet(resultSheetName);
-            writeDataToSheet(resultSheet, resultHeaders, resultRows);
+            if (inPlace) {
+                clearSheet(sheet);
+                writeDataToSheet(sheet, resultHeaders, resultRows);
+            } else {
+                String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_透视");
+                Sheet resultSheet = wb.createSheet(resultSheetName);
+                writeDataToSheet(resultSheet, resultHeaders, resultRows);
+            }
 
-            // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
             Map<String, Object> saveResult = saveAndReturnResult(wb, userFile, userId, tempFileName);
             wb.close();
@@ -999,6 +904,7 @@ public class ExcelFileToolService {
         String formula = readStringParam(params, "formula", null);
         String sheetName = readStringParam(params, "sheetName", null);
         int sheetIndex = readIntParam(params, "sheetIndex", 0);
+        boolean inPlace = readBooleanParam(params, "inPlace", true);
 
         if (newColumn == null || formula == null) {
             return FileToolResponse.error("params.newColumn and params.formula are required", userFile.getOriginalFileName());
@@ -1014,7 +920,6 @@ public class ExcelFileToolService {
                 return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
             }
 
-            // 读取数据并计算
             List<String> headers = new ArrayList<String>();
             List<List<Object>> rows = new ArrayList<List<Object>>();
             Map<String, Integer> headerIndices = new LinkedHashMap<String, Integer>();
@@ -1039,7 +944,6 @@ public class ExcelFileToolService {
                 }
                 
                 if (i > 0) {
-                    // 计算新列值
                     double result = evaluateFormula(formula, rowData, headerIndices, headers);
                     rowData.add(result);
                     rows.add(rowData);
@@ -1047,12 +951,15 @@ public class ExcelFileToolService {
             }
             headers.add(newColumn);
 
-            // 结果写入新工作表，保留原始 sheet 不变
-            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_计算");
-            Sheet resultSheet = wb.createSheet(resultSheetName);
-            writeDataToSheet(resultSheet, headers, rows);
+            if (inPlace) {
+                clearSheet(sheet);
+                writeDataToSheet(sheet, headers, rows);
+            } else {
+                String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_计算");
+                Sheet resultSheet = wb.createSheet(resultSheetName);
+                writeDataToSheet(resultSheet, headers, rows);
+            }
 
-            // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
             Map<String, Object> saveResult = saveAndReturnResult(wb, userFile, userId, tempFileName);
             wb.close();
@@ -1086,10 +993,10 @@ public class ExcelFileToolService {
     @SuppressWarnings("unchecked")
     public FileToolResponse excelSelectColumns(UserFile userFile, Map<String, Object> params, String userId) {
         ensureExcelFile(userFile);
-        // 安全解析 columns 参数（可能是 List 或 JSON String）
         List<String> columns = parseStringList(params.get("columns"));
         String sheetName = readStringParam(params, "sheetName", null);
         int sheetIndex = readIntParam(params, "sheetIndex", 0);
+        boolean inPlace = readBooleanParam(params, "inPlace", true);
 
         if (columns == null || columns.isEmpty()) {
             return FileToolResponse.error("params.columns is required", userFile.getOriginalFileName());
@@ -1105,7 +1012,6 @@ public class ExcelFileToolService {
                 return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
             }
 
-            // 执行列选择
             List<String> headers = new ArrayList<String>();
             List<List<Object>> rows = new ArrayList<List<Object>>();
             List<Integer> selectedIndices = new ArrayList<Integer>();
@@ -1139,12 +1045,15 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 结果写入新工作表，保留原始 sheet 不变
-            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_选择列");
-            Sheet resultSheet = wb.createSheet(resultSheetName);
-            writeDataToSheet(resultSheet, headers, rows);
+            if (inPlace) {
+                clearSheet(sheet);
+                writeDataToSheet(sheet, headers, rows);
+            } else {
+                String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_选择列");
+                Sheet resultSheet = wb.createSheet(resultSheetName);
+                writeDataToSheet(resultSheet, headers, rows);
+            }
 
-            // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
             Map<String, Object> saveResult = saveAndReturnResult(wb, userFile, userId, tempFileName);
             wb.close();
@@ -1180,6 +1089,7 @@ public class ExcelFileToolService {
         String cleanType = readStringParam(params, "cleanType", null);
         String sheetName = readStringParam(params, "sheetName", null);
         int sheetIndex = readIntParam(params, "sheetIndex", 0);
+        boolean inPlace = readBooleanParam(params, "inPlace", true);
 
         if (cleanType == null) {
             return FileToolResponse.error("params.cleanType is required", userFile.getOriginalFileName());
@@ -1195,7 +1105,6 @@ public class ExcelFileToolService {
                 return FileToolResponse.error("Sheet not found: " + (sheetName != null ? sheetName : "index " + sheetIndex), userFile.getOriginalFileName());
             }
 
-            // 执行数据清洗
             List<String> headers = new ArrayList<String>();
             List<List<Object>> rows = new ArrayList<List<Object>>();
             Set<String> seenRows = new HashSet<String>();
@@ -1247,12 +1156,15 @@ public class ExcelFileToolService {
                 }
             }
 
-            // 结果写入新工作表，保留原始 sheet 不变
-            String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_清洗");
-            Sheet resultSheet = wb.createSheet(resultSheetName);
-            writeDataToSheet(resultSheet, headers, rows);
+            if (inPlace) {
+                clearSheet(sheet);
+                writeDataToSheet(sheet, headers, rows);
+            } else {
+                String resultSheetName = uniqueSheetName(wb, sheet.getSheetName() + "_清洗");
+                Sheet resultSheet = wb.createSheet(resultSheetName);
+                writeDataToSheet(resultSheet, headers, rows);
+            }
 
-            // 保存文件并生成下载 URL
             String tempFileName = getTempFileName(userFile.getOriginalFileName());
             Map<String, Object> saveResult = saveAndReturnResult(wb, userFile, userId, tempFileName);
             wb.close();
@@ -1508,7 +1420,7 @@ public class ExcelFileToolService {
     /**
      * 生成临时文件名。
      * <p>
-     * 仅在 excel_init_temp 中使用，用于生成临时文件的显示名称。
+     * 仅在 file_init_temp 中使用，用于生成临时文件的显示名称。
      * 后续操作通过 sourceFileId 判断是否是临时文件，不再依赖文件名后缀。
      * </p>
      * 
@@ -1555,25 +1467,51 @@ public class ExcelFileToolService {
         Long sourceFileId = userFile.getSourceFileId();
         String ftpPath;
         String resultFileName;
+        Long resultFileId;
         
         if (sourceFileId != null) {
             // 是临时文件：使用数据库中存储的 UUID 文件名覆盖写入
             String storageFileName = userFile.getFileName();
             ftpPath = saveWorkbookWithFileName(wb, userId, storageFileName);
-            resultFileName = userFile.getOriginalFileName(); // 返回显示名称（如 "回答_temp.xlsx")
+            resultFileName = userFile.getOriginalFileName();
+            resultFileId = userFile.getId();
             log.info("Overwrite temp file: fileId={}, storageFileName={}, originalFileName={}", 
-                    userFile.getId(), storageFileName, resultFileName);
+                    resultFileId, storageFileName, resultFileName);
         } else {
-            // 是源文件：生成临时文件名保存（首次操作）
-            ftpPath = saveWorkbook(wb, userId, fileName);
-            resultFileName = fileName;
+            // 是源文件：生成临时文件保存并创建新记录，返回新文件 ID
+            String tempFileName = getTempFileName(userFile.getOriginalFileName());
+            ftpPath = saveWorkbook(wb, userId, tempFileName);
+            resultFileName = tempFileName;
+            
+            // 提取 FTP 存储的文件名（UUID + 扩展名）
+            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
+            
+            // 在 user_files 表中创建新记录
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            wb.write(baos);
+            
+            UserFile tempUserFile = new UserFile();
+            tempUserFile.setUserId(userId);
+            tempUserFile.setOriginalFileName(tempFileName);
+            tempUserFile.setFileName(storageFileName);
+            tempUserFile.setFileSize((long) baos.size());
+            tempUserFile.setFileType(userFile.getFileType());
+            tempUserFile.setFtpPath(ftpPath);
+            tempUserFile.setSourceFileId(userFile.getId());
+            tempUserFile.setIsToolGenerated(1);
+            tempUserFile.setConversationId(FileToolConversationContext.getConversationId());
+            tempUserFile.setUploadTime(LocalDateTime.now());
+            userFileMapper.insert(tempUserFile);
+            
+            resultFileId = tempUserFile.getId();
+            log.info("Create temp file from source: sourceFileId={}, tempFileId={}, tempFileName={}", 
+                    userFile.getId(), resultFileId, tempFileName);
         }
         
         result.put("fileName", resultFileName);
         result.put("filePath", ftpPath);
         
-        // 返回当前文件的 ID 和下载 URL（带签名 token）
-        Long resultFileId = userFile.getId();
+        // 返回新文件的 ID 和下载 URL（带签名 token）
         String downloadUrl = ftpConfig.buildDownloadUrl(resultFileId, userId);
         
         result.put("fileId", resultFileId);
@@ -2235,5 +2173,25 @@ public class ExcelFileToolService {
                 break;
         }
         return null;
+    }
+
+    private boolean readBooleanParam(Map<String, Object> params, String key, boolean defaultValue) {
+        Object val = params.get(key);
+        if (val == null) {
+            return defaultValue;
+        }
+        if (val instanceof Boolean) {
+            return (Boolean) val;
+        }
+        if (val instanceof String) {
+            return Boolean.parseBoolean((String) val);
+        }
+        return defaultValue;
+    }
+
+    private void clearSheet(Sheet sheet) {
+        for (int i = sheet.getLastRowNum(); i >= 0; i--) {
+            sheet.removeRow(sheet.getRow(i));
+        }
     }
 }

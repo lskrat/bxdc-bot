@@ -56,6 +56,10 @@ public class Skill {
     @TableField("skill_owner_type")
     private Integer skillOwnerType;
 
+    /** 向量检索权重（默认 1.0），管理员配置；>1 排名靠前，<1 排名靠后，0 不参与检索 */
+    @TableField("search_weight")
+    private Double searchWeight;
+
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss", timezone = "Asia/Shanghai")
     @TableField(value = "created_at", fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
@@ -180,6 +184,14 @@ public class Skill {
 
     public void setSkillOwnerType(int skillOwnerType) {
         this.skillOwnerType = skillOwnerType;
+    }
+
+    public Double getSearchWeight() {
+        return searchWeight;
+    }
+
+    public void setSearchWeight(Double searchWeight) {
+        this.searchWeight = searchWeight;
     }
 
     public LocalDateTime getCreatedAt() {

@@ -51,11 +51,13 @@ export type TaskStatusValue =
  * @property label - 任务描述标签
  * @property status - 当前状态
  * @property updatedAt - 最后更新时间（ISO 8601 格式）
+ * @property result - 任务执行结果数据（如 fileId、统计数据等）
  */
 export interface TaskState {
   label: string;
   status: TaskStatusValue;
   updatedAt: string;
+  result?: Record<string, any>;
 }
 
 /**
@@ -134,6 +136,7 @@ export function rebuildTasksStatusFromMessages(
           label: u.label ?? result[u.id]?.label ?? "",
           status: u.status,
           updatedAt: u.updatedAt ?? new Date().toISOString(),
+          result: u.result ?? result[u.id]?.result,
         };
       }
     }

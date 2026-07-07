@@ -43,8 +43,6 @@ import {
 } from "../tools/java-skills";
 import { JavaSkillGeneratorTool } from "../tools/skill-generator";
 import { ManageTasksTool } from "../tools/manage-tasks";
-import { SearchToolsTool } from "../tools/search-tools";
-import { SearchFilesystemSkillsTool } from "../tools/search-filesystem-skills";
 import { ExecuteSkillWithContextTool } from "../tools/execute-skill";
 import { AgentAnnotation, preModelHook } from "./tasks-state";
 import type { SkillManager } from "../skills/skill.manager";
@@ -107,8 +105,7 @@ export class AgentFactory {
    * 创建主 Agent（携带基础工具和用户自定义技能）
    * 
    * 主 Agent 包含以下工具：
-   * - search_tools: 搜索与当前问题相关的技能列表（从 system_skills 表检索）
-   * - execute_skill_with_context: 创建子 Agent 并加载指定技能执行任务
+   * - execute_skill_with_context: 自动向量检索匹配技能 + 创建子 Agent 执行任务
    * - skill_generator: 技能生成工具，用于创建新技能
    * - compute: 数学计算工具
    * - server_lookup: 服务器信息查询工具
@@ -117,15 +114,15 @@ export class AgentFactory {
    * 
    * 主 Agent 的工作流程：
    * 1. 接收用户问题
-   * 2. 使用 search_tools 搜索相关技能（从 system_skills 表检索内置技能）
-   * 3. 根据搜索结果调用 execute_skill_with_context 创建子 Agent
-   * 4. 子 Agent 从 system_skills 表动态加载指定的内置技能并执行任务
-   * 5. 收到子 Agent 结果后继续规划或总结回答
+   * 2. 调用 execute_skill_with_context（不传 skillIds），内部自动向量检索匹配系统技能
+   * 3. 子 Agent 从匹配结果中加载技能并执行任务
+   * 4. 收到子 Agent 结果后继续规划或总结回答
    * 
    * 设计原则：
    * - 主 Agent 负责规划和协调，包含用户自定义技能
    * - 子 Agent 负责执行 system_skills 中的内置技能
    * - 实现两级 Agent 架构，实现技能按需加载
+   * - 技能检索由后端向量检索完成，主 Agent 无需 search_tools
    * 
    * @param gatewayUrl - Java Skill Gateway 的基础 URL
    * @param apiToken - API 认证令牌
@@ -158,9 +155,7 @@ export class AgentFactory {
 
     const effectiveModelName = config?.modelName || "gpt-4";
     const useStreaming = shouldStreamModel(effectiveModelName);
-    if (effectiveModelName && !useStreaming) {
-      console.log(`[LLM] ${effectiveModelName} 强制非流式（内网 GLM 单独适配）`);
-    }
+    console.log(`[LLM] model=${effectiveModelName}, streaming=${useStreaming}${!useStreaming ? ' (非流式)' : ' (流式)'}`);
 
     // 创建 LLM 模型实例
     const model = new ChatOpenAI({
@@ -175,16 +170,15 @@ export class AgentFactory {
     });
 
     // 构建主 Agent 的工具列表
-    // open spec: optimize-agent-prompt-and-skill-mounting
-    // 主 Agent 负责规划和协调。新行为：固定 7 个 baseTools，不再直接挂载 gateway extended tools。
-    // 所有 gateway 技能（用户技能 + 系统技能）通过 search_tools → execute_skill_with_context 路径触发。
-    // filesystem skills 通过 search_filesystem_skills → execute_skill_with_context 路径触发。
-    //
-    // 回退：AGENT_LEGACY_DIRECT_TOOLS=true 走旧行为（gateway extended tools 直接挂主 Agent）。
+    // 主 Agent 负责规划和协调，包含：
+    // 1. 技能执行工具（execute_skill_with_context）- 向量检索 + 创建子 Agent 执行技能
+    // 2. 技能生成工具（skill_generator）- 生成新技能
+    // 3. 基础计算工具（compute）- 数学计算
+    // 4. 服务器查询工具（server_lookup）- 服务器信息查询
+    // 5. 任务管理工具（manage_tasks）- 任务状态管理
+    // 6. 用户自定义技能（从 Gateway 获取）
     const builtinDispatch = getAgentBuiltinSkillDispatch();
     const baseTools: BindableAgentTool[] = [
-      new SearchToolsTool(gatewayUrl, apiToken, userId),
-      new SearchFilesystemSkillsTool(AgentFactory.getSkillManager()),
       new ExecuteSkillWithContextTool(gatewayUrl, apiToken, openAiApiKey, {
         modelName: config?.modelName,
         baseUrl: config?.baseUrl,
@@ -250,7 +244,7 @@ export class AgentFactory {
    * @param gatewayUrl - Java Skill Gateway 的基础 URL
    * @param apiToken - API 认证令牌
    * @param openAiApiKey - OpenAI API Key
-   * @param skillIds - 要加载的技能 ID 列表（来自 search_tools 返回的结果）
+   * @param skillIds - 要加载的技能 ID 列表（来自向量检索结果）
    * @param config - 可选配置项
    * @param userId - 用户标识符
    * 
@@ -262,7 +256,8 @@ export class AgentFactory {
     openAiApiKey: string,
     skillIds: number[],
     config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string, conversationId?: string },
-    userId?: string
+    userId?: string,
+    additionalTools: BindableAgentTool[] = []
   ): Promise<{
     agent: ReturnType<typeof createReactAgent>;
     plannerModel: ChatOpenAI;
@@ -280,9 +275,7 @@ export class AgentFactory {
 
     const effectiveModelName = config?.modelName || "gpt-4";
     const useStreaming = shouldStreamModel(effectiveModelName);
-    if (effectiveModelName && !useStreaming) {
-      console.log(`[LLM] ${effectiveModelName} 强制非流式（内网 GLM 单独适配）`);
-    }
+    console.log(`[LLM] model=${effectiveModelName}, streaming=${useStreaming}${!useStreaming ? ' (非流式)' : ' (流式)'}`);
 
     // 创建 LLM 模型实例
     const model = new ChatOpenAI({
@@ -306,7 +299,7 @@ export class AgentFactory {
       skillOwnerType: 2, // 系统技能
     });
 
-    const tools = gatewayExtendedTools;
+    const tools = [...gatewayExtendedTools, ...additionalTools];
 
     // 创建子 Agent（独立 checkpointer，避免 token 泄露到主 Agent stream）
     const agent = createReactAgent({
@@ -381,9 +374,7 @@ export class AgentFactory {
     // 内网 GLM 模型（智谱）强制非流式（见 shouldStreamModel 注释）。
     const effectiveModelName = config?.modelName || "gpt-4";
     const useStreaming = shouldStreamModel(effectiveModelName);
-    if (effectiveModelName && !useStreaming) {
-      console.log(`[LLM] ${effectiveModelName} 强制非流式（内网 GLM 单独适配）`);
-    }
+    console.log(`[LLM] model=${effectiveModelName}, streaming=${useStreaming}${!useStreaming ? ' (非流式)' : ' (流式)'}`);
 
     // 创建 LLM 模型实例
     const model = new ChatOpenAI({

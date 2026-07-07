@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS skills (
     created_by VARCHAR(128),
     team_id VARCHAR(512) NULL,
     intro_md TEXT,
+    skill_owner_type TINYINT(1) DEFAULT 1 COMMENT '1=用户技能, 2=系统技能, 0=未指定',
+    search_weight DOUBLE DEFAULT 1.0 COMMENT '向量检索权重，默认 1.0；>1 排名靠前，0 不参与检索',
     created_at DATETIME,
     updated_at DATETIME,
     INDEX idx_skills_team_id (team_id)

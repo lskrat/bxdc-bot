@@ -50,7 +50,10 @@ export interface ThinkBlock {
   id: string
   parentToolId: string
   parentToolName?: string
+  /** 子 Agent 执行文本内容（markdown） */
   content: string
+  /** 首行摘要，显示在折叠标题栏"思考"后面 */
+  summary: string
   status: 'running' | 'completed' | 'failed'
   startedAt: number
   completedAt?: number
@@ -275,7 +278,7 @@ export function provideChat() {
       return {
         ...current,
         content: current.content + newPart,
-        contentSegments: segments,
+        contentSegments: [...segments],
       }
     })
   }
@@ -1066,7 +1069,7 @@ export function provideChat() {
                   segments.push({ type: 'think', thinkId: data.thinkId })
                   return {
                     ...last,
-                    contentSegments: segments,
+                    contentSegments: [...segments],
                     thinkBlocks: [
                       ...(last.thinkBlocks ?? []),
                       {
@@ -1074,6 +1077,7 @@ export function provideChat() {
                         parentToolId: data.parentToolId,
                         parentToolName: data.parentToolName,
                         content: '',
+                        summary: data.parentToolName || '',
                         status: 'running' as const,
                         startedAt: Date.now(),
                       },
@@ -1087,10 +1091,26 @@ export function provideChat() {
                 updateLastAssistantMessage((last) => {
                   const thinkBlocks = (last.thinkBlocks ?? []).map((tb) => {
                     if (tb.id === data.thinkId) {
-                      if (data.replace) {
-                        return { ...tb, content: data.content }
+                      const newContent = data.replace ? data.content : tb.content + data.content
+                      let summary = tb.summary
+                      if (!summary && newContent.trim()) {
+                        const firstLine = (newContent.split('\n')[0] || '').replace(/^#+\s*/, '').trim()
+                        const thinkingPrefixes = ['我来', '让我', '尝试', '开始', '现在', '接下来', '将', '准备', '正在']
+                        let processedLine = firstLine
+                        for (const prefix of thinkingPrefixes) {
+                          if (processedLine.startsWith(prefix)) {
+                            processedLine = processedLine.slice(prefix.length).trim()
+                            break
+                          }
+                        }
+                        summary = processedLine.length > 2
+                          ? (processedLine.length > 60 ? processedLine.slice(0, 60) + '…' : processedLine)
+                          : '执行中...'
                       }
-                      return { ...tb, content: tb.content + data.content }
+                      if (data.replace) {
+                        return { ...tb, content: data.content, summary }
+                      }
+                      return { ...tb, content: tb.content + data.content, summary }
                     }
                     return tb
                   })

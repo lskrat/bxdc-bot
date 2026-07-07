@@ -191,6 +191,11 @@ public class SchemaMigrationRunner implements InitializingBean {
         // 复合索引：team_id 字段的查询加速（add-skill-team-visibility 引入的 idx_skills_team_id）
         ensureIndex(conn, table, "idx_skills_team_id", existingIndexes,
                 "ALTER TABLE skills ADD INDEX idx_skills_team_id (team_id)");
+
+        // search_weight：向量检索权重（管理员配置，默认 1.0）
+        ensureColumn(conn, table, "search_weight", existingColumns,
+                "ALTER TABLE skills ADD COLUMN search_weight DOUBLE DEFAULT 1.0 " +
+                "COMMENT '向量检索权重；>1 排名靠前，0 不参与检索'");
     }
 
     /**

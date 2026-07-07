@@ -723,7 +723,7 @@ export class AgentController {
             subject.next({ data: JSON.stringify(event) });
           });
           // 使用主 Agent（仅携带基础工具，不加载扩展技能）
-          // 具体技能执行由主 Agent 通过 search_tools + execute_skill_with_context 创建子 Agent 完成
+          // 具体技能执行由主 Agent 通过 execute_skill_with_context（内部向量检索）创建子 Agent 完成
           const { agent } = await AgentFactory.createMainAgent(
             gatewayUrl,
             apiToken,
@@ -824,21 +824,27 @@ export class AgentController {
           let iterator = (stream as AsyncIterable<any>)[Symbol.asyncIterator]();
           // 记录 messages 模式已流式推送的内容，用于 updates 模式去重
           let messagesModeAccum = '';
+          let totalTokenChunks = 0;
+          let blockedTokenChunks = 0;
 
           outer: while (true) {
             const { value: raw, done } = await iterator.next();
             if (done) {
+              console.log(`[Stream] Done. Total token chunks: ${totalTokenChunks}, blocked by sub-agent: ${blockedTokenChunks}`);
               break;
             }
 
             // Token 级流式：messages 模式 chunk 携带 LLM 逐 token 内容
             const tokenText = extractMessageStreamToken(raw);
             if (tokenText.length > 0) {
+              totalTokenChunks++;
               // 若 execute_skill_with_context 正在运行，跳过主 token 发射
               // （子 Agent token 已通过 agent_text 事件独立推送）
               if (!getActiveParentToolId('execute_skill_with_context')) {
                 messagesModeAccum += tokenText;
                 subject.next({ data: JSON.stringify({ role: 'assistant', content: tokenText }) });
+              } else {
+                blockedTokenChunks++;
               }
               continue;
             }
@@ -897,91 +903,15 @@ export class AgentController {
 
                 if (!confirmedResult.confirmed) {
                   console.log(`[DEBUG-confirmation] ==================== USER CANCELLED ====================`);
-                  console.log(`[DEBUG-confirmation] User cancelled, creating cancelResumeStream`);
-                  const ac = new AbortController();
+                  // 跟确认流程一致：替换 iterator，让主 Agent 流自然产出取消总结
                   const cancelResumeStream = await agent.stream(
                     new Command({ resume: { confirmed: false } }),
-                    { configurable: { thread_id: sessionId }, signal: ac.signal, streamMode: ["updates", "messages"] as any },
+                    { configurable: { thread_id: sessionId }, streamMode: ["updates", "messages"] as any },
                   );
-                  console.log(`[DEBUG-confirmation] cancelResumeStream created, getting iterator`);
-                  let cancelIter = cancelResumeStream[Symbol.asyncIterator]();
-                  const MAX_CANCEL_CHUNKS = 24;
-                  for (let step = 0; step < MAX_CANCEL_CHUNKS; step += 1) {
-                    let raw: any;
-                    try {
-                      const n = await cancelIter.next();
-                      if (n.done) break;
-                      raw = n.value;
-                    } catch (e) {
-                      const name = e && typeof e === 'object' && 'name' in e ? (e as Error).name : '';
-                      if (name === 'AbortError' || ac.signal.aborted) break;
-                      throw e;
-                    }
-                    // 取消流也处理 messages 模式 token
-                    const cancelToken = extractMessageStreamToken(raw);
-                    if (cancelToken.length > 0) {
-                      subject.next({ data: JSON.stringify({ role: 'assistant', content: cancelToken }) });
-                      continue;
-                    }
-                    const payload = unwrapLangGraphStreamPayload(raw);
-                    const forward = stripInterruptForClient(payload);
-                    if (forward != null) {
-                      subject.next({ data: JSON.stringify(forward) });
-                      this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId, allowedDownloadUrls);
-                      if (typeof forward === 'object') {
-                        const forwardObj = forward as Record<string, unknown>;
-                        let nextContent: string | null = null;
-
-                        if (typeof forwardObj.content === 'string') {
-                          nextContent = forwardObj.content;
-                        }
-
-                        if (!nextContent) {
-                          const lastAssistantMessage = getChunkMessages(forward)
-                            .filter((message) => isAssistantMessage(message))
-                            .at(-1);
-                          nextContent = getMessageContent(lastAssistantMessage);
-                        }
-
-                        if (nextContent && nextContent.length > 0) {
-                          const newContent = fullAssistantResponse.length > 0 && nextContent.startsWith(fullAssistantResponse)
-                            ? nextContent.slice(fullAssistantResponse.length)
-                            : nextContent;
-                          if (newContent.length > 0) {
-                            fullAssistantResponse = nextContent;
-                            subject.next({ data: JSON.stringify({ role: 'assistant', content: newContent }) });
-                          }
-                        }
-                      }
-                    }
-                    if (chunkContainsCancelledToolForId([payload, forward].filter(Boolean), v.toolCallId)) {
-                      ac.abort();
-                      break;
-                    }
-                  }
-                  if (!ac.signal.aborted) {
-                    ac.abort();
-                  }
-                  const parentToolId = getActiveParentToolId('execute_skill_with_context');
-                  const activeThinkId = getActiveThinkId(parentToolId || 'execute_skill_with_context');
-                  if (activeThinkId) {
-                    emitThinkEndEvent({
-                      type: 'think_end',
-                      thinkId: activeThinkId,
-                      parentToolId: parentToolId || v.toolCallId,
-                      status: 'completed',
-                    });
-                  }
-                  const cancelMessage = `已取消执行「${skillName}」。`;
-                  if (fullAssistantResponse.length > 0 && !fullAssistantResponse.endsWith(cancelMessage)) {
-                    fullAssistantResponse = fullAssistantResponse + '\n\n' + cancelMessage;
-                    subject.next({ data: JSON.stringify({ role: 'assistant', content: '\n\n' + cancelMessage }) });
-                  } else {
-                    fullAssistantResponse = cancelMessage;
-                    subject.next({ data: JSON.stringify({ role: 'assistant', content: cancelMessage }) });
-                  }
-                  console.log(`[DEBUG-confirmation] User cancelled, breaking outer loop`);
-                  break outer;
+                  console.log(`[DEBUG-confirmation] cancelResumeStream created, replacing iterator`);
+                  iterator = cancelResumeStream[Symbol.asyncIterator]();
+                  console.log(`[DEBUG-confirmation] continue outer loop with cancel stream`);
+                  continue outer;
                 }
 
                 console.log(`[DEBUG-confirmation] User confirmed, creating resumeStream with adjustedParams=${JSON.stringify(confirmedResult.adjustedParams)}`);

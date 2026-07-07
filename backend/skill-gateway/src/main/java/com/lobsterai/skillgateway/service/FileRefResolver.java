@@ -71,9 +71,21 @@ public class FileRefResolver {
         Optional<UserFile> opt = userFileMapper.findByUserIdAndOriginalFileName(userId, ref);
         if (opt.isPresent()) {
             UserFile uf = opt.get();
-            // 二次校验：确保文件属于当前用户
             AamTokenUtil.enforceUserAccess(userId, uf.getUserId());
             return uf;
+        }
+
+        // 如果查不到，尝试匹配临时文件（处理多步操作场景）
+        // 将 "篮球爱好.xlsx" 转为 "篮球爱好_temp.xlsx"
+        int dotIndex = ref.lastIndexOf('.');
+        if (dotIndex > 0) {
+            String tempFileName = ref.substring(0, dotIndex) + "_temp" + ref.substring(dotIndex);
+            Optional<UserFile> tempOpt = userFileMapper.findByUserIdAndOriginalFileName(userId, tempFileName);
+            if (tempOpt.isPresent()) {
+                UserFile uf = tempOpt.get();
+                AamTokenUtil.enforceUserAccess(userId, uf.getUserId());
+                return uf;
+            }
         }
 
         throw new IllegalArgumentException(

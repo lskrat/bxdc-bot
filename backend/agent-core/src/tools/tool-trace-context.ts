@@ -44,7 +44,7 @@ export interface ThinkEndEvent {
   type: "think_end";
   thinkId: string;
   parentToolId: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "retry";
 }
 
 /** Union type for all SSE events emitted through the trace context. */

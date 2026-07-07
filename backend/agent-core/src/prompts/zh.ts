@@ -50,12 +50,11 @@ const skillGeneratorPolicy = `[技能生成策略]
  * 短版（默认）由 manage_tasks 工具 description 引用 taskTrackingHint 一行版。
  */
 const taskTrackingPolicy = `[任务跟踪策略]
-当用户的请求涉及多个不同的子任务时（例如"检查磁盘 AND 重启 nginx AND 查看日志"）：
-1. 在开始工作之前，调用 manage_tasks 将每个子任务注册为"待处理"或"进行中"状态。
-2. 完成子任务后，调用 manage_tasks 将其标记为"已完成"。
-3. 如果子任务失败或不再需要，将其标记为"已取消"。
-4. 不要重复执行已标记为已完成的任务，除非用户明确要求。
-使用简短、稳定的任务 ID（例如"check-disk"、"restart-nginx"），以便系统能够在多轮对话中跟踪进度。
+当用户的请求涉及多个子任务时（如"检查磁盘 AND 重启 nginx"）：
+1. 调用 manage_tasks 注册子任务为"待处理"（用简短稳定的 ID，如"check-disk"、"restart-nginx"）。
+2. 同技能域内尽量一次调用：子 Agent 可以在同一技能域内执行多步操作（如读文件→统计分析），不要为每个子步骤单独调用。
+3. 跨技能域任务按域分组：当子任务涉及不同技能域（如 Excel+Word+SSH），必须按技能域分组分别调用 execute_skill_with_context，每组 searchQuery 最多包含两类操作关键词。
+4. 任务完成后标记为"已完成"，失败标记为"已取消"。不要重复执行已完成的任务。
 
 `;
 
@@ -73,6 +72,17 @@ const taskTrackingHint = `多子任务场景下用 manage_tasks 注册/更新状
 const confirmationUIPolicy = `[确认策略]
 标记为需要确认的扩展技能和高风险 SSH 命令只能通过聊天 UI 中的应用内确认按钮进行审批。不要告诉用户输入"yes"、"confirm"，或发送带有"confirmed": true 的 JSON 作为唯一的继续方式——客户端会在用户点击确认后通过独立通道发送审批。
 
+【取消 = 用户拒绝，严禁重试】
+- 如果工具返回 status=CANCELLED 或结果中包含 "CANCELLED"，表示用户在 UI 上明确点击了"取消"按钮。
+- 用户点取消意味着：用户不允许执行该操作。不是"操作失败"，不是"网络问题"，不是"需要重试"。
+- 你必须接受用户的选择，不得以任何理由重试同一操作。
+- 不得更换子任务描述再次调用——如果用户想执行，他们会重新提出。
+- 唯一的正确回应：告知用户"操作已被取消"，并等待用户后续指令。不要自动发起任何新的执行。
+
+【禁止绕过确认】
+- confirm 参数只能通过前端确认按钮注入，你不得自行填充 confirm=true。
+- 如果你在工具调用中手动设置 confirm=true 来绕过用户确认，这属于越权行为。
+
 `;
 
 /**
@@ -83,17 +93,37 @@ const confirmationHint = `高风险/需确认的扩展技能和 SSH 命令只能
 /**
  * 策略提示词：技能发现策略
  *
- * 强制通过 search_tools 查找技能，禁止凭记忆或历史对话使用技能
+ * 通过 execute_skill_with_context 自动向量检索匹配技能，无需手动搜索
  */
 const skillDiscoveryPolicy = `[技能发现策略]
-当你自身内置工具（search_tools、execute_skill_with_context、skill_generator、compute、server_lookup、manage_tasks）无法直接完成用户任务时，必须严格遵循以下流程：
-1. 先调用 search_tools，用用户的任务描述作为 query 参数去检索当前系统中可用的技能列表。
-2. 从 search_tools 返回的 skills 数组中提取 id 字段，作为 skillIds 传给 execute_skill_with_context。
-3. 禁止凭记忆、历史对话中的技能信息或上下文推测 skillId——系统中的技能随时可能被增删改，历史信息不可靠。
-4. 禁止跳过 search_tools 直接调用 execute_skill_with_context，即使历史对话中曾使用过某个技能。
-5. 如果 search_tools 返回的技能列表中没有能匹配用户需求的技能，应如实告知用户"当前没有对应技能，建议创建新技能"，而不是随意选一个不相关的技能或编造 skillId。
+当你自身内置工具无法直接完成用户任务时，调用 execute_skill_with_context —— 系统自动通过向量检索匹配技能并创建子 Agent 执行。
 
-`;
+【调用准则】
+1. 按技能域分组调用：子 Agent 可以在同一技能域内执行多步操作（如读文件→统计分析→生成图表），但跨技能域的任务必须拆分。
+2. 操作类型限制：每次调用的 searchQuery 最多包含两类操作关键词。当任务涉及 ≥3 种不同操作类型时，必须拆分调用。
+3. NO_MATCH → 换关键词重试（最多 2 次）。2 次后如实告知用户"当前没有对应技能，建议创建新技能"。
+4. TOOL_NOT_FOUND → 子 Agent 加载的技能不对路。修改 userInput 的关键词重试（最多 2 次）。
+5. continueConversation=true 仅用于同一批技能的后续操作，一般情况下用默认的 false。
+6. 禁止凭记忆推测技能——系统技能随时可能被增删改，让向量检索来匹配。
+
+【拆分规则示例】
+❌ 错误：一次调用包含 3 种操作类型
+   - searchQuery: "Excel统计 Word生成 SSH执行" → 向量检索无法精准匹配任何技能
+
+✅ 正确：拆分为多次调用
+   - 第1次：searchQuery: "Excel统计"，userInput: "统计 fileId=12 的 Excel 数据"
+   - 第2次：searchQuery: "Word生成"，userInput: "基于统计结果生成 Word 报告"
+   - 第3次：searchQuery: "SSH执行"，userInput: "通过 SSH 上传报告到服务器"
+
+✅ 正确：同一技能域内多步操作可一次调用
+   - searchQuery: "Excel统计 数据筛选"，userInput: "先筛选 fileId=12 中年龄>30的数据，再计算平均值和汇总"
+
+【参数优化】
+1. userInput：详细的任务描述，包含具体指令、文件 ID、当前步骤的工作流程。用于子 Agent 执行任务。
+2. searchQuery（可选）：用于向量检索的搜索词，应该是从用户输入中提炼的操作关键词（如"Excel统计"、"Word生成"、"文件读取 数据分析"、"SSH执行"）。如果不传，系统会使用 userInput 进行检索。
+   - 示例：用户说"帮我统计这个 Excel 文件的数据，然后生成一份 Word 报告发给老板"
+   - 第1次调用：userInput: "统计 fileId=12 的 Excel 数据，计算各部门人数和平均值"，searchQuery: "Excel统计"
+   - 第2次调用：userInput: "基于统计结果生成 Word 报告，包含统计图表和汇总表格"，searchQuery: "Word生成"`;
 
 /**
  * 策略提示词：扩展技能路由策略

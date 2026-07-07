@@ -65,7 +65,14 @@ function normalizeChunk(chunk: any): any {
  */
 async function normalizeJsonResponse(response: Response): Promise<Response> {
   const contentType = response.headers.get('content-type') || '';
-  // 真正的 SSE 多行流式响应（每行 "data: ..."）不在此处理，由 filterEmptyChoicesFromSSE 处理
+  // SSE 流式响应（text/event-stream）：直接透传，不要读 body。
+  // 读 body（即使是 cloned）会阻塞到 LLM 流完全接收完毕，导致下游 LangChain
+  // 消费时数据已经全部缓冲，失去流式效果。
+  if (contentType.includes('text/event-stream')) {
+    return response;
+  }
+  // 非 SSE content-type 但有可能是 SSE 格式（内网 LLM content-type 不规范）。
+  // clone + 读 body 做格式检测；对 SSE 格式也透传。
   const cloned = response.clone();
   try {
     const text = await cloned.text();
