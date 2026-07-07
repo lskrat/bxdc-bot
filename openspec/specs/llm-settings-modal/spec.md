@@ -1,4 +1,12 @@
-## ADDED Requirements
+## Purpose
+
+Define the LLM connection settings modal feature: when an authenticated user clicks the "大模型设置" button in the top header of the chat layout, a `t-dialog` modal opens over the chat conversation view to view and edit `apiBase` / `modelName` / `apiKey`. The modal is the primary entry point; the legacy `/settings` route and [SettingsView.vue](file:///Users/dccb/botproject/fishtank/frontend/src/views/SettingsView.vue) full-page form are retained as a fallback for users who arrive via direct URL or bookmark, but are not linked from any in-app navigation.
+
+This change also introduces a [useLlmSettings composable](file:///Users/dccb/botproject/fishtank/frontend/src/composables/useLlmSettings.ts) following the singleton-ref pattern of [useServerLedger](file:///Users/dccb/botproject/fishtank/frontend/src/composables/useServerLedger.ts) / [useSkillHub](file:///Users/dccb/botproject/fishtank/frontend/src/composables/useSkillHub.ts), and a [LlmSettingsModal component](file:///Users/dccb/botproject/fishtank/frontend/src/components/LlmSettingsModal.vue) mounted once at the bottom of [Layout.vue](file:///Users/dccb/botproject/fishtank/frontend/src/components/Layout.vue). No backend changes are introduced.
+
+---
+
+## Requirements
 
 ### Requirement: LLM Settings Opened as Modal from Top Header
 
@@ -22,7 +30,7 @@ The system SHALL expose the LLM connection settings (`apiBase` / `modelName` / `
 - **WHEN** the user edits `apiBase` / `modelName` (and optionally `apiKey`) and clicks "保存"
 - **THEN** the frontend calls `PUT /api/users/{userId}/llm-settings` (via `useUser.saveLlmSettings`)
 - **AND** the Save button shows loading state during the request
-- **AND** on success, a success message is shown and the API Key input is cleared
+- **AND** on success, a success message is shown, the API Key input is cleared, and the modal auto-closes
 - **AND** on error, an error message is shown without closing the modal
 - **AND** the chat conversation view is still unchanged underneath
 
@@ -37,24 +45,28 @@ The system SHALL expose the LLM connection settings (`apiBase` / `modelName` / `
 - **AND** the user returns to the chat conversation view at the exact scroll position they were at
 - **AND** no fetch or save request is triggered by closing
 
-### Requirement: Removed Dedicated Settings Route
+### Requirement: Legacy `/settings` Route Kept as Fallback
 
-The system SHALL NOT register a `/settings` Vue Router route, and SHALL NOT instantiate the legacy [SettingsView.vue](file:///Users/dccb/botproject/fishtank/frontend/src/views/SettingsView.vue) page anywhere in the app shell.
+The system SHALL keep the existing `/settings` Vue Router route and the legacy [SettingsView.vue](file:///Users/dccb/botproject/fishtank/frontend/src/views/SettingsView.vue) page registered as a fallback for users who arrive via direct URL or bookmark. The modal path SHALL be the primary entry point, and the legacy page SHALL NOT be linked from any in-app navigation (top header, sidebar, footer, breadcrumb, etc.).
 
-#### Scenario: No `/settings` route is registered
+#### Scenario: `/settings` route still registered
 - **WHEN** the Vue Router configuration in [router/index.ts](file:///Users/dccb/botproject/fishtank/frontend/src/router/index.ts) is loaded at app startup
-- **THEN** there is no entry with `path: '/settings'`
-- **AND** there is no `import SettingsView from '../views/SettingsView.vue'` statement in the router module
+- **THEN** the entry with `path: '/settings'` still exists
+- **AND** `SettingsView.vue` is still imported and mounted when that route is matched
 
-#### Scenario: SettingsView.vue file is removed
+#### Scenario: SettingsView.vue file is retained
 - **WHEN** the frontend codebase is checked
-- **THEN** the file `frontend/src/views/SettingsView.vue` does NOT exist
-- **AND** no other source file imports `SettingsView.vue`
+- **THEN** the file `frontend/src/views/SettingsView.vue` still exists
+- **AND** no source file references it other than the router module
 
-#### Scenario: Visiting `/settings` via direct URL shows 404
-- **WHEN** a user types `/settings` directly in the browser address bar
-- **THEN** the Vue Router renders the default 404 / not-found page (or the chat route at `/`, per Vue Router config)
-- **AND** no `SettingsView` component is ever mounted
+#### Scenario: Direct URL `/settings` renders the legacy page
+- **WHEN** a user types `/settings` directly in the browser address bar (or follows an external bookmark)
+- **THEN** the Vue Router renders `SettingsView` (legacy full-page form)
+- **AND** the page remains reachable as a fallback; the modal path is not enforced
+
+#### Scenario: In-app navigation no longer points at `/settings`
+- **WHEN** the user navigates the app via the top header / sidebar / footer / breadcrumb / any in-app link
+- **THEN** no in-app link routes to `/settings` (the top-header button opens the modal instead)
 
 ### Requirement: Modal Reuse Existing LLM Settings Backend
 
@@ -79,7 +91,7 @@ The LLM settings modal SHALL follow the same composable-singleton pattern used b
 - **WHEN** any component calls `useLlmSettings()`
 - **THEN** it returns an object with at least `{ isLlmSettingsVisible: Ref<boolean>, toggleLlmSettings: () => void }`
 - **AND** `isLlmSettingsVisible` is a module-level singleton ref (shared across all callers)
-- **AND** `toggleLlmSettings()` flips the visibility and, when transitioning from false → true, triggers `fetchLlmSettings`
+- **AND** `toggleLlmSettings()` flips the visibility; the fetch on open is triggered by the modal's own `watch(isLlmSettingsVisible)` (not inside `toggleLlmSettings` itself)
 
 #### Scenario: LlmSettingsModal is mounted in Layout template
 - **WHEN** the app shell renders [Layout.vue](file:///Users/dccb/botproject/fishtank/frontend/src/components/Layout.vue)
