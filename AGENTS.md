@@ -227,3 +227,39 @@ mvn -s /Users/me/myproject/backend/skill-gateway/settings.xml ...
 - agent-core（NestJS）对外暴露的 HTTP 端点**必须**以 `/agent` 为路径前缀（如 `/agent/run`、`/agent/confirm`），**禁止**新增其他顶层路径前缀
 - 原因：`frontend/vite.config.ts` 已配置 `/agent → http://127.0.0.1:3000` 的代理规则，新增 `/agent/*` 路径无需改 proxy 配置即可生效；若新增其他前缀（如 `/memory`、`/tool/*`），则必须在 vite.config.ts 中逐条新增 proxy 规则，增加代理配置的维护成本
 - **例外**：已有非 `/agent` 前缀的端点（如 `/memory` proxy 规则）可保留，但不再新增此类例外
+
+## 6. Slash / Hash Skill Invocation
+
+> open spec: `openspec/changes/add-slash-skill-invocation/`
+
+让用户在对话窗口通过 `/技能名 参数` 或 `#技能名 参数` 强制锁定某个已勾选技能（不走 LLM 选技能的路径）。
+
+**默认关闭**。三个开关同时打开才生效：
+
+| 位置 | 变量 | 默认 | 作用 |
+|---|---|---|---|
+| `backend/agent-core/.env` | `AGENT_SLASH_SKILL_INVOCATION` | `false` | controller 检测 `/` / `#` 前缀并注入强制调用指令 |
+| `frontend/.env.production` | `VITE_SLASH_SKILL_INVOCATION` | 未设 | MessageInput 显示 slash picker（输入框以 `/` 或 `#` 开头时） |
+
+**检测规则**（regex `^[/#]([^\s]+)\s*(.*)$/s`）：
+- 必须以 `/` 或 `#` 开头（无前缀空白）；`/` 和 `#` 是别名，语义完全相同
+- token（紧跟 trigger 的非空白字符序列）匹配当前会话的 enabled_skill 列表里的 `name`（trim + case-insensitive equals）
+- 剩余部分是自然语言参数，由 LLM 提取成技能 schema 的 JSON 入参
+
+**Fallback 行为**：
+- 触发字符不在 position 0（如 `What is /usr/bin?`）→ 完全不检测，老路径不变
+- 触发字符在 position 0 但 token 不在 enabled 列表 → log warning + 走 search_tools 老路径
+- by-conversation 接口 404 / 400 / 异常 → log + 走 search_tools 老路径（不报错）
+- 关闭开关 → 完全不走 detection，连 log 都不打印
+
+**为什么仍走 LLM**（不绕过 LLM 提取参数）：
+- 用户的自然语言参数（如 `把今天时间戳给我`）由 LLM 理解并转成技能 schema
+- slash 只"锁定技能"不"锁定参数"，保留 LLM 处理自然语言的优势
+- 通过 prompt injection 强制 LLM 调用指定 skill + skillIds，**100% 命中**该技能
+
+**回退**：
+```bash
+AGENT_SLASH_SKILL_INVOCATION=false   # 在 backend/agent-core/.env
+# 重启 agent-core
+# 行为完全回到老路径（即便前端 picker 仍显示，detection 已关闭）
+```

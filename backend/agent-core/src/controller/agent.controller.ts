@@ -69,6 +69,95 @@ import { ConversationLogger } from '../utils/conversation-logger';
 import { gatewayCompactClient } from '../services/gateway-compact-client';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { collectDownloadUrls, sanitizeDownloadUrls } from '../utils/download-url-guard';
+import axios from 'axios';
+import { gatewaySkillReadHeaders } from '../tools/java-skills';
+
+// open spec: add-slash-skill-invocation
+// Slash / hash 前缀触发「强制调用某技能」：检测 instruction 开头，跟 conversation 的 enabled_skills 比对 name。
+// `/技能名 参数` 或 `#技能名 参数` 都视为强制调用。开关默认关闭 → 完全不影响老路径。
+// 返回值：matched=true 时附带 trigger 字符 + 匹配到的 skill id/name/args。
+const SLASH_SKILL_INVOCATION_REGEX = /^[/#]([^\s]+)\s*(.*)$/s;
+
+function detectSlashSkillInvocation(
+  instruction: string,
+  enabledSkills: Array<{ id: number; name: string }>,
+):
+  | { matched: false }
+  | { matched: true; trigger: '/' | '#'; skillId: number; skillName: string; args: string } {
+  const trimmed = instruction.trimStart();
+  const m = SLASH_SKILL_INVOCATION_REGEX.exec(trimmed);
+  if (!m) return { matched: false };
+  const trigger = trimmed[0] as '/' | '#';
+  const token = m[1].trim();
+  const args = (m[2] || '').trim();
+  if (!token) return { matched: false };
+  const lower = token.toLowerCase();
+  const hit = enabledSkills.find((s) => s.name.trim().toLowerCase() === lower);
+  if (!hit) return { matched: false };
+  return { matched: true, trigger, skillId: hit.id, skillName: hit.name, args };
+}
+
+// open spec: add-slash-skill-invocation
+// 强制调用指令块（追加到 userContent 末尾，≤ 300 chars）。
+// 关键：明确告诉 LLM 调哪个 skill + 怎么传参数，绕过 LLM 的"自己 search 选技能"路径。
+function injectForcedSkillDirective(skillId: number, skillName: string, trigger: '/' | '#', args: string): string {
+  const argsLine = args
+    ? `\nUser's natural-language args (extract into the skill's parameter schema): "${args}"`
+    : '\nNo extra arguments — call the skill with an empty parameter object.';
+  return (
+    `\n\n[Forced Skill Invocation via '${trigger}']\n` +
+    `The user explicitly selected skill "${skillName}" (id=${skillId}) via '${trigger}' syntax.\n` +
+    `You MUST call this exact skill: execute_skill_with_context(skillIds=[${skillId}], instruction=<user args>).\n` +
+    `Do NOT call search_tools or any other skill. Do NOT echo the slash prefix back as text.${argsLine}`
+  );
+}
+
+// open spec: add-slash-skill-invocation
+// AGENT_SLASH_SKILL_INVOCATION env 解析：truthy = true|1|yes|on，case-insensitive。
+let slashInvFlagLogged = false;
+function isSlashSkillInvocationEnabled(): boolean {
+  const raw = (process.env.AGENT_SLASH_SKILL_INVOCATION || '').trim().toLowerCase();
+  if (!raw) return false;
+  if (['true', '1', 'yes', 'on'].includes(raw)) return true;
+  if (!slashInvFlagLogged) {
+    console.warn(
+      `[LLM] AGENT_SLASH_SKILL_INVOCATION has unrecognized value '${process.env.AGENT_SLASH_SKILL_INVOCATION}', defaulting to false. Valid: true|1|yes|on.`,
+    );
+    slashInvFlagLogged = true;
+  }
+  return false;
+}
+
+// open spec: add-slash-skill-invocation
+// 调 gateway /api/skills/by-conversation 拿 enabled skills 列表（id + name）。
+// 返回空数组表示无勾选 / 不可用 / 出错（slash detection 自然 fallback）。
+async function fetchConversationEnabledSkills(
+  gatewayUrl: string,
+  apiToken: string,
+  userId: string,
+  conversationId: string,
+): Promise<Array<{ id: number; name: string }>> {
+  try {
+    const resp = await axios.get(`${gatewayUrl}/api/skills/by-conversation`, {
+      headers: gatewaySkillReadHeaders(apiToken, userId),
+      params: { conversationId },
+      timeout: 5000,
+    });
+    const list = Array.isArray(resp.data) ? resp.data : [];
+    return list
+      .filter((s: any) => s && typeof s.id === 'number' && typeof s.name === 'string')
+      .map((s: any) => ({ id: s.id, name: s.name }));
+  } catch (e: any) {
+    const status = e?.response?.status;
+    if (status === 404 || status === 400) {
+      // 会话不存在 / 用户不匹配 / 跨用户访问 → 静默 fallback（spec: 退化成 search_tools 路径）
+      console.log(`[SlashSkill] by-conversation unavailable (${status}) for conv=${conversationId}, user=${userId} → slash detection skipped`);
+    } else {
+      console.warn(`[SlashSkill] by-conversation failed: ${(e as Error)?.message || e}`);
+    }
+    return [];
+  }
+}
 
 /** Payload from {@link interrupt} in extended skills / SSH tools (see java-skills). */
 type SkillInterruptPayload = {
@@ -767,10 +856,26 @@ export class AgentController {
           // open spec: optimize-agent-prompt-and-skill-mounting
           // instruction 单独开一个 user role，避免和 prompt 上下文拼到一条 user 消息里
           // （LLM 看到 "System:\n..." + "User Instruction:\n..." 在同一条 message 里容易混淆）
+          // open spec: add-slash-skill-invocation
+          // 强制调用指令：当 env 开关开启且 instruction 以 /或# 开头且 token 命中 conversation 的 enabled skill
+          // → 把 directive 追加到 userContent 末尾，强制 LLM 调用该 skill。失败 fallback 到 search_tools 路径。
+          let forcedSkillDirective = '';
+          if (isSlashSkillInvocationEnabled() && conversationId && gatewayUrl && apiToken) {
+            const enabledSkills = await fetchConversationEnabledSkills(gatewayUrl, apiToken, userId, conversationId);
+            const slashHit = detectSlashSkillInvocation(instruction, enabledSkills);
+            if (slashHit.matched) {
+              forcedSkillDirective = injectForcedSkillDirective(slashHit.skillId, slashHit.skillName, slashHit.trigger, slashHit.args);
+              console.log(`[SlashSkill] Forced invocation matched: trigger='${slashHit.trigger}' skill='${slashHit.skillName}' (id=${slashHit.skillId}) args='${slashHit.args.slice(0, 80)}'`);
+            } else if (SLASH_SKILL_INVOCATION_REGEX.test(instruction.trimStart())) {
+              console.log(`[SlashSkill] Slash/hash prefix detected but no enabled-skill match → falling back to normal routing`);
+            }
+          }
+
           const userContent = [
             `System:\n${staticSystemPrompt}`,
             skillContext || '',
             memoryContext || '',
+            forcedSkillDirective,
           ].filter(s => s).join('\n\n');
 
           // open spec: optimize-agent-prompt-and-skill-mounting
