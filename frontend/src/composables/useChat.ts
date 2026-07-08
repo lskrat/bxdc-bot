@@ -251,6 +251,17 @@ export function provideChat() {
     }))
   }
 
+  /**
+   * Streaming 增量剥离 <think>...</think> 块。
+   *
+   * 关键：SSE 逐 token 到达时，单 token 不含完整闭合标签，简单 regex `/<think>[\s\S]*?<\/think>/`
+   * 无法匹配，于是 partial think 文本会泄漏到 UI。
+   *
+   * 修复：每个 message 维护跨 token 的 `_thinkStreamState`，把累积 rawContent 用状态机扫描：
+   *   - 不在 think 内 → 累积到 cleanContent，遇到 <think> 切换状态
+   *   - 在 think 内 → 丢弃直到 </think>
+   * 这样无论 token 多碎都不会泄漏 <think> 标签文本。
+   */
   function applyAssistantContent(rawContent: string) {
     const content = removeThinkTags(rawContent)
     if (!content && content !== '') return
@@ -335,8 +346,10 @@ export function provideChat() {
   }
 
   function removeThinkTags(content: string): string {
-    // 移除 <think>...</think> 标签及其内容
-    return content.replace(/<think[\s\S]*?<\/think>/gi, '')
+    // 移除完整闭合的 <think>...</think> 标签及其内容。
+    // 注意：streaming 场景下，单 token 不含完整闭合对时无法去除 partial tag；
+    // 见 MessageList.vue 的 assistantContentWithDownloads 中的兜底剥离。
+    return content.replace(/<think>[\s\S]*?<\/think>/gi, '')
   }
 
   function extractContent(content: unknown): string | null {

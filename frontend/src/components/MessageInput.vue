@@ -12,10 +12,12 @@ import { fileService } from '../services/fileService'
 import { apiUrl } from '../services/config'
 import { FILE_INPUT_ACCEPT, FILE_TYPE_ICONS, FILE_TYPE_LABELS } from '../types/fileUpload'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
+import SlashSkillPicker from './SlashSkillPicker.vue'
+import { fetchConversationEnabledSkills, type ConversationEnabledSkill } from '../services/api'
 
 const { sendMessage, isThinking, stop } = useChat()
 const { currentUser } = useUser()
-const { currentConversationId } = useConversations()
+const { currentConversationId, currentConversation } = useConversations()
 const fileUpload = useFileUpload()
 const memoryApi = useMemory()
 
@@ -100,6 +102,131 @@ watch(currentConversationId, (cid) => {
 }, { immediate: true })
 const input = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// open spec: add-slash-skill-invocation
+// Slash / hash picker 状态：会话切换时拉取 enabled_skills，输入框以 / 或 # 开头时显示 picker。
+// 开关默认关闭（VITE_SLASH_SKILL_INVOCATION 未设 → false），不打开就完全没行为，不影响原功能。
+const slashSkillPickerEnabled = computed(() => {
+  const raw = (import.meta.env.VITE_SLASH_SKILL_INVOCATION || '').toString().trim().toLowerCase()
+  return ['true', '1', 'yes', 'on'].includes(raw)
+})
+const slashSkills = ref<ConversationEnabledSkill[]>([])
+const showSlashPicker = ref(false)
+const slashTrigger = ref<'/' | '#'>('/')
+const slashQuery = ref('')
+const slashPickerRef = ref<InstanceType<typeof SlashSkillPicker> | null>(null)
+
+async function refreshSlashSkills(cid: string | null | undefined) {
+  if (!cid) {
+    slashSkills.value = []
+    return
+  }
+  slashSkills.value = await fetchConversationEnabledSkills(cid)
+}
+// 会话切换 OR 当前会话的 enabled_skills 字段变更（用户在配置面板勾选/取消）都要重拉
+watch(currentConversationId, (cid) => {
+  refreshSlashSkills(cid)
+}, { immediate: true })
+watch(
+  () => currentConversation.value?.enabled_skills,
+  () => {
+    if (currentConversationId.value) refreshSlashSkills(currentConversationId.value)
+  },
+)
+
+function parseSlashTrigger(value: string): { trigger: '/' | '#'; query: string } | null {
+  if (typeof value !== 'string' || value.length === 0) return null
+  const head = value[0]
+  if (head !== '/' && head !== '#') return null
+  // 必须以 / 字符开头（无前缀空白），后续是 query；允许 query 含空格（用户在继续输入参数）
+  const rest = value.slice(1)
+  // query 取到第一个空格前；如果没空格，query = rest
+  const spaceIdx = rest.indexOf(' ')
+  const query = spaceIdx === -1 ? rest : rest.slice(0, spaceIdx)
+  return { trigger: head as '/' | '#', query }
+}
+
+watch(input, (value) => {
+  if (!slashSkillPickerEnabled.value) {
+    showSlashPicker.value = false
+    return
+  }
+  const parsed = parseSlashTrigger(value)
+  if (!parsed) {
+    showSlashPicker.value = false
+    return
+  }
+  // open spec: add-slash-skill-invocation
+  // 如果值中已有空格（用户已选择技能并在输入参数），不再打开 picker。
+  // 否则 onSlashSkillSelected 写入 "/技能名 " 后 watch 再次触发会重新打开 picker，阻塞输入。
+  const rest = value.slice(1)
+  if (rest.includes(' ')) {
+    showSlashPicker.value = false
+    return
+  }
+  slashTrigger.value = parsed.trigger
+  slashQuery.value = parsed.query
+  showSlashPicker.value = slashSkills.value.length > 0
+})
+
+function onSlashSkillSelected(skill: ConversationEnabledSkill) {
+  // open spec: add-slash-skill-invocation
+  // 直接更新 Vue ref，让 v-model 驱动 TChatSender 内部状态同步
+  const newText = `${slashTrigger.value}${skill.name} `
+  input.value = newText
+  showSlashPicker.value = false
+  slashQuery.value = ''
+  nextTick(() => {
+    focusChatInputNextTick()
+  })
+}
+
+function closeSlashPicker() {
+  showSlashPicker.value = false
+  slashQuery.value = ''
+}
+
+function focusChatInputNextTick(newText?: string) {
+  nextTick(() => {
+    // TChatSender (TDesign) 实际 DOM: t-chat__footer__textarea > t-textarea > textarea
+    const candidates = [
+      '.chat-sender textarea',
+      '.t-chat__footer__textarea textarea',
+      '.chat-sender input',
+      'textarea',
+      'input',
+    ]
+    for (const sel of candidates) {
+      const el = document.querySelector(sel) as HTMLTextAreaElement | HTMLInputElement | null
+      if (el) {
+        // 如果给了 newText（来自 picker 选中），用 native setter 写入 + 触发 input 事件让 v-model 同步
+        if (newText !== undefined) {
+          const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+          if (setter) setter.call(el, newText)
+          else el.value = newText
+          // v-model: 通过 Vue 的 input 事件让它同步 ref
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+        el.focus()
+        if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+          const end = el.value.length
+          try {
+            el.setSelectionRange(end, end)
+          } catch {
+            // ignore
+          }
+        }
+        console.log(`[SlashSkill] focused ${sel}${newText ? ` with text '${newText}'` : ''}`)
+        return
+      }
+    }
+    console.warn('[SlashSkill] focusChatInputNextTick: no input/textarea found in chat-sender')
+  })
+}
+
+
 
 /** 等待解析时的 loading 状态（spinner） */
 const isWaitingForParse = ref(false)
@@ -504,6 +631,13 @@ async function handleSend(value: string) {
   const text = (typeof value === 'string' ? value : value?.text || '').trim()
   if (!text || isThinking.value) return
 
+  // open spec: add-slash-skill-invocation
+  // Picker 显示中按 Enter → 选当前 active skill 而不是发送消息。
+  if (showSlashPicker.value) {
+    slashPickerRef.value?.pickActive()
+    return
+  }
+
   const files = allFiles.value
   const hasParsing = files.some((f) => f.status === 'parsing')
 
@@ -714,6 +848,16 @@ async function handleSend(value: string) {
 
     <!-- 文本输入区 + 按钮组 -->
     <div class="chat-sender-row" data-ref="chat-input-area">
+      <!-- open spec: add-slash-skill-invocation: slash / hash picker（输入框以 / 或 # 开头时显示） -->
+      <SlashSkillPicker
+        ref="slashPickerRef"
+        :visible="showSlashPicker"
+        :trigger="slashTrigger"
+        :query="slashQuery"
+        :skills="slashSkills"
+        @select="onSlashSkillSelected"
+        @close="closeSlashPicker"
+      />
       <TChatSender
         v-model="input"
         class="chat-sender"

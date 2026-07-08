@@ -101,16 +101,42 @@ Sub-Agent Think Blocks（子 Agent 思考块）功能为子 Agent 的执行过�
 
 ### REQ-8: 错误处理
 
-**Requirement**: 子 Agent 执行失败时，思考块保留所有推理过程，便于调试。
+**Requirement**: 子 Agent 执行失败时，思考块保留所有推理过程，便于调试。用户取消确认时，子 Agent 不重试，直接返回取消状态。
 
 **验证标准**:
 - 子 Agent 执行失败，思考块标记为 failed
 - 已接收的 AI 文本保留在思考块中
 - SSE 连接中断，思考块标记为 failed，保留已接收内容
+- 用户取消确认，子 Agent 返回 CANCELLED 状态，不重试操作
+- 取消消息显示在主对话区域而非思考块内
 
 **实现位置**:
 - `frontend/src/composables/useChat.ts` — handleThinkEnd、handleStreamError
-- `backend/agent-core/src/tools/execute-skill.ts` — 异常处理
+- `backend/agent-core/src/tools/execute-skill.ts` — 异常处理、cancelFlow
+- `backend/agent-core/src/controller/agent.controller.ts` — iterator 替换逻辑
+
+### REQ-9: Cancel confirmation gracefully stops sub-agent
+
+**Requirement**: 用户在子 Agent 执行期间取消确认对话框时，系统 SHALL 向子 Agent 发送 CANCELLED 状态信号，防止重试循环。
+
+**验证标准**:
+- 子 Agent 触发确认请求，用户点击取消时，execute_skill_with_context SHALL 检测 `confirmed: false`
+- SHALL 返回 `{ status: "CANCELLED", message: "用户取消了操作" }` 而非抛出错误
+- 子 Agent SHALL NOT 重试被取消的操作
+
+**实现位置**:
+- `backend/agent-core/src/tools/execute-skill.ts` — catch 块中的 confirmed:false 检测
+
+### REQ-10: Cancel flow uses iterator replacement
+
+**Requirement**: Agent 控制器 SHALL 使用 iterator 替换（`iterator = newStream[Symbol.asyncIterator]()`）而非 drain-and-break 在用户取消后恢复，允许主 Agent 自然产出取消总结。
+
+**验证标准**:
+- 控制器检测到确认结果中 `confirmed: false` 时，创建新流并替换 iterator
+- 主 Agent SHALL 产生自然语言的取消总结消息
+
+**实现位置**:
+- `backend/agent-core/src/controller/agent.controller.ts` — 取消恢复逻辑
 
 ## Constraints
 

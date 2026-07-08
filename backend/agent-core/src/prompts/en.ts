@@ -100,7 +100,8 @@ const confirmationHint = `High-risk / confirmation-required extension skills and
  * Auto-match skills via execute_skill_with_context vector retrieval, no manual search needed
  */
 const skillDiscoveryPolicy = `[Skill discovery]
-When your built-in tools (execute_skill_with_context, skill_generator, compute, server_lookup, manage_tasks) cannot directly complete the user's task, you MUST follow this workflow:
+First, check whether any of your directly-available extension tools (names starting with "extended_") can handle the user's request. If yes, call them directly — no need to go through execute_skill_with_context.
+Only when directly-mounted extension tools cannot complete the task, call execute_skill_with_context — the system will auto-match system skills via vector retrieval and create a sub-agent.
 1. Group by skill domain: Split complex tasks into domain-specific calls. Each call should target at most 2 types of operations. When task involves ≥3 operation types (e.g., Excel+Word+SSH), call separately per domain.
 2. Call execute_skill_with_context directly, passing the user's task description as userInput. The system will auto-match the most relevant system skills via vector retrieval based on userInput/searchQuery.
 3. For multi-step operations within the same skill domain (e.g., read file → analyze → generate chart), use a single call — the sub-agent handles sequencing internally.
@@ -137,10 +138,10 @@ When calling this tool, **strongly recommended to also output the optional "tags
  * 优先使用扩展技能而非内置工具，规范参数传递方式
  */
 const extendedSkillRoutingPolicy = `[Extended skill routing]
-Call matching extension tools (names often start with "extended_") for in-scope requests; use structured params per the tool schema. Prefer extension SSH skills for remote shell. Do NOT bypass with built-in tools (ssh_executor / linux_script_executor / compute / server_lookup) unless the user asks for the built-in path, no extension skill matches, or the extension failed and a built-in fallback is necessary (state briefly).
+Directly-mounted extension tools (names starting with "extended_") represent user custom skills enabled for this session. Use them FIRST for matching requests, with structured params per tool schema.
+Only when directly-mounted tools cannot complete the task, use execute_skill_with_context to match system skills via vector retrieval.
+Prefer extension SSH skills for remote shell. Do NOT bypass with built-in tools (ssh_executor / linux_script_executor / compute / server_lookup) unless the user asks for the built-in path, no extension skill matches, or the extension failed and a built-in fallback is necessary (state briefly).
 Do not reuse URLs/hosts/commands from earlier messages to skip the extension tool.
-Note: the main agent has NO extension tools directly mounted. All gateway skills (user and system) are reachable only via search_tools / search_filesystem_skills → execute_skill_with_context.
-
 `;
 
 /**

@@ -96,7 +96,8 @@ const confirmationHint = `高风险/需确认的扩展技能和 SSH 命令只能
  * 通过 execute_skill_with_context 自动向量检索匹配技能，无需手动搜索
  */
 const skillDiscoveryPolicy = `[技能发现策略]
-当你自身内置工具无法直接完成用户任务时，调用 execute_skill_with_context —— 系统自动通过向量检索匹配技能并创建子 Agent 执行。
+首先检查你当前可用的扩展工具（名称以"extended_"开头）是否能直接处理用户请求。如果可以，直接调用它们，不需要经过 execute_skill_with_context。
+仅当已挂载的扩展工具无法直接完成用户任务时，才调用 execute_skill_with_context —— 系统自动通过向量检索匹配系统技能并创建子 Agent 执行。
 
 【调用准则】
 1. 按技能域分组调用：子 Agent 可以在同一技能域内执行多步操作（如读文件→统计分析→生成图表），但跨技能域的任务必须拆分。
@@ -138,12 +139,11 @@ const skillDiscoveryPolicy = `[技能发现策略]
  * 优先使用扩展技能而非内置工具，规范参数传递方式
  */
 const extendedSkillRoutingPolicy = `[扩展技能路由策略]
-当 SkillGateway 扩展工具可用时（名称通常以"extended_"开头），对落在该技能描述能力范围内的请求，必须调用匹配的扩展工具。扩展工具使用结构化参数（按工具模式顶层传参，而非单个"input" JSON）。
-远程 shell 优先用扩展 SSH 技能（内置 ssh_executor 在认证会话中可能不可用），用 server_lookup 查服务器别名。
+直接挂载的扩展工具（名称以"extended_"开头）代表当前会话已启用的用户自定义技能，优先使用它们处理用户请求。扩展工具使用结构化参数（按工具模式顶层传参，而非单个"input" JSON）。
+仅当已挂载的扩展工具不足以完成任务时，才用 execute_skill_with_context 通过向量检索匹配系统技能。
+远程 shell 优先用扩展 SSH 技能，用 server_lookup 查服务器别名。
 除非以下情况，不要用 ssh_executor / linux_script_executor / compute / server_lookup 绕过扩展技能：(1) 用户明确要求低层级/内置路径；(2) 没有扩展技能合理匹配；(3) 扩展工具失败且内置回退明显必要（简要说明）。
 不要依赖之前消息记住的 URL / 主机 / 命令片段跳过扩展工具——适用时用明确参数调用它。
-注意：主 Agent 没有直接挂载任何扩展工具。所有 Gateway 技能（用户技能和系统技能）只能通过 search_tools / search_filesystem_skills → execute_skill_with_context 路径触发。
-
 `;
 
 /**
