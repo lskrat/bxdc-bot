@@ -149,6 +149,8 @@ public class SkillController {
     public SkillMatchResponse matchSkills(@RequestBody SkillMatchRequest request) {
         String query = request.getQuery();
         int limit = request.getLimit();
+        // add-skill-tags-and-intent-filtering：透传标签（可选；null = 走 e2ac8ce 原路径）
+        List<String> tags = request.getTags();
 
         if (query == null || query.trim().isEmpty()) {
             SkillMatchResponse empty = new SkillMatchResponse();
@@ -158,7 +160,8 @@ public class SkillController {
             return empty;
         }
 
-        List<SkillEmbeddingService.MatchResult> results = skillEmbeddingService.match(query, limit);
+        // add-skill-tags-and-intent-filtering：tags 不为 null 时走三阶段 match；否则完全等价 e2ac8ce
+        List<SkillEmbeddingService.MatchResult> results = skillEmbeddingService.match(query, tags, limit);
 
         List<SkillMatchResponse.MatchItem> items = new ArrayList<>();
         for (SkillEmbeddingService.MatchResult r : results) {

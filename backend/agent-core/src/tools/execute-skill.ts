@@ -88,6 +88,22 @@ const executeSkillInputSchema = z.object({
     .describe("The search query for vector similarity skill matching. " +
       "This should be a concise extraction of the operations needed (e.g., 'Excel统计 Word生成' or '文件读取 数据分析'). " +
       "If not provided, the userInput will be used for vector search."),
+  // add-skill-tags-and-intent-filtering（路径 B：主 LLM 自报 tags，不再走独立 LLM 意图识别）
+  // 由主 LLM 一次性输出，无需额外 round-trip；可选字段，不确定时省略。
+  tags: z
+    .array(z.string())
+    .max(3)
+    .optional()
+    .describe("OPTIONAL: 1-3 tags from the whitelist below to help narrow skill matching. " +
+      "Omit this field entirely if unsure — the system will fall back to vector-only search. " +
+      "Tag whitelist (23 total, must match exactly): " +
+      "file_type [通用, Word, 文本, Markdown, Excel]; " +
+      "operation_intent [展示, 删除, 读取, 写入, 生成, 提取, 搜索, 修改, 分析, 转换, 新建, 校验]; " +
+      "business_scenario [文件管理, 检索查看, 生成导出, 提取解析, 编辑整理, 计算分析]. " +
+      "Any tag NOT in this whitelist is silently dropped. " +
+      "Examples: '在文件末尾追加一行' → tags=['写入']; " +
+      "'删除文件' → tags=['删除','文件管理']; " +
+      "'统计 Excel 销量' → tags=['分析','计算分析']."),
   continueConversation: z
     .boolean()
     .optional()
@@ -133,8 +149,23 @@ interface SkillMatchItem {
 }
 
 /**
+ * add-skill-tags-and-intent-filtering：23 标签白名单。
+ * 与 FileToolSeeder.TOOL_TAGS 同步；任何分歧在 PR review 阶段拒绝合入。
+ * 5 + 12 + 6 = 23。
+ */
+const INTENT_TAG_WHITELIST: ReadonlySet<string> = new Set<string>([
+  // file_type (5)
+  "通用", "Word", "文本", "Markdown", "Excel",
+  // operation_intent (12)
+  "展示", "删除", "读取", "写入", "生成", "提取", "搜索", "修改", "分析", "转换", "新建", "校验",
+  // business_scenario (6)
+  "文件管理", "检索查看", "生成导出", "提取解析", "编辑整理", "计算分析",
+]);
+
+/**
  * 调用 Gateway 向量检索 API 自动匹配技能。
  * @param query 用户任务文本，作为检索查询
+ * @param tags 可选标签（add-skill-tags-and-intent-filtering：传入时 gateway 先按 tag 硬筛）
  * @param gatewayUrl Gateway 基础 URL
  * @param apiToken X-API-Key 令牌
  * @returns 匹配的技能列表；失败时返回空数组
@@ -152,7 +183,7 @@ let utilityFetchPromise: Promise<SkillMatchItem[]> | null = null;
  * 在服务启动后首次调用时从 Gateway 拉取，之后全局缓存。
  */
 async function getUtilitySkills(gatewayUrl: string, apiToken: string): Promise<SkillMatchItem[]> {
-  if (cachedUtilitySkills) return cachedUtilitySkills;
+  if (cachedUtilitySkills !== null) return cachedUtilitySkills;
   if (utilityFetchPromise) return utilityFetchPromise;
 
   utilityFetchPromise = (async () => {
@@ -187,18 +218,28 @@ async function getUtilitySkills(gatewayUrl: string, apiToken: string): Promise<S
  * 每个子 Agent 都自动获得 file_list + file_read + file_write 作为基础能力（相当于 ls + cat + write），
  * 不依赖向量搜索匹配——即使搜索没返回这些技能，子 Agent 也能读写文件。
  * 领域技能（Excel/Word/SSH 等）由向量搜索匹配。
+ *
+ * add-skill-tags-and-intent-filtering：
+ * - `tags` 非空时，gateway 会先按 file_type/operation_intent/business_scenario SQL 硬筛，
+ *   再做向量召回。基础工具不走 tags 路径（它本来就不需要被"筛"）。
+ * - `tags` 为 null/undefined 时保持 e2ac8ce 行为（无 tags 字段透传给 gateway）。
  */
 async function autoSearchSkills(
   query: string,
+  tags: string[] | null,
   gatewayUrl: string,
   apiToken: string,
 ): Promise<SkillMatchItem[]> {
   try {
-    // 并行：业务技能搜索 + 基础工具获取
+    // 并行：业务技能搜索（带 tags）+ 基础工具获取
+    const businessBody: { query: string; limit: number; tags?: string[] } = { query, limit: 5 };
+    if (tags && tags.length > 0) {
+      businessBody.tags = tags;
+    }
     const [{ data }, utilitySkills] = await Promise.all([
       axios.post(
         `${gatewayUrl}/api/skills/match`,
-        { query, limit: 5 },
+        businessBody,
         { headers: { 'X-API-Key': apiToken, 'Content-Type': 'application/json' } },
       ),
       getUtilitySkills(gatewayUrl, apiToken),
@@ -212,13 +253,16 @@ async function autoSearchSkills(
     const seenIds = new Set(matches.map((m) => m.skillId));
     for (const m of utilitySkills) {
       if (!seenIds.has(m.skillId)) {
+        // utility 是兜底工具，不参与排序；score=0 把它们压到列表底部让主 LLM 不混淆
         matches.push({ skillId: m.skillId, name: m.name, description: m.description, score: 0 });
         seenIds.add(m.skillId);
       }
     }
 
     if (utilitySkills.length > 0) {
-      console.log(`[autoSearchSkills] Total skills: ${matches.length} (${matches.length - utilitySkills.length} matched + ${utilitySkills.length} utility)`);
+      console.log(`[autoSearchSkills] Total skills: ${matches.length} (${matches.length - utilitySkills.length} matched + ${utilitySkills.length} utility)${tags ? `, tags=${tags.join(',')}` : ''}`);
+    } else if (tags) {
+      console.log(`[autoSearchSkills] tags=${tags.join(',')}, matched ${matches.length} skills`);
     }
 
     return matches;
@@ -280,10 +324,38 @@ export class ExecuteSkillWithContextTool extends DynamicStructuredTool<typeof ex
         try {
           const { userInput, searchQuery, continueConversation } = args;
 
+          // ===== add-skill-tags-and-intent-filtering（路径 B：主 LLM 自报 tags）=====
+          // 不再调用独立 LLM 意图识别（已废，详见 design.md D5）。主 LLM 在 tool call 时
+          // 可选地输出 tags（白名单 23 个）。未提供/不确定 → 走 e2ac8ce 全量向量池。
+          // 过滤白名单 + 去重 + 截断到 3。
+          const rawTags: string[] | undefined = Array.isArray(args.tags) ? args.tags : undefined;
+          let tags: string[] | null = null;
+          if (rawTags && rawTags.length > 0) {
+            const seen = new Set<string>();
+            const filtered: string[] = [];
+            for (const t of rawTags) {
+              if (typeof t !== "string") continue;
+              const tag = t.trim();
+              if (!tag || !INTENT_TAG_WHITELIST.has(tag) || seen.has(tag)) continue;
+              seen.add(tag);
+              filtered.push(tag);
+              if (filtered.length >= 3) break;
+            }
+            if (filtered.length > 0) tags = filtered;
+          }
+          // 诊断 log：分清"完全没传"/"传了但被过滤"两种情况
+          if (tags) {
+            console.log(`[TagsFromLLM] raw=${JSON.stringify(rawTags)} → tags=[${tags.join(', ')}] (whitelist passed)`);
+          } else if (rawTags && rawTags.length > 0) {
+            console.log(`[TagsFromLLM] raw=${JSON.stringify(rawTags)} → tags=null (all out-of-whitelist, fallback to e2ac8ce)`);
+          } else {
+            console.log(`[TagsFromLLM] raw=undefined (main LLM did NOT pass tags field, fallback to e2ac8ce)`);
+          }
+
           // ===== 向量搜索模式：通过 Gateway 自动匹配技能 =====
           // 使用 searchQuery 进行向量检索，如果没有提供则使用 userInput
           const queryForSearch = searchQuery || userInput;
-          const matchResult = await autoSearchSkills(queryForSearch, gatewayUrl, apiToken);
+          const matchResult = await autoSearchSkills(queryForSearch, tags, gatewayUrl, apiToken);
           if (matchResult.length === 0) {
             // 无匹配技能：返回话术让主 Agent 告知用户
             return JSON.stringify({

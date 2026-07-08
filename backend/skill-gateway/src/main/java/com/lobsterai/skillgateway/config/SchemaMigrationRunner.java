@@ -196,6 +196,20 @@ public class SchemaMigrationRunner implements InitializingBean {
         ensureColumn(conn, table, "search_weight", existingColumns,
                 "ALTER TABLE skills ADD COLUMN search_weight DOUBLE DEFAULT 1.0 " +
                 "COMMENT '向量检索权重；>1 排名靠前，0 不参与检索'");
+
+        // ===== add-skill-tags-and-intent-filtering：技能三维度标签 =====
+        // 文件类型标签（add-skill-tags-and-intent-filtering）：通用/Word/文本/Markdown/Excel
+        ensureColumn(conn, table, "file_type", existingColumns,
+                "ALTER TABLE skills ADD COLUMN file_type VARCHAR(32) DEFAULT NULL " +
+                "COMMENT '文件类型标签（add-skill-tags-and-intent-filtering）：通用/Word/文本/Markdown/Excel'");
+        // 操作意图标签
+        ensureColumn(conn, table, "operation_intent", existingColumns,
+                "ALTER TABLE skills ADD COLUMN operation_intent VARCHAR(32) DEFAULT NULL " +
+                "COMMENT '操作意图标签（add-skill-tags-and-intent-filtering）：展示/删除/读取/写入/生成/提取/搜索/修改/分析/转换/新建/校验'");
+        // 业务场景标签
+        ensureColumn(conn, table, "business_scenario", existingColumns,
+                "ALTER TABLE skills ADD COLUMN business_scenario VARCHAR(32) DEFAULT NULL " +
+                "COMMENT '业务场景标签（add-skill-tags-and-intent-filtering）：文件管理/检索查看/生成导出/提取解析/编辑整理/计算分析'");
     }
 
     /**

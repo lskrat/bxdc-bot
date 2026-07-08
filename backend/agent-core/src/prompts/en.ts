@@ -122,6 +122,13 @@ When your built-in tools (execute_skill_with_context, skill_generator, compute, 
 ✅ Correct: Multi-step within same domain in one call
    - searchQuery: "Excel统计 数据筛选", userInput: "Filter data where age>30, then calculate averages and summary"
 
+[Intent tags (strongly recommended)]
+When calling this tool, **strongly recommended to also output the optional "tags" parameter** (1-3 tags, picked from the 23-tag whitelist in the tool schema). Tags let the gateway pre-filter candidate skills by label, significantly improving hit rate on ambiguous queries like "append a line -> file_write".
+- ✅ Before calling, think about the user's task along tag dimensions (file_type / operation_intent / business_scenario). If you can determine them, output tags.
+- ✅ Examples: "append a line to file" -> tags=["写入"]; "delete file" -> tags=["删除","文件管理"]; "Excel sales statistics" -> tags=["分析","计算分析"].
+- ❌ If unsure, **omit** the tags field entirely; the system falls back to the full vector pool (matches e2ac8ce behavior, no error).
+- The 23-tag whitelist in the tool schema is the only legal source; tags outside it are silently dropped.
+
 `;
 
 /**

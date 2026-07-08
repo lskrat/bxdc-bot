@@ -1,5 +1,6 @@
 package com.lobsterai.skillgateway.dto;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -10,6 +11,11 @@ public class SkillMatchRequest {
     private String query;
     /** 返回数量上限（默认 8） */
     private int limit = 8;
+    /**
+     * add-skill-tags-and-intent-filtering：1-3 个标签，agent-core 意图识别结果。
+     * 可选——不传 = tags = null，走 e2ac8ce 原路径。
+     */
+    private List<String> tags;
 
     public String getQuery() {
         return query;
@@ -25,5 +31,20 @@ public class SkillMatchRequest {
 
     public void setLimit(int limit) {
         this.limit = limit;
+    }
+
+    /**
+     * 标签列表（向后兼容：null = 用不上 = 走 e2ac8ce 原路径）。
+     * 空集合也按 null 处理，避免 IN () SQL 语法错误。
+     */
+    public List<String> getTags() {
+        if (tags == null || tags.isEmpty()) {
+            return null;
+        }
+        return Collections.unmodifiableList(tags);
+    }
+
+    public void setTags(List<String> tags) {
+        this.tags = tags;
     }
 }

@@ -12,8 +12,10 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -45,6 +47,12 @@ public class SkillEmbeddingService {
 
     /** 最小相似度阈值（低于此分数不返回） */
     private static final double MIN_SIMILARITY = 0.25;
+
+    /** add-skill-tags-and-intent-filtering：SQL 硬筛结果候选数 < 此阈值时降级全量向量池。
+     *  设为 1：23 个标签里每标签通常只命中 1-3 个工具，5 太高会让安全阀几乎总是触发，
+     *  导致 tag 路径形同虚设。1 = 信任白名单过滤结果，仅在 SQL 真返回 0（hallucination）
+     *  时才回退。 */
+    private static final int MIN_CANDIDATE_SIZE = 1;
 
     /** 关键词匹配权重（与向量相似度混合时的权重） */
     private static final double KEYWORD_WEIGHT = 0.4;
@@ -208,6 +216,37 @@ public class SkillEmbeddingService {
      * @return 按分数降序排列的匹配结果列表；embedding 不可用时返回空列表
      */
     public List<MatchResult> match(String query, int limit) {
+        // 保持向后兼容：旧调用方不传 tags 时完全等价 e2ac8ce
+        return match(query, null, limit);
+    }
+
+    /**
+     * 向量检索（使用默认 limit）。
+     */
+    public List<MatchResult> match(String query) {
+        return match(query, null, DEFAULT_MATCH_LIMIT);
+    }
+
+    /**
+     * 三阶段管线：根据 query + 可选 tags 查找最匹配的技能。
+     * <p>
+     * 阶段 1（add-skill-tags-and-intent-filtering）：SQL 硬筛。
+     *   tags 非空时按 file_type/operation_intent/business_scenario 三列 OR IN 匹配
+     *   skill_owner_type=2 的技能 ID，候选集 < MIN_CANDIDATE_SIZE 时降级全量向量池。
+     * </p>
+     * <p>
+     * 阶段 2：保留 e2ac8ce 的 cosine + 关键词 hybrid 打分。
+     *   阶段 1 命中时仅对候选集打分，候选集为 null 时全量打分。
+     * </p>
+     * <p>
+     * 阶段 3：按 search_weight 加权排序取 top-K。
+     * </p>
+     *
+     * @param query 检索文本
+     * @param tags 可选标签（null/空 = 阶段 1 完全跳过 = 等价 e2ac8ce）
+     * @param limit 返回数量上限
+     */
+    public List<MatchResult> match(String query, List<String> tags, int limit) {
         if (!initialized || index.isEmpty()) {
             log.warn("[SkillEmbedding] Index not initialized or empty, returning empty result");
             return Collections.emptyList();
@@ -218,6 +257,30 @@ public class SkillEmbeddingService {
 
         int actualLimit = limit > 0 ? limit : DEFAULT_MATCH_LIMIT;
 
+        // 阶段 1：SQL 硬筛（add-skill-tags-and-intent-filtering）
+        Set<Long> candidates = null;
+        if (tags != null && !tags.isEmpty()) {
+            try {
+                List<Long> ids = skillMapper.findIdsByTags(tags, 2);
+                candidates = new HashSet<>(ids);
+                log.info("[SkillEmbedding] SQL hard filter returned {} candidates for tags={}, ids={}",
+                        candidates.size(), tags,
+                        candidates.stream().limit(20).collect(Collectors.toList()));
+
+                // 安全阀：候选过窄时降级全量向量池
+                if (candidates.size() < MIN_CANDIDATE_SIZE) {
+                    log.warn("[SkillEmbedding] SQL filter returned only {} candidates (below MIN_CANDIDATE_SIZE={}) "
+                            + "for tags={}, fallback to full vector pool",
+                            candidates.size(), MIN_CANDIDATE_SIZE, tags);
+                    candidates = null;
+                }
+            } catch (Exception e) {
+                // SQL 异常：降级全量向量（与未传 tags 等价）
+                log.warn("[SkillEmbedding] findIdsByTags failed: {}, fallback to full vector pool", e.getMessage());
+                candidates = null;
+            }
+        }
+
         // 1. 生成 query embedding
         float[] queryEmbedding = embeddingService.embedWithDefault(query.trim());
         if (queryEmbedding == null) {
@@ -225,9 +288,13 @@ public class SkillEmbeddingService {
             return Collections.emptyList();
         }
 
-        // 2. 计算所有技能的混合分数（语义相似度 + 关键词匹配）
+        // 2. 计算所有（或候选集内的）技能的混合分数（语义相似度 + 关键词匹配）
         List<MatchResult> results = new ArrayList<>();
         for (SkillVector sv : index.values()) {
+            // 阶段 1 命中时跳过非候选集；tags==null 时对全量打分（兼容 e2ac8ce）
+            if (candidates != null && !candidates.contains(sv.skillId)) {
+                continue;
+            }
             if (sv.embedding == null) continue;
             double semanticScore = embeddingService.cosineSimilarity(queryEmbedding, sv.embedding);
             if (semanticScore < MIN_SIMILARITY) continue;
@@ -256,20 +323,20 @@ public class SkillEmbeddingService {
         // 3. 按分数降序排序，取 top-K
         results.sort(Comparator.comparingDouble((MatchResult r) -> r.score).reversed());
 
-        List<MatchResult> topK = results.stream().limit(actualLimit).collect(Collectors.toList());
+        // 4. 过滤 score<=0 的噪声结果（hybridScore=0 或 searchWeight=0 的工具）
+        // 保留 0.25 阈值放行的真正相关工具，去掉 BGE 判为完全不相关却被 searchWeight 拉进来的死阳性。
+        // 不加锚定/-0.15 之类的二次门槛，避免误伤边综 case（如补充工具 0.35）。
+        int beforeFilter = results.size();
+        List<MatchResult> filtered = results.stream()
+                .filter(r -> r.score > 0.0)
+                .limit(actualLimit)
+                .collect(Collectors.toList());
 
-        log.debug("[SkillEmbedding] Query '{}' matched {}/{} skills (top-{})",
+        log.info("[SkillEmbedding] Query '{}' matched {}/{} skills (top-{}, after score>0 filter {}=>{} )",
                 query.length() > 60 ? query.substring(0, 60) + "..." : query,
-                topK.size(), results.size(), actualLimit);
+                filtered.size(), beforeFilter, actualLimit, beforeFilter, filtered.size());
 
-        return topK;
-    }
-
-    /**
-     * 向量检索（使用默认 limit）。
-     */
-    public List<MatchResult> match(String query) {
-        return match(query, DEFAULT_MATCH_LIMIT);
+        return filtered;
     }
 
     /**

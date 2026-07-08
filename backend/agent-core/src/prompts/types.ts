@@ -86,9 +86,9 @@ export interface SystemPrompts {
 
   /**
    * 构建任务状态摘要
-   * 
+   *
    * 根据任务状态映射表生成用于注入到 LLM 提示词中的摘要文本
-   * 
+   *
    * @param tasks - 任务状态映射表
    * @returns 格式化的任务状态摘要
    */

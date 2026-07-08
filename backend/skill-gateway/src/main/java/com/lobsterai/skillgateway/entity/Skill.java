@@ -60,6 +60,18 @@ public class Skill {
     @TableField("search_weight")
     private Double searchWeight;
 
+    /** 文件类型标签（add-skill-tags-and-intent-filtering）：通用 / Word / 文本 / Markdown / Excel */
+    @TableField("file_type")
+    private String fileType;
+
+    /** 操作意图标签：展示 / 删除 / 读取 / 写入 / 生成 / 提取 / 搜索 / 修改 / 分析 / 转换 / 新建 / 校验 */
+    @TableField("operation_intent")
+    private String operationIntent;
+
+    /** 业务场景标签：文件管理 / 检索查看 / 生成导出 / 提取解析 / 编辑整理 / 计算分析 */
+    @TableField("business_scenario")
+    private String businessScenario;
+
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss", timezone = "Asia/Shanghai")
     @TableField(value = "created_at", fill = FieldFill.INSERT)
     private LocalDateTime createdAt;
@@ -192,6 +204,30 @@ public class Skill {
 
     public void setSearchWeight(Double searchWeight) {
         this.searchWeight = searchWeight;
+    }
+
+    public String getFileType() {
+        return fileType;
+    }
+
+    public void setFileType(String fileType) {
+        this.fileType = fileType;
+    }
+
+    public String getOperationIntent() {
+        return operationIntent;
+    }
+
+    public void setOperationIntent(String operationIntent) {
+        this.operationIntent = operationIntent;
+    }
+
+    public String getBusinessScenario() {
+        return businessScenario;
+    }
+
+    public void setBusinessScenario(String businessScenario) {
+        this.businessScenario = businessScenario;
     }
 
     public LocalDateTime getCreatedAt() {

@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS skills (
     intro_md TEXT,
     skill_owner_type TINYINT(1) DEFAULT 1 COMMENT '1=用户技能, 2=系统技能, 0=未指定',
     search_weight DOUBLE DEFAULT 1.0 COMMENT '向量检索权重，默认 1.0；>1 排名靠前，0 不参与检索',
+    file_type VARCHAR(32) DEFAULT NULL COMMENT '文件类型标签：通用/Word/文本/Markdown/Excel（add-skill-tags-and-intent-filtering）',
+    operation_intent VARCHAR(32) DEFAULT NULL COMMENT '操作意图标签：展示/删除/读取/写入/生成/提取/搜索/修改/分析/转换/新建/校验（add-skill-tags-and-intent-filtering）',
+    business_scenario VARCHAR(32) DEFAULT NULL COMMENT '业务场景标签：文件管理/检索查看/生成导出/提取解析/编辑整理/计算分析（add-skill-tags-and-intent-filtering）',
     created_at DATETIME,
     updated_at DATETIME,
     INDEX idx_skills_team_id (team_id)

@@ -129,6 +129,78 @@ public class FileToolSeeder implements ApplicationRunner {
         LEGACY_WORD_TOOLS = java.util.Collections.unmodifiableSet(s);
     }
 
+    // ===== add-skill-tags-and-intent-filtering：技能三维度标签 =====
+    /**
+     * 工具的 file_type / operation_intent / business_scenario 标签三元组。
+     * </p>
+     * 单一权威源：此表必须在 PR 中与 agent-core prompts/zh.ts 的
+     * INTENT_RECOGNITION_SYSTEM_PROMPT 同步；任何分歧在 PR review 阶段拒绝合入。
+     */
+    private static class ToolTag {
+        final String fileType;
+        final String operationIntent;
+        final String businessScenario;
+        ToolTag(String f, String o, String b) {
+            this.fileType = f;
+            this.operationIntent = o;
+            this.businessScenario = b;
+        }
+    }
+
+    /** 标签权威源：覆盖本次需求图示的 38 个工具。 */
+    private static final java.util.Map<String, ToolTag> TOOL_TAGS = new LinkedHashMap<>();
+    static {
+        // file_manage 族（7）
+        TOOL_TAGS.put("file_list",             new ToolTag("通用",     "展示", "文件管理"));
+        TOOL_TAGS.put("file_delete",           new ToolTag("通用",     "删除", "文件管理"));
+        TOOL_TAGS.put("file_clear_all",        new ToolTag("通用",     "删除", "文件管理"));
+        TOOL_TAGS.put("file_detail",           new ToolTag("通用",     "读取", "检索查看"));
+        TOOL_TAGS.put("file_read",             new ToolTag("通用",     "读取", "检索查看"));
+        TOOL_TAGS.put("file_write",            new ToolTag("通用",     "写入", "生成导出"));
+        TOOL_TAGS.put("file_init_temp",        new ToolTag("通用",     "生成", "文件管理"));
+        // word_operate 族（4）
+        TOOL_TAGS.put("word_extract_content",  new ToolTag("Word",     "提取", "提取解析"));
+        TOOL_TAGS.put("word_search_keyword",   new ToolTag("Word",     "搜索", "检索查看"));
+        TOOL_TAGS.put("word_replace_text",     new ToolTag("Word",     "修改", "编辑整理"));
+        TOOL_TAGS.put("word_template_fill",    new ToolTag("Word",     "写入", "生成导出"));
+        // txt_operate 族（8）
+        TOOL_TAGS.put("txt_keyword_lines",     new ToolTag("文本",     "搜索", "检索查看"));
+        TOOL_TAGS.put("txt_regex",             new ToolTag("文本",     "提取", "检索查看"));
+        TOOL_TAGS.put("txt_line_range",        new ToolTag("文本",     "提取", "检索查看"));
+        TOOL_TAGS.put("txt_section",           new ToolTag("文本",     "提取", "检索查看"));
+        TOOL_TAGS.put("txt_stats",             new ToolTag("文本",     "分析", "检索查看"));
+        TOOL_TAGS.put("txt_distinct_lines",    new ToolTag("文本",     "转换", "编辑整理"));
+        TOOL_TAGS.put("txt_sort_lines",        new ToolTag("文本",     "转换", "编辑整理"));
+        TOOL_TAGS.put("txt_keyword_freq",      new ToolTag("文本",     "分析", "检索查看"));
+        // md_operate 族（9）
+        TOOL_TAGS.put("md_images",             new ToolTag("Markdown", "提取", "提取解析"));
+        TOOL_TAGS.put("md_headings",           new ToolTag("Markdown", "提取", "提取解析"));
+        TOOL_TAGS.put("md_table",              new ToolTag("Markdown", "提取", "提取解析"));
+        TOOL_TAGS.put("md_list_items",         new ToolTag("Markdown", "提取", "提取解析"));
+        TOOL_TAGS.put("md_tasks",              new ToolTag("Markdown", "提取", "提取解析"));
+        TOOL_TAGS.put("md_emphasis",           new ToolTag("Markdown", "提取", "提取解析"));
+        TOOL_TAGS.put("md_toc",                new ToolTag("Markdown", "生成", "检索查看"));
+        TOOL_TAGS.put("md_filter_section",     new ToolTag("Markdown", "修改", "编辑整理"));
+        TOOL_TAGS.put("md_merge",              new ToolTag("Markdown", "修改", "编辑整理"));
+        // excel_operate 族（10）—— excel_init_temp 当前被 deleteLegacyInitTempSkills 删除；
+        // TOOL_TAGS 保留条目，未来如需重新启用只需在 run() 里补一行 seedFileOperate("excel_init_temp", ...)。
+        TOOL_TAGS.put("excel_init_temp",       new ToolTag("Excel",    "新建", "文件管理"));
+        TOOL_TAGS.put("excel_filter",          new ToolTag("Excel",    "转换", "编辑整理"));
+        TOOL_TAGS.put("excel_sort",            new ToolTag("Excel",    "转换", "编辑整理"));
+        TOOL_TAGS.put("excel_aggregate",       new ToolTag("Excel",    "分析", "计算分析"));
+        TOOL_TAGS.put("excel_pivot",           new ToolTag("Excel",    "分析", "计算分析"));
+        TOOL_TAGS.put("excel_calculate",       new ToolTag("Excel",    "分析", "计算分析"));
+        TOOL_TAGS.put("excel_select_columns",  new ToolTag("Excel",    "修改", "编辑整理"));
+        TOOL_TAGS.put("excel_clean",           new ToolTag("Excel",    "转换", "编辑整理"));
+        TOOL_TAGS.put("excel_convert_format",  new ToolTag("Excel",    "转换", "生成导出"));
+        TOOL_TAGS.put("excel_validate",        new ToolTag("Excel",    "校验", "计算分析"));
+    }
+
+    /** 查表；不在表里返回 null（未知工具不加标签，匹配走全量向量池即可）。 */
+    private static ToolTag tagOf(String toolName) {
+        return TOOL_TAGS.get(toolName);
+    }
+
     /** word_ops 工具的 description（agent-core 透给 LLM） */
     private static final String WORD_OPS_DESCRIPTION =
             "Word 文档操作一体化工具（合并 word_read/word_write/word_extract_content/" +
@@ -383,6 +455,9 @@ public class FileToolSeeder implements ApplicationRunner {
             // 构建 schema_properties JSON（每次启动都用最新版）
             String schemaJson = objectMapper.writeValueAsString(schema);
 
+            // add-skill-tags-and-intent-filtering：从 TOOL_TAGS 读取三维度标签（未命中不影响写入）
+            ToolTag tag = tagOf(toolName);
+
             // 检查是否已存在同名 skill — 已存在则更新 schema（description 和 schema 跟随代码升级）
             // 必须限定 skill_owner_type=2（系统技能），避免误匹配到用户自建的同名技能（ownerType=1）后被当系统技能覆盖。
             // 仅存在用户同名技能时此查询返回 null，走下方 insert 新建一条 ownerType=2 的系统技能行。
@@ -391,10 +466,16 @@ public class FileToolSeeder implements ApplicationRunner {
                             .eq(Skill::getName, toolName)
                             .eq(Skill::getSkillOwnerType, 2));
             if (existing != null) {
-                // 已存在系统技能：直接更新 schema/description/ownerType，不再依据内容是否变化判断。
+                // 已存在系统技能：直接更新 schema/description/ownerType/三标签（add-skill-tags-and-intent-filtering），
+                // 不再依据内容是否变化判断；标签值在 TOOL_TAGS 里改了什么 seed 就在 DB 写什么。
                 existing.setSchemaPropertiesJson(schemaJson);
                 existing.setDescription(description);
                 existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
+                if (tag != null) {
+                    existing.setFileType(tag.fileType);
+                    existing.setOperationIntent(tag.operationIntent);
+                    existing.setBusinessScenario(tag.businessScenario);
+                }
                 skillMapper.updateById(existing);
                 log.info("Updated existing skill: {} (id={})", toolName, existing.getId());
                 return;
@@ -418,6 +499,11 @@ public class FileToolSeeder implements ApplicationRunner {
             skill.setVisibility(SkillVisibility.PUBLIC);
             skill.setCreatedBy(CREATED_BY);
             skill.setSchemaPropertiesJson(schemaJson);
+            if (tag != null) {
+                skill.setFileType(tag.fileType);
+                skill.setOperationIntent(tag.operationIntent);
+                skill.setBusinessScenario(tag.businessScenario);
+            }
 
             skillMapper.insert(skill);
             log.info("Seeded skill: {} (id={}, type={}, kind=file_tool)", toolName, skill.getId(), SKILL_TYPE);
