@@ -77,6 +77,21 @@ function shouldStreamModel(modelName: string): boolean {
 }
 
 /**
+ * 千问模型（qwen/qwen-xl 等）的思考模式（enable_thinking）默认开启，
+ * 会在响应中注入 reasoning_content 导致 token 浪费和响应延迟。
+ * 可通过 .env 设置 QWEN_DISABLE_THINKING=false 开启思考模式。
+ * 千问非思考模型会忽略该参数，安全。
+ */
+function isQwenModel(modelName: string): boolean {
+  if (!modelName) return false;
+  return /^qwen/i.test(modelName);
+}
+
+function shouldDisableQwenThinking(): boolean {
+  return String(process.env.QWEN_DISABLE_THINKING ?? "true").toLowerCase() !== "false";
+}
+
+/**
  * Agent 工厂类
  * 
  * 职责：封装 Agent 创建逻辑，提供统一的 Agent 实例化接口
@@ -167,6 +182,7 @@ export class AgentFactory {
       temperature: 0,
       callbacks: config?.callbacks,
       streaming: useStreaming,
+      ...((isQwenModel(effectiveModelName) && shouldDisableQwenThinking()) ? { modelKwargs: { chat_template_kwargs: { enable_thinking: false } } } : {}),
     });
 
     // 构建主 Agent 的工具列表
@@ -322,6 +338,7 @@ export class AgentFactory {
       temperature: 0,
       callbacks: config?.callbacks,
       streaming: useStreaming,
+      ...((isQwenModel(effectiveModelName) && shouldDisableQwenThinking()) ? { modelKwargs: { chat_template_kwargs: { enable_thinking: false } } } : {}),
     });
 
     // 子 Agent 只加载指定的技能，不加载基础工具
@@ -422,6 +439,7 @@ export class AgentFactory {
       temperature: 0, // 使用确定性输出，便于调试和复现
       callbacks: config?.callbacks,
       streaming: useStreaming, // 流式输出开关（GLM 强制 false）
+      ...((isQwenModel(effectiveModelName) && shouldDisableQwenThinking()) ? { modelKwargs: { chat_template_kwargs: { enable_thinking: false } } } : {}),
     });
 
     // 获取内置技能路由模式
