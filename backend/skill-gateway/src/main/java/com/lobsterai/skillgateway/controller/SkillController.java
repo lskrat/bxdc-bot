@@ -7,6 +7,7 @@ import com.lobsterai.skillgateway.dto.SkillImportRequest;
 import com.lobsterai.skillgateway.dto.SkillImportValidator;
 import com.lobsterai.skillgateway.dto.SkillParseResponse;
 import com.lobsterai.skillgateway.entity.Skill;
+import com.lobsterai.skillgateway.mapper.SkillMapper;
 import com.lobsterai.skillgateway.service.AsyncTaskPollingService;
 import com.lobsterai.skillgateway.service.BuiltinToolExecutionService;
 import com.lobsterai.skillgateway.service.GatewayOutboundAuditService;
@@ -70,6 +71,8 @@ public class SkillController {
 
     private final SkillEmbeddingService skillEmbeddingService;
 
+    private final SkillMapper skillMapper;
+
     public SkillController(
             SkillService skillService,
             SkillParseService skillParseService,
@@ -84,7 +87,8 @@ public class SkillController {
             ObjectMapper objectMapper,
             SkillExecutionService skillExecutionService,
             ConversationService conversationService,
-            SkillEmbeddingService skillEmbeddingService
+            SkillEmbeddingService skillEmbeddingService,
+            SkillMapper skillMapper
     ) {
         this.skillService = skillService;
         this.skillParseService = skillParseService;
@@ -100,6 +104,7 @@ public class SkillController {
         this.skillExecutionService = skillExecutionService;
         this.conversationService = conversationService;
         this.skillEmbeddingService = skillEmbeddingService;
+        this.skillMapper = skillMapper;
     }
 
     // --- Skill Management (CRUD) ---
@@ -160,8 +165,9 @@ public class SkillController {
             return empty;
         }
 
-        // add-skill-tags-and-intent-filtering：tags 不为 null 时走三阶段 match；否则完全等价 e2ac8ce
-        List<SkillEmbeddingService.MatchResult> results = skillEmbeddingService.match(query, tags, limit);
+        // add-skill-tags-and-intent-filtering：tags 透传 + excludeNames 基础工具排除
+        List<SkillEmbeddingService.MatchResult> results = skillEmbeddingService.match(
+                query, tags, limit, request.getExcludeNames());
 
         List<SkillMatchResponse.MatchItem> items = new ArrayList<>();
         for (SkillEmbeddingService.MatchResult r : results) {
@@ -181,6 +187,52 @@ public class SkillController {
         response.setQuery(query);
         response.setMatches(items);
         response.setTotal(results.size());
+        return response;
+    }
+
+    /**
+     * 按技能名称列表 + ownerType 直接数据库查询（不走向量检索）。
+     *
+     * <p>
+     * 用于基础工具（file_list/file_read/file_write）等已知名称的技能快速获取。
+     * 不走 embedding API，无延迟，适合高频调用。
+     * </p>
+     *
+     * @param names    技能名称列表（逗号分隔）
+     * @param ownerType 技能所有者类型（2=系统技能）
+     */
+    @GetMapping("/by-names")
+    public SkillMatchResponse findByNames(
+            @RequestParam("names") String names,
+            @RequestParam(value = "ownerType", defaultValue = "2") int ownerType) {
+        SkillMatchResponse response = new SkillMatchResponse();
+        response.setQuery(names);
+
+        if (names == null || names.trim().isEmpty()) {
+            response.setMatches(Collections.emptyList());
+            response.setTotal(0);
+            return response;
+        }
+
+        java.util.List<String> nameList = java.util.Arrays.asList(names.split(","));
+        java.util.List<Skill> skills = skillMapper.findByNamesAndOwnerType(nameList, ownerType);
+
+        java.util.List<SkillMatchResponse.MatchItem> items = new java.util.ArrayList<>();
+        for (Skill s : skills) {
+            SkillMatchResponse.MatchItem item = new SkillMatchResponse.MatchItem();
+            item.setSkillId(s.getId());
+            item.setName(s.getName());
+            item.setDescription(s.getDescription());
+            item.setType(s.getType());
+            item.setExecutionMode(s.getExecutionMode());
+            item.setRequiresConfirmation(s.isRequiresConfirmation());
+            item.setAvatar(s.getAvatar());
+            item.setScore(0);
+            items.add(item);
+        }
+
+        response.setMatches(items);
+        response.setTotal(items.size());
         return response;
     }
 
