@@ -96,14 +96,15 @@ const executeSkillInputSchema = z.object({
     .optional()
     .describe("OPTIONAL: 1-3 tags from the whitelist below to help narrow skill matching. " +
       "Omit this field entirely if unsure — the system will fall back to vector-only search. " +
-      "Tag whitelist (23 total, must match exactly): " +
+      "Tag whitelist (15 total, must match exactly; mirrors FileToolSeeder.TOOL_TAGS): " +
       "file_type [通用, Word, 文本, Markdown, Excel]; " +
-      "operation_intent [展示, 删除, 读取, 写入, 生成, 提取, 搜索, 修改, 分析, 转换, 新建, 校验]; " +
+      "operation_intent [读取查看, 编辑修改, 创建写入, 分析计算]; " +
       "business_scenario [文件管理, 检索查看, 生成导出, 提取解析, 编辑整理, 计算分析]. " +
       "Any tag NOT in this whitelist is silently dropped. " +
-      "Examples: '在文件末尾追加一行' → tags=['写入']; " +
-      "'删除文件' → tags=['删除','文件管理']; " +
-      "'统计 Excel 销量' → tags=['分析','计算分析']."),
+      "Examples: '在文件末尾追加一行' → tags=['创建写入']; " +
+      "'删除文件' → tags=['编辑修改','文件管理']; " +
+      "'统计 Excel 销量' → tags=['分析计算','计算分析']; " +
+      "'Word 文档替换文字' → tags=['编辑修改','编辑整理']."),
   continueConversation: z
     .boolean()
     .optional()
@@ -149,15 +150,24 @@ interface SkillMatchItem {
 }
 
 /**
- * add-skill-tags-and-intent-filtering：23 标签白名单。
- * 与 FileToolSeeder.TOOL_TAGS 同步；任何分歧在 PR review 阶段拒绝合入。
- * 5 + 12 + 6 = 23。
+ * add-skill-tags-and-intent-filtering：15 标签白名单（与 FileToolSeeder.TOOL_TAGS 镜像）。
+ * 任何分歧在 PR review 阶段拒绝合入。
+ * file_type(5) + operation_intent(4) + business_scenario(6) = 15。
+ *
+ * operation_intent 由 12 个细粒度动作合并为 4 个复合动作：
+ *   - 读取查看 := 读取 / 搜索 / 提取 / 展示
+ *   - 编辑修改 := 修改 / 编辑 / 转换 / 删除 / 复制
+ *   - 创建写入 := 写入 / 生成 / 新建
+ *   - 分析计算 := 分析 / 校验
+ *
+ * 部分工具的 operationIntent 是多值（如 "编辑修改、创建写入"），由 FileToolSeeder.joinOperationIntent
+ * 用 "," 分隔写入 DB，SkillMapper.findIdsByTags 用 FIND_IN_SET 命中任一。
  */
 const INTENT_TAG_WHITELIST: ReadonlySet<string> = new Set<string>([
   // file_type (5)
   "通用", "Word", "文本", "Markdown", "Excel",
-  // operation_intent (12)
-  "展示", "删除", "读取", "写入", "生成", "提取", "搜索", "修改", "分析", "转换", "新建", "校验",
+  // operation_intent (4 复合)
+  "读取查看", "编辑修改", "创建写入", "分析计算",
   // business_scenario (6)
   "文件管理", "检索查看", "生成导出", "提取解析", "编辑整理", "计算分析",
 ]);

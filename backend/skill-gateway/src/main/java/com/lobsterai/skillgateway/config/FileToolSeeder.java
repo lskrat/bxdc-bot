@@ -138,62 +138,80 @@ public class FileToolSeeder implements ApplicationRunner {
      */
     private static class ToolTag {
         final String fileType;
-        final String operationIntent;
+        final java.util.List<String> operationIntent;   // 多值，序列化到 DB 用 "," 分隔（对应 SQL FIND_IN_SET）
         final String businessScenario;
-        ToolTag(String f, String o, String b) {
+        ToolTag(String f, java.util.List<String> o, String b) {
             this.fileType = f;
             this.operationIntent = o;
             this.businessScenario = b;
         }
+        // 单值快捷构造（大多数工具的 operationIntent 只有 1 个）
+        ToolTag(String f, String o, String b) {
+            this(f, java.util.Collections.singletonList(o), b);
+        }
     }
 
-    /** 标签权威源：覆盖本次需求图示的 38 个工具。 */
+    /**
+     * 标签权威源：覆盖本次需求图示的 38 个工具。
+     *
+     * 词表经本次重构收紧：
+     * - file_type(5): 通用 / Word / 文本 / Markdown / Excel
+     * - operation_intent(4 合并): 读取查看 / 编辑修改 / 创建写入 / 分析计算
+     * - business_scenario(6): 文件管理 / 检索查看 / 生成导出 / 提取解析 / 编辑整理 / 计算分析
+     * 合计 15。operation_intent 多值（"编辑修改、创建写入"）以 "," 分隔存储，SQL 用 FIND_IN_SET 命中任一。
+     *
+     * 唯一权威源；agent-core execute-skill.ts 的 INTENT_TAG_WHITELIST 与 tool schema describe 必须镜像此表。
+     */
     private static final java.util.Map<String, ToolTag> TOOL_TAGS = new LinkedHashMap<>();
     static {
+        // 多值快捷构造
+        java.util.List<String> editWrite = java.util.Arrays.asList("编辑修改", "创建写入");
+        java.util.List<String> writeRead = java.util.Arrays.asList("创建写入", "读取查看");
+
         // file_manage 族（7）
-        TOOL_TAGS.put("file_list",             new ToolTag("通用",     "展示", "文件管理"));
-        TOOL_TAGS.put("file_delete",           new ToolTag("通用",     "删除", "文件管理"));
-        TOOL_TAGS.put("file_clear_all",        new ToolTag("通用",     "删除", "文件管理"));
-        TOOL_TAGS.put("file_detail",           new ToolTag("通用",     "读取", "检索查看"));
-        TOOL_TAGS.put("file_read",             new ToolTag("通用",     "读取", "检索查看"));
-        TOOL_TAGS.put("file_write",            new ToolTag("通用",     "写入", "生成导出"));
-        TOOL_TAGS.put("file_init_temp",        new ToolTag("通用",     "生成", "文件管理"));
+        TOOL_TAGS.put("file_list",             new ToolTag("通用",     "读取查看", "文件管理"));
+        TOOL_TAGS.put("file_delete",           new ToolTag("通用",     "编辑修改", "文件管理"));
+        TOOL_TAGS.put("file_clear_all",        new ToolTag("通用",     "编辑修改", "文件管理"));
+        TOOL_TAGS.put("file_detail",           new ToolTag("通用",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("file_read",             new ToolTag("通用",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("file_write",            new ToolTag("通用",     "创建写入", "生成导出"));
+        TOOL_TAGS.put("file_init_temp",        new ToolTag("通用",     "创建写入", "文件管理"));
         // word_operate 族（4）
-        TOOL_TAGS.put("word_extract_content",  new ToolTag("Word",     "提取", "提取解析"));
-        TOOL_TAGS.put("word_search_keyword",   new ToolTag("Word",     "搜索", "检索查看"));
-        TOOL_TAGS.put("word_replace_text",     new ToolTag("Word",     "修改", "编辑整理"));
-        TOOL_TAGS.put("word_template_fill",    new ToolTag("Word",     "写入", "生成导出"));
+        TOOL_TAGS.put("word_extract_content",  new ToolTag("Word",     "读取查看", "提取解析"));
+        TOOL_TAGS.put("word_search_keyword",   new ToolTag("Word",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("word_replace_text",     new ToolTag("Word",     "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("word_template_fill",    new ToolTag("Word",     "创建写入", "生成导出"));
         // txt_operate 族（8）
-        TOOL_TAGS.put("txt_keyword_lines",     new ToolTag("文本",     "搜索", "检索查看"));
-        TOOL_TAGS.put("txt_regex",             new ToolTag("文本",     "提取", "检索查看"));
-        TOOL_TAGS.put("txt_line_range",        new ToolTag("文本",     "提取", "检索查看"));
-        TOOL_TAGS.put("txt_section",           new ToolTag("文本",     "提取", "检索查看"));
-        TOOL_TAGS.put("txt_stats",             new ToolTag("文本",     "分析", "检索查看"));
-        TOOL_TAGS.put("txt_distinct_lines",    new ToolTag("文本",     "转换", "编辑整理"));
-        TOOL_TAGS.put("txt_sort_lines",        new ToolTag("文本",     "转换", "编辑整理"));
-        TOOL_TAGS.put("txt_keyword_freq",      new ToolTag("文本",     "分析", "检索查看"));
+        TOOL_TAGS.put("txt_keyword_lines",     new ToolTag("文本",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("txt_regex",             new ToolTag("文本",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("txt_line_range",        new ToolTag("文本",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("txt_section",           new ToolTag("文本",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("txt_stats",             new ToolTag("文本",     "分析计算", "检索查看"));
+        TOOL_TAGS.put("txt_distinct_lines",    new ToolTag("文本",     editWrite,   "编辑整理"));
+        TOOL_TAGS.put("txt_sort_lines",        new ToolTag("文本",     editWrite,   "编辑整理"));
+        TOOL_TAGS.put("txt_keyword_freq",      new ToolTag("文本",     "分析计算", "检索查看"));
         // md_operate 族（9）
-        TOOL_TAGS.put("md_images",             new ToolTag("Markdown", "提取", "提取解析"));
-        TOOL_TAGS.put("md_headings",           new ToolTag("Markdown", "提取", "提取解析"));
-        TOOL_TAGS.put("md_table",              new ToolTag("Markdown", "提取", "提取解析"));
-        TOOL_TAGS.put("md_list_items",         new ToolTag("Markdown", "提取", "提取解析"));
-        TOOL_TAGS.put("md_tasks",              new ToolTag("Markdown", "提取", "提取解析"));
-        TOOL_TAGS.put("md_emphasis",           new ToolTag("Markdown", "提取", "提取解析"));
-        TOOL_TAGS.put("md_toc",                new ToolTag("Markdown", "生成", "检索查看"));
-        TOOL_TAGS.put("md_filter_section",     new ToolTag("Markdown", "修改", "编辑整理"));
-        TOOL_TAGS.put("md_merge",              new ToolTag("Markdown", "修改", "编辑整理"));
+        TOOL_TAGS.put("md_images",             new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_headings",           new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_table",              new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_list_items",         new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_tasks",              new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_emphasis",           new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_toc",                new ToolTag("Markdown", writeRead,   "检索查看"));
+        TOOL_TAGS.put("md_filter_section",     new ToolTag("Markdown", "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("md_merge",              new ToolTag("Markdown", editWrite,   "编辑整理"));
         // excel_operate 族（10）—— excel_init_temp 当前被 deleteLegacyInitTempSkills 删除；
         // TOOL_TAGS 保留条目，未来如需重新启用只需在 run() 里补一行 seedFileOperate("excel_init_temp", ...)。
-        TOOL_TAGS.put("excel_init_temp",       new ToolTag("Excel",    "新建", "文件管理"));
-        TOOL_TAGS.put("excel_filter",          new ToolTag("Excel",    "转换", "编辑整理"));
-        TOOL_TAGS.put("excel_sort",            new ToolTag("Excel",    "转换", "编辑整理"));
-        TOOL_TAGS.put("excel_aggregate",       new ToolTag("Excel",    "分析", "计算分析"));
-        TOOL_TAGS.put("excel_pivot",           new ToolTag("Excel",    "分析", "计算分析"));
-        TOOL_TAGS.put("excel_calculate",       new ToolTag("Excel",    "分析", "计算分析"));
-        TOOL_TAGS.put("excel_select_columns",  new ToolTag("Excel",    "修改", "编辑整理"));
-        TOOL_TAGS.put("excel_clean",           new ToolTag("Excel",    "转换", "编辑整理"));
-        TOOL_TAGS.put("excel_convert_format",  new ToolTag("Excel",    "转换", "生成导出"));
-        TOOL_TAGS.put("excel_validate",        new ToolTag("Excel",    "校验", "计算分析"));
+        TOOL_TAGS.put("excel_init_temp",       new ToolTag("Excel",    "创建写入", "文件管理"));
+        TOOL_TAGS.put("excel_filter",          new ToolTag("Excel",    "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("excel_sort",            new ToolTag("Excel",    "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("excel_aggregate",       new ToolTag("Excel",    "分析计算", "计算分析"));
+        TOOL_TAGS.put("excel_pivot",           new ToolTag("Excel",    "分析计算", "计算分析"));
+        TOOL_TAGS.put("excel_calculate",       new ToolTag("Excel",    "分析计算", "计算分析"));
+        TOOL_TAGS.put("excel_select_columns",  new ToolTag("Excel",    "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("excel_clean",           new ToolTag("Excel",    "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("excel_convert_format",  new ToolTag("Excel",    editWrite,   "生成导出"));
+        TOOL_TAGS.put("excel_validate",        new ToolTag("Excel",    "分析计算", "计算分析"));
     }
 
     /** 查表；不在表里返回 null（未知工具不加标签，匹配走全量向量池即可）。 */
@@ -473,7 +491,8 @@ public class FileToolSeeder implements ApplicationRunner {
                 existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
                 if (tag != null) {
                     existing.setFileType(tag.fileType);
-                    existing.setOperationIntent(tag.operationIntent);
+                    // operationIntent 多值用 "," 分隔存储；SQL 用 FIND_IN_SET 命中任一
+                    existing.setOperationIntent(joinOperationIntent(tag.operationIntent));
                     existing.setBusinessScenario(tag.businessScenario);
                 }
                 skillMapper.updateById(existing);
@@ -501,7 +520,8 @@ public class FileToolSeeder implements ApplicationRunner {
             skill.setSchemaPropertiesJson(schemaJson);
             if (tag != null) {
                 skill.setFileType(tag.fileType);
-                skill.setOperationIntent(tag.operationIntent);
+                // operationIntent 多值用 "," 分隔存储；SQL 用 FIND_IN_SET 命中任一
+                skill.setOperationIntent(joinOperationIntent(tag.operationIntent));
                 skill.setBusinessScenario(tag.businessScenario);
             }
 
@@ -510,6 +530,12 @@ public class FileToolSeeder implements ApplicationRunner {
         } catch (Exception e) {
             log.error("Failed to seed skill '{}': {}", toolName, e.getMessage());
         }
+    }
+
+    /** 把 ToolTag.operationIntent 列表拼成 "," 分隔字符串写入 DB 列（对应 SQL FIND_IN_SET）。 */
+    private static String joinOperationIntent(java.util.List<String> list) {
+        if (list == null || list.isEmpty()) return null;
+        return String.join(",", list);
     }
 
     // ========== Schema 定义 ==========

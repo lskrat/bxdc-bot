@@ -94,10 +94,13 @@ public interface SkillMapper extends BaseMapper<Skill> {
         "    <foreach collection=\"tags\" item=\"t\" open=\"(\" separator=\",\" close=\")\">",
         "      #{t}",
         "    </foreach>",
+        // operation_intent 列里多值用 "," 分隔（FileToolSeeder.joinOperationIntent），
+        // 同时支持 IN 精确匹配（单值）和 FIND_IN_SET 子段匹配（多值）。任一命中即入选。
         "    OR operation_intent IN ",
         "    <foreach collection=\"tags\" item=\"t\" open=\"(\" separator=\",\" close=\")\">",
         "      #{t}",
         "    </foreach>",
+        "    OR <foreach collection=\"tags\" item=\"t\" separator=\" OR \">FIND_IN_SET(#{t}, operation_intent) > 0</foreach>",
         "    OR business_scenario IN ",
         "    <foreach collection=\"tags\" item=\"t\" open=\"(\" separator=\",\" close=\")\">",
         "      #{t}",
