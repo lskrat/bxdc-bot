@@ -53,19 +53,19 @@ public class FileToolSeeder implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         // ===== 文件管理 =====
-        seedFileManage("file_list", "列出用户已上传的文件，支持类型过滤、关键词搜索、排序和分页",
+        seedFileManage("file_list", "文件列表查询工具：列出/搜索/筛选用户已上传文件，支持按文件类型、文件名关键词、上传时间、大小排序和分页；用于找文件、查看有哪些文件、获取候选文件 ID。",
                 fileListSchema());
-        seedFileManage("file_delete", "删除指定文件，支持文件ID或文件名引用，需要二次确认",
+        seedFileManage("file_delete", "文件删除工具：按 fileId 或文件名删除指定文件，需要二次确认；用于删除、移除、清理单个文件。",
                 fileDeleteSchema());
-        seedFileManage("file_clear_all", "清空当前会话内的所有文件，需要二次确认",
+        seedFileManage("file_clear_all", "批量清空文件工具：清空当前会话内所有文件，需要二次确认；用于批量删除、清理会话文件。",
                 confirmedOnlySchema());
-        seedFileManage("file_detail", "查看文件详情，包括名称、大小、类型、上传时间、下载链接",
+        seedFileManage("file_detail", "文件详情查看工具：查看指定文件的名称、大小、类型、上传时间、解析摘要、downloadUrl 和 fileId；用于确认文件信息、获取下载链接。",
                 fileDetailSchema());
-        seedFileManage("file_init_temp", "初始化文件临时副本，复制源文件供后续修改操作使用，支持所有文件类型",
+        seedFileManage("file_init_temp", "文件临时副本初始化工具：为 Word/Excel/Markdown/文本等源文件创建可编辑临时副本，供后续替换、筛选、排序、清洗、合并等修改操作使用。",
                 fileRefSchema());
-        seedFileOperate("file_read", "通用文件读取工具，根据文件类型自动路由到对应处理器，支持 txt/md/log/html/docx/doc/xlsx/xls/csv",
+        seedFileOperate("file_read", "通用文件读取查看工具：按文件类型自动读取 txt/md/log/html/doc/docx/xls/xlsx/csv 内容；用于打开文件、查看全文、读取表格分页、预览文档内容。",
                 fileReadSchema());
-        seedFileOperate("file_write", "通用文件写入工具，根据文件类型自动路由到对应处理器。支持 txt/md/log/html/docx/xlsx/csv 格式。用于生成数据分析报告、统计结果报告、文本内容输出、创建 Word 文档、创建 Excel 表格等场景。Word 文档支持 Markdown 格式输入（标题、列表、表格、加粗），Excel 支持多工作表操作",
+        seedFileOperate("file_write", "通用文件生成写入工具：创建或覆盖/追加文本、Markdown、Word、Excel、CSV 文件；用于生成报告、导出统计结果、写入分析结论、创建 Word 文档或 Excel 表格。",
                 fileWriteSchema());
 
         // 删除旧的初始化方法（已合并为 file_init_temp）
@@ -82,39 +82,39 @@ public class FileToolSeeder implements ApplicationRunner {
         rollbackWordOpsIntegration();
 
         // ===== TXT/MD/LOG/HTML 操作 =====
-        seedFileOperate("txt_keyword_lines", "提取文本文件中包含指定关键词的行，支持上下文展示", txtKeywordLinesSchema());
-        seedFileOperate("txt_regex", "用正则表达式匹配文本行并提取捕获组", txtRegexSchema());
-        seedFileOperate("txt_line_range", "提取文本文件中指定行范围的内容", txtLineRangeSchema());
-        seedFileOperate("txt_section", "提取 Markdown 文件的标题章节内容", txtSectionSchema());
-        seedFileOperate("txt_stats", "统计文本文件的字符数、词数、行数、字节数");
-        seedFileOperate("txt_distinct_lines", "对文本文件的行进行去重操作", txtDistinctLinesSchema());
-        seedFileOperate("txt_sort_lines", "对文本文件的行进行排序操作", txtSortLinesSchema());
-        seedFileOperate("txt_keyword_freq", "统计关键词在文本文件中的出现频率", txtKeywordFreqSchema());
+        seedFileOperate("txt_keyword_lines", "文本关键词行提取工具：从 txt/log/html/md 等文本文件中搜索包含关键词的行，并可返回上下文；用于日志检索、文本查找。", txtKeywordLinesSchema());
+        seedFileOperate("txt_regex", "文本正则匹配工具：用正则表达式搜索文本行并提取捕获组；用于提取编号、日期、邮箱、日志字段等结构化片段。", txtRegexSchema());
+        seedFileOperate("txt_line_range", "文本行范围读取工具：按起止行号提取 txt/log/md/html 内容；用于查看指定行、截取片段、读取文件局部内容。", txtLineRangeSchema());
+        seedFileOperate("txt_section", "Markdown 章节提取工具：按标题提取 Markdown 指定章节，可包含子标题；用于读取某一节、抽取文档章节内容。", txtSectionSchema());
+        seedFileOperate("txt_stats", "文本统计分析工具：统计文本文件字符数、词数、行数、字节数；用于文本长度分析、日志规模统计。");
+        seedFileOperate("txt_distinct_lines", "文本行去重工具：对 txt/log/md 行内容去重，可控制大小写和空行；用于清洗重复行、整理名单或日志。", txtDistinctLinesSchema());
+        seedFileOperate("txt_sort_lines", "文本行排序工具：对文本行按字典序或数字排序，支持升序/降序；用于整理列表、排序日志或数据行。", txtSortLinesSchema());
+        seedFileOperate("txt_keyword_freq", "文本关键词频率统计工具：统计多个关键词在文本中的出现次数；用于词频分析、日志关键字统计。", txtKeywordFreqSchema());
 
         // ===== MD 扩展操作 =====
-        seedFileOperate("md_images", "提取 Markdown 文件中的所有图片引用");
-        seedFileOperate("md_headings", "提取 Markdown 文件的全层级标题结构");
-        seedFileOperate("md_table", "提取 Markdown 文件中的 GFM 表格数据");
-        seedFileOperate("md_list_items", "提取 Markdown 文件中的所有列表项");
-        seedFileOperate("md_tasks", "提取 Markdown 文件中的任务清单项");
-        seedFileOperate("md_emphasis", "提取 Markdown 文件中的加粗、斜体、删除线和行内代码");
-        seedFileOperate("md_toc", "生成 Markdown 文档的目录大纲");
+        seedFileOperate("md_images", "Markdown 图片引用提取工具：提取 Markdown 中所有图片链接和 alt 文本；用于检查文档图片、整理图片资源。");
+        seedFileOperate("md_headings", "Markdown 标题大纲提取工具：提取全层级标题结构；用于生成文档结构、查看目录层级。");
+        seedFileOperate("md_table", "Markdown 表格提取工具：解析 GFM 表格内容；用于读取 Markdown 表格、抽取表格数据。");
+        seedFileOperate("md_list_items", "Markdown 列表项提取工具：提取有序/无序列表内容；用于整理清单、抽取列表。");
+        seedFileOperate("md_tasks", "Markdown 任务清单提取工具：提取 - [ ] / - [x] 任务项及完成状态；用于检查 todo、任务列表。");
+        seedFileOperate("md_emphasis", "Markdown 强调标记提取工具：提取加粗、斜体、删除线和行内代码；用于分析重点文本和代码片段。");
+        seedFileOperate("md_toc", "Markdown 目录生成工具：根据 #/##/### 标题生成 TOC 目录大纲；关键词：目录、TOC、大纲、标题导航。只生成目录，不提取正文章节。");
         seedFileOperate("md_filter_section",
-                "删除或保留 Markdown 文件中指定标题的整节内容，支持 remove 或 keep 参数",
+                "Markdown 章节过滤工具：按标题删除或保留整节内容；用于裁剪文档、保留指定章节、移除无关章节。",
                 mdFilterSectionSchema());
-        seedFileOperate("md_merge", "合并多个 Markdown 文件到一个文件",
+        seedFileOperate("md_merge", "Markdown 合并工具：合并多个 Markdown 文件为一个新文件；用于拼接文档、汇总多篇笔记。",
                 mdMergeSchema());
 
         // ===== Excel 操作（支持 xlsx/xls/csv）=====
-        seedFileOperate("excel_filter", "按条件筛选 Excel 数据行，支持多种比较操作符，用于筛选特定条件的数据、过滤数据、按字段条件查询等场景", excelFilterSchema());
-        seedFileOperate("excel_sort", "按指定列对 Excel 数据进行排序，支持升序和降序，用于数据排序、按字段排序输出等场景", excelSortSchema());
-        seedFileOperate("excel_aggregate", "按列分组聚合 Excel 数据，支持 sum/avg/count/min/max，用于数据统计分析、多维统计、数据分布分析等场景", excelAggregateSchema());
-        seedFileOperate("excel_pivot", "对 Excel 数据进行透视分析，交叉汇总行列数据", excelPivotSchema());
-        seedFileOperate("excel_calculate", "在 Excel 中进行列运算，支持引用其他列生成新计算列", excelCalculateSchema());
-        seedFileOperate("excel_select_columns", "选择并保留 Excel 中指定的列，删除其余列", excelSelectColumnsSchema());
-        seedFileOperate("excel_clean", "对 Excel 数据进行清洗，支持去空格、去重、删空行", excelCleanSchema());
-        seedFileOperate("excel_convert_format", "转换 Excel 文件格式，支持 xlsx/xls/csv 互转", excelConvertFormatSchema());
-        seedFileOperate("excel_validate", "按规则校验 Excel 数据合规性，返回校验结果", excelValidateSchema());
+        seedFileOperate("excel_filter", "Excel/xlsx/xls/csv 表格行筛选工具：按列条件查询、过滤并保留符合条件的数据行，支持大于/小于/等于/包含等比较；关键词：筛选、过滤、查询、查找、条件、保留行。只做行筛选，不做排序、汇总、透视。", excelFilterSchema());
+        seedFileOperate("excel_sort", "Excel/xlsx/xls/csv 表格排序工具：按指定列对数据升序或降序排序；关键词：排序、整理、升降序、按字段排序。只调整行顺序，不做筛选/统计。", excelSortSchema());
+        seedFileOperate("excel_aggregate", "Excel/xlsx/xls/csv 分组聚合统计工具：按一个或多个字段 group by，计算 sum/avg/count/min/max；关键词：统计、汇总、分组、聚合、合计、平均值、数量。用于普通分组汇总，不做行列交叉透视。", excelAggregateSchema());
+        seedFileOperate("excel_pivot", "Excel/xlsx/xls/csv 透视交叉分析工具：按行字段和列字段生成二维交叉汇总表；关键词：透视表、交叉统计、行列汇总、多维分析。用于 pivot，不是普通 group by 聚合。", excelPivotSchema());
+        seedFileOperate("excel_calculate", "Excel/xlsx/xls/csv 列计算工具：基于已有列生成新计算列；关键词：计算、派生列、公式、金额计算、比例计算。是新增计算列，不是统计汇总。", excelCalculateSchema());
+        seedFileOperate("excel_select_columns", "Excel/xlsx/xls/csv 列选择工具：保留指定列并删除其余列；用于裁剪字段、导出部分列。是列裁剪，不是行筛选。", excelSelectColumnsSchema());
+        seedFileOperate("excel_clean", "Excel/xlsx/xls/csv 数据清洗工具：去空格、去重、删除空行等；用于清理脏数据、整理表格。是去重/去空/去空格，不做业务计算。", excelCleanSchema());
+        seedFileOperate("excel_convert_format", "Excel 格式转换工具：在 xlsx/xls/csv 之间转换并生成文件；用于表格格式转换、导出 CSV 或 Excel。", excelConvertFormatSchema());
+        seedFileOperate("excel_validate", "Excel 数据校验工具：按规则检查表格数据合规性并返回校验结果；用于空值、格式、范围、重复数据检查。是检查问题，不修改数据。", excelValidateSchema());
     }
 
     // ========== 整合方案 B：word_ops 单一入口 ==========
@@ -295,12 +295,12 @@ public class FileToolSeeder implements ApplicationRunner {
         }
 
         // 3. 重新 seed 4 个老 word_*（word_read/word_write 已合并到 file_read/file_write）
-        seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容，包括标题大纲、表格、图片");
-        seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回匹配结果及上下文",
+        seedFileOperate("word_extract_content", "Word/doc/docx 内容提取工具：从 doc/docx 提取标题大纲、段落文本、表格和图片信息；用于解析 Word 结构、抽取文档内容。");
+        seedFileOperate("word_search_keyword", "Word/doc/docx 关键词搜索工具：在 doc/docx 中查找关键词并返回上下文；用于检索合同、报告、文档中的指定文字。",
                 keywordSearchSchema());
-        seedFileOperate("word_replace_text", "替换 Word 文档中的文本内容，支持全部替换或仅替换第一个",
+        seedFileOperate("word_replace_text", "Word/doc/docx 文档文本替换工具：把 oldText 替换成 newText，支持替换首个或全部匹配；关键词：替换、修改、更新、改文字、批量替换。只做已有文档内容修改，不用于模板占位符填充。",
                 replaceTextSchema());
-        seedFileOperate("word_template_fill", "用数据填充 Word 文档中的占位符（{{placeholder}} 格式）",
+        seedFileOperate("word_template_fill", "Word/doc/docx 模板占位符填充工具：用 values 填充 {{placeholder}} 占位符生成/更新文档；关键词：模板、占位符、填充、生成合同、生成报告。只处理占位符，不做普通文本查找替换。",
                 templateFillSchema());
     }
 
