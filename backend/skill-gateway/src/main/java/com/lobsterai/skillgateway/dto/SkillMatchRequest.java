@@ -16,6 +16,8 @@ public class SkillMatchRequest {
      * 可选——不传 = tags = null，走 e2ac8ce 原路径。
      */
     private List<String> tags;
+    /** 需要排除的技能名称列表（如 file_list/file_read/file_write），不占用向量检索的 top-K 槽位 */
+    private List<String> excludeNames;
 
     public String getQuery() {
         return query;
@@ -46,5 +48,13 @@ public class SkillMatchRequest {
 
     public void setTags(List<String> tags) {
         this.tags = tags;
+    }
+
+    public List<String> getExcludeNames() {
+        return excludeNames;
+    }
+
+    public void setExcludeNames(List<String> excludeNames) {
+        this.excludeNames = excludeNames;
     }
 }

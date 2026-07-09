@@ -209,44 +209,24 @@ public class SkillEmbeddingService {
     }
 
     /**
-     * 向量检索：根据 query 查找最匹配的技能。
-     *
-     * @param query 检索文本（LLM 提炼的关键词或简短描述）
-     * @param limit 返回数量上限
-     * @return 按分数降序排列的匹配结果列表；embedding 不可用时返回空列表
+     * 向量检索：根据 query 查找最匹配的技能（兼容旧调用）。
      */
     public List<MatchResult> match(String query, int limit) {
-        // 保持向后兼容：旧调用方不传 tags 时完全等价 e2ac8ce
-        return match(query, null, limit);
+        return match(query, null, limit, null);
     }
 
     /**
-     * 向量检索（使用默认 limit）。
-     */
-    public List<MatchResult> match(String query) {
-        return match(query, null, DEFAULT_MATCH_LIMIT);
-    }
-
-    /**
-     * 三阶段管线：根据 query + 可选 tags 查找最匹配的技能。
-     * <p>
-     * 阶段 1（add-skill-tags-and-intent-filtering）：SQL 硬筛。
-     *   tags 非空时按 file_type/operation_intent/business_scenario 三列 OR IN 匹配
-     *   skill_owner_type=2 的技能 ID，候选集 < MIN_CANDIDATE_SIZE 时降级全量向量池。
-     * </p>
-     * <p>
-     * 阶段 2：保留 e2ac8ce 的 cosine + 关键词 hybrid 打分。
-     *   阶段 1 命中时仅对候选集打分，候选集为 null 时全量打分。
-     * </p>
-     * <p>
-     * 阶段 3：按 search_weight 加权排序取 top-K。
-     * </p>
+     * 向量检索 + 标签硬筛 + 名称排除。
      *
-     * @param query 检索文本
-     * @param tags 可选标签（null/空 = 阶段 1 完全跳过 = 等价 e2ac8ce）
-     * @param limit 返回数量上限
+     * add-skill-tags-and-intent-filtering（tags）+ 基础工具排除（excludeNames）
+     * 合并为一个入口，避免多个 overload 的参数语义混乱。
+     *
+     * @param query        检索文本
+     * @param tags         可选标签（null = 不走 SQL 硬筛）
+     * @param limit        返回数量上限
+     * @param excludeNames 需要排除的技能名称（null = 不排除），排除在 top-K 截取前
      */
-    public List<MatchResult> match(String query, List<String> tags, int limit) {
+    public List<MatchResult> match(String query, List<String> tags, int limit, List<String> excludeNames) {
         if (!initialized || index.isEmpty()) {
             log.warn("[SkillEmbedding] Index not initialized or empty, returning empty result");
             return Collections.emptyList();
@@ -281,32 +261,49 @@ public class SkillEmbeddingService {
             }
         }
 
-        // 1. 生成 query embedding
-        float[] queryEmbedding = embeddingService.embedWithDefault(query.trim());
+        // 构建排除名称集合（小写，用于大小写不敏感匹配）
+        java.util.Set<String> excludeSet = (excludeNames != null && !excludeNames.isEmpty())
+                ? excludeNames.stream().map(String::toLowerCase).collect(Collectors.toSet())
+                : Collections.emptySet();
+
+        // 1. 生成 query embedding；异常时降级为纯关键词匹配兜底
+        float[] queryEmbedding = null;
+        boolean embeddingAvailable = true;
+        try {
+            queryEmbedding = embeddingService.embedWithDefault(query.trim());
+        } catch (Exception e) {
+            log.warn("[SkillEmbedding] Embedding API exception: {}, fallback to keyword-only matching", e.getMessage());
+        }
         if (queryEmbedding == null) {
-            log.warn("[SkillEmbedding] Failed to embed query, returning empty result");
-            return Collections.emptyList();
+            log.warn("[SkillEmbedding] Embedding API unavailable, fallback to keyword-only matching");
+            embeddingAvailable = false;
         }
 
-        // 2. 计算所有（或候选集内的）技能的混合分数（语义相似度 + 关键词匹配）
+        // 2. 计算所有（或候选集内的）技能的分数
+        //    正常：语义相似度 + 关键词混合评分
+        //    兜底：纯关键词匹配（keywordScore × searchWeight）
         List<MatchResult> results = new ArrayList<>();
         for (SkillVector sv : index.values()) {
             // 阶段 1 命中时跳过非候选集；tags==null 时对全量打分（兼容 e2ac8ce）
             if (candidates != null && !candidates.contains(sv.skillId)) {
                 continue;
             }
-            if (sv.embedding == null) continue;
-            double semanticScore = embeddingService.cosineSimilarity(queryEmbedding, sv.embedding);
-            if (semanticScore < MIN_SIMILARITY) continue;
+            // 排除指定名称的技能（不参与评分，不占用 top-K 槽位）
+            if (!excludeSet.isEmpty() && sv.name != null && excludeSet.contains(sv.name.toLowerCase())) continue;
 
-            // 计算关键词匹配分数
             double keywordScore = calculateKeywordScore(query, sv);
 
-            // 混合分数 = 语义相似度 × 语义权重 + 关键词匹配分数 × 关键词权重
-            double hybridScore = (semanticScore * SEMANTIC_WEIGHT) + (keywordScore * KEYWORD_WEIGHT);
-
-            // 最终分数 = 混合分数 × 搜索权重
-            double finalScore = hybridScore * sv.searchWeight;
+            double finalScore;
+            if (embeddingAvailable && sv.embedding != null) {
+                double semanticScore = embeddingService.cosineSimilarity(queryEmbedding, sv.embedding);
+                if (semanticScore < MIN_SIMILARITY) continue;
+                double hybridScore = (semanticScore * SEMANTIC_WEIGHT) + (keywordScore * KEYWORD_WEIGHT);
+                finalScore = hybridScore * sv.searchWeight;
+            } else {
+                // 兜底：纯关键词匹配（无需 embedding）
+                if (keywordScore <= 0) continue;
+                finalScore = keywordScore * sv.searchWeight;
+            }
 
             MatchResult mr = new MatchResult();
             mr.skillId = sv.skillId;
@@ -323,18 +320,19 @@ public class SkillEmbeddingService {
         // 3. 按分数降序排序，取 top-K
         results.sort(Comparator.comparingDouble((MatchResult r) -> r.score).reversed());
 
-        // 4. 过滤 score<=0 的噪声结果（hybridScore=0 或 searchWeight=0 的工具）
-        // 保留 0.25 阈值放行的真正相关工具，去掉 BGE 判为完全不相关却被 searchWeight 拉进来的死阳性。
-        // 不加锚定/-0.15 之类的二次门槛，避免误伤边综 case（如补充工具 0.35）。
+        // 4. 过滤 score<=0 的噪声结果
         int beforeFilter = results.size();
         List<MatchResult> filtered = results.stream()
                 .filter(r -> r.score > 0.0)
                 .limit(actualLimit)
                 .collect(Collectors.toList());
 
-        log.info("[SkillEmbedding] Query '{}' matched {}/{} skills (top-{}, after score>0 filter {}=>{} )",
+        log.info("[SkillEmbedding] Query '{}' matched {}/{} skills (top-{}, tags={}, exclude={}){}{}",
                 query.length() > 60 ? query.substring(0, 60) + "..." : query,
-                filtered.size(), beforeFilter, actualLimit, beforeFilter, filtered.size());
+                filtered.size(), beforeFilter, actualLimit,
+                tags, excludeSet,
+                candidates != null ? " [SQL filtered]" : "",
+                embeddingAvailable ? "" : " [KEYWORD FALLBACK]");
 
         return filtered;
     }

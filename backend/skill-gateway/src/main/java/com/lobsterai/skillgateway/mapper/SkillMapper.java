@@ -57,6 +57,17 @@ public interface SkillMapper extends BaseMapper<Skill> {
     }
 
     /**
+     * 按技能名称列表 + ownerType 查询已启用的技能（直接数据库查询，不走向量检索）。
+     * 用于基础工具（file_list/file_read/file_write）等已知名称的技能快速获取。
+     */
+    default List<Skill> findByNamesAndOwnerType(List<String> names, Integer ownerType) {
+        return selectList(new QueryWrapper<Skill>()
+                .in("name", names)
+                .eq("skill_owner_type", ownerType)
+                .eq("enabled", true));
+    }
+
+    /**
      * 按 ID 列表查询「该用户可见 + enabled=true」的技能（主 Agent 加载会话勾选技能用）。
      * 可见性规则与 {@link #findVisibleSummaryForUserByOwnerType} 一致：PUBLIC / 自己创建的 PRIVATE / 所在 TEAM。
      */

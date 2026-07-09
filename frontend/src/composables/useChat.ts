@@ -583,10 +583,15 @@ export function provideChat() {
     updateLastAssistantMessage((last) => {
       const toolInvocations = [...(last.toolInvocations ?? [])]
       if (toolEvent.parentToolId || toolEvent.parentToolName) {
+        // 先按 parentToolId 精确匹配；找不到时，只有当未提供 parentToolId 时才按 parentToolName 回退
+        // 原因：并行 execute_skill_with_context 调用有各自的 invocationId（parentToolId），
+        // 名字回退会把所有并行调用的子工具误挂到第一个同名父节点下
         const parentIndex = toolInvocations.findIndex((tool) => tool.id === toolEvent.parentToolId)
         const fallbackParentIndex = parentIndex >= 0
           ? parentIndex
-          : toolInvocations.findIndex((tool) => tool.name === toolEvent.parentToolName)
+          : (!toolEvent.parentToolId && toolEvent.parentToolName)
+            ? toolInvocations.findIndex((tool) => tool.name === toolEvent.parentToolName)
+            : -1
         const targetParentIndex = parentIndex >= 0 ? parentIndex : fallbackParentIndex
         const parent: ToolInvocation = targetParentIndex >= 0 && toolInvocations[targetParentIndex]
           ? toolInvocations[targetParentIndex]

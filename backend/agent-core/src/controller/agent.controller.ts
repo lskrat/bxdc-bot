@@ -58,6 +58,7 @@ import {
   setActiveParentToolId,
   getActiveThinkId,
   emitThinkEndEvent,
+  pushInvocationId,
   type ToolTraceEvent,
 } from '../tools/tool-trace-context';
 import { pickMergedLlm } from '../utils/llm-merge';
@@ -576,9 +577,14 @@ export class AgentController {
 
     const gatewayToolInfo = describeGatewayExtendedTool(toolCall.toolName);
     const toolInfo = gatewayToolInfo ?? this.skillManager.describeTool(toolCall.toolName);
+    // 并行 execute_skill_with_context：控制器 push LLM tool_call ID → func 端 pop 消费
+    if (toolCall.toolName === 'execute_skill_with_context' && toolCall.status === 'running') {
+      pushInvocationId('execute_skill_with_context', toolCall.toolId);
+    }
+    const effectiveToolId = toolCall.toolId;
     const event: ToolTraceEvent = {
       type: 'tool_status',
-      toolId: toolCall.toolId,
+      toolId: effectiveToolId,
       toolName: toolCall.toolName,
       displayName: toolInfo.displayName,
       kind: toolInfo.kind,
@@ -590,7 +596,7 @@ export class AgentController {
     };
 
     if (toolCall.status === 'running') {
-      setActiveParentToolId(toolCall.toolName, toolCall.toolId);
+      setActiveParentToolId(toolCall.toolName, effectiveToolId);
       toolCallStartTimes.set(toolCall.toolId, Date.now());
       console.log(`[ToolCallLog] Tool started: ${toolCall.toolName}, toolId: ${toolCall.toolId}, sessionId: ${sessionId}`);
     } else {
@@ -706,14 +712,14 @@ export class AgentController {
               llmApiKey: llmConfig.llmApiKey,
             };
           }
-          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId, memoryEnabled);
+          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, conversationId, memoryEnabled);
         })
         .catch((e) => {
           console.error('[agent] Error fetching LLM config:', e);
-          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId, memoryEnabled);
+          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, conversationId, memoryEnabled);
         });
     } else {
-      this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId, memoryEnabled);
+      this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, conversationId, memoryEnabled);
     }
 
     return subject.asObservable();
@@ -765,7 +771,6 @@ export class AgentController {
     subject: Subject<MessageEvent>,
     gatewayUrl: string,
     apiToken: string,
-    enabledSkillIds?: number[],
     conversationId?: string,
     memoryEnabled: boolean = true,
   ) {
@@ -846,7 +851,6 @@ export class AgentController {
               ...(slashHit.matched ? { forcedSkillIds: [slashHit.skillId] } : {}),
             },
             userId,
-            enabledSkillIds,
           );
 
           // 记忆开关：关闭时不检索记忆（保持远端 c8d9330 的 new structure 不变）

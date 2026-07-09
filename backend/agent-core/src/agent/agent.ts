@@ -138,7 +138,6 @@ export class AgentFactory {
     openAiApiKey: string,
     config?: { modelName?: string, baseUrl?: string, callbacks?: any[], sessionId?: string, conversationId?: string, forcedSkillIds?: number[] },
     userId?: string,
-    enabledSkillIds?: number[]
   ): Promise<{
     agent: ReturnType<typeof createReactAgent>;
     plannerModel: ChatOpenAI;
@@ -183,7 +182,7 @@ export class AgentFactory {
       new ExecuteSkillWithContextTool(gatewayUrl, apiToken, openAiApiKey, {
         modelName: config?.modelName,
         baseUrl: config?.baseUrl,
-      }, userId, config?.conversationId, enabledSkillIds),
+      }, userId, config?.conversationId),
       new JavaSkillGeneratorTool(gatewayUrl, apiToken, config?.conversationId, userId),
       new JavaComputeTool(gatewayUrl, apiToken, { dispatch: builtinDispatch }),
       new JavaServerLookupTool(gatewayUrl, apiToken, userId),
