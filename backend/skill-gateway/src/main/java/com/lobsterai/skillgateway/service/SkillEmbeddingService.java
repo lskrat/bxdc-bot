@@ -9,13 +9,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -102,6 +96,9 @@ public class SkillEmbeddingService {
 
     /** 是否已初始化 */
     private volatile boolean initialized = false;
+
+    /** 纯关键词兜底池：embedding 启动失败时惰性从 DB 加载，全局缓存 */
+    private volatile List<SkillVector> keywordOnlyPool = null;
 
     @Autowired
     public SkillEmbeddingService(SkillMapper skillMapper, EmbeddingService embeddingService) {
@@ -227,15 +224,29 @@ public class SkillEmbeddingService {
      * @param excludeNames 需要排除的技能名称（null = 不排除），排除在 top-K 截取前
      */
     public List<MatchResult> match(String query, List<String> tags, int limit, List<String> excludeNames) {
-        if (!initialized || index.isEmpty()) {
-            log.warn("[SkillEmbedding] Index not initialized or empty, returning empty result");
-            return Collections.emptyList();
-        }
         if (query == null || query.trim().isEmpty()) {
             return Collections.emptyList();
         }
 
         int actualLimit = limit > 0 ? limit : DEFAULT_MATCH_LIMIT;
+
+        // 技能池选择：向量索引可用时走内存向量池，否则惰性从 DB 加载纯关键词兜底池
+        Collection<SkillVector> pool;
+        boolean poolFromDb;
+        if (!index.isEmpty()) {
+            pool = index.values();
+            poolFromDb = false;
+        } else {
+            if (!initialized) {
+                log.warn("[SkillEmbedding] Index not initialized yet");
+            }
+            pool = getKeywordOnlyPool();
+            poolFromDb = true;
+        }
+        if (pool.isEmpty()) {
+            log.warn("[SkillEmbedding] No skills available (index empty, DB fallback empty), returning empty result");
+            return Collections.emptyList();
+        }
 
         // 阶段 1：SQL 硬筛（add-skill-tags-and-intent-filtering）
         Set<Long> candidates = null;
@@ -283,7 +294,7 @@ public class SkillEmbeddingService {
         //    正常：语义相似度 + 关键词混合评分
         //    兜底：纯关键词匹配（keywordScore × searchWeight）
         List<MatchResult> results = new ArrayList<>();
-        for (SkillVector sv : index.values()) {
+        for (SkillVector sv : pool) {
             // 阶段 1 命中时跳过非候选集；tags==null 时对全量打分（兼容 e2ac8ce）
             if (candidates != null && !candidates.contains(sv.skillId)) {
                 continue;
@@ -327,12 +338,13 @@ public class SkillEmbeddingService {
                 .limit(actualLimit)
                 .collect(Collectors.toList());
 
-        log.info("[SkillEmbedding] Query '{}' matched {}/{} skills (top-{}, tags={}, exclude={}){}{}",
+        log.info("[SkillEmbedding] Query '{}' matched {}/{} skills (top-{}, tags={}, exclude={}){}{}{}",
                 query.length() > 60 ? query.substring(0, 60) + "..." : query,
                 filtered.size(), beforeFilter, actualLimit,
                 tags, excludeSet,
                 candidates != null ? " [SQL filtered]" : "",
-                embeddingAvailable ? "" : " [KEYWORD FALLBACK]");
+                embeddingAvailable ? "" : " [KEYWORD FALLBACK]",
+                poolFromDb ? " [DB POOL]" : "");
 
         return filtered;
     }
@@ -349,6 +361,28 @@ public class SkillEmbeddingService {
      */
     public int getIndexSize() {
         return index.size();
+    }
+
+    /**
+     * 纯关键词兜底池：embedding 启动失败时惰性从 DB 加载系统技能（无 embedding 向量），
+     * 全局缓存。首次 match() 触发加载，后续复用。
+     */
+    private synchronized List<SkillVector> getKeywordOnlyPool() {
+        if (keywordOnlyPool != null) {
+            return keywordOnlyPool;
+        }
+        long t0 = System.currentTimeMillis();
+        List<Skill> skills = skillMapper.findBySkillOwnerTypeAndEnabledIsTrue(2);
+        List<SkillVector> list = new ArrayList<>();
+        for (Skill skill : skills) {
+            Double w = skill.getSearchWeight();
+            if (w != null && w <= 0) continue;
+            list.add(new SkillVector(skill, null, buildEmbeddingText(skill)));
+        }
+        keywordOnlyPool = list;
+        log.info("[SkillEmbedding] Built keyword-only fallback pool with {} skills in {} ms",
+                list.size(), System.currentTimeMillis() - t0);
+        return list;
     }
 
     /**
