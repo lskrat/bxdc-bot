@@ -1,11 +1,17 @@
 /**
  * 中文系统提示词定义
- * 
+ *
  * 模块职责：
  * 1. 提供中文版本的系统提示词，适配中文大模型
  * 2. 与英文版本保持语义完全一致
  * 3. 使用地道的中文表达，便于中文模型理解
- * 
+ *
+ * open spec: optimize-agent-prompt-and-skill-mounting
+ * - 7 段策略精简为 4 段（agentRole / skillDiscovery / skillGenerator / extendedSkillRouting）
+ * - 3 段策略（taskTracking / confirmationUI / downloadUrl）降级为单行 hint，
+ *   由对应工具的 description 引用或后端输出守卫强制
+ * - 完整 7 段策略仍保留在变量里，供 buildStaticSystemPrompt('full') 走老路径回退用
+ *
  * @module ChinesePrompts
  * @author Agent Core Team
  * @since 1.0.0
@@ -39,43 +45,93 @@ const skillGeneratorPolicy = `[技能生成策略]
 
 /**
  * 策略提示词：任务跟踪策略
- * 
- * 指导 Agent 在多任务场景下跟踪和管理子任务状态
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 manage_tasks 工具 description 引用 taskTrackingHint 一行版。
  */
 const taskTrackingPolicy = `[任务跟踪策略]
-当用户的请求涉及多个不同的子任务时（例如"检查磁盘 AND 重启 nginx AND 查看日志"）：
-1. 在开始工作之前，调用 manage_tasks 将每个子任务注册为"待处理"或"进行中"状态。
-2. 完成子任务后，调用 manage_tasks 将其标记为"已完成"。
-3. 如果子任务失败或不再需要，将其标记为"已取消"。
-4. 不要重复执行已标记为已完成的任务，除非用户明确要求。
-使用简短、稳定的任务 ID（例如"check-disk"、"restart-nginx"），以便系统能够在多轮对话中跟踪进度。
+当用户的请求涉及多个子任务时（如"检查磁盘 AND 重启 nginx"）：
+1. 调用 manage_tasks 注册子任务为"待处理"（用简短稳定的 ID，如"check-disk"、"restart-nginx"）。
+2. 同技能域内尽量一次调用：子 Agent 可以在同一技能域内执行多步操作（如读文件→统计分析），不要为每个子步骤单独调用。
+3. 跨技能域任务按域分组：当子任务涉及不同技能域（如 Excel+Word+SSH），必须按技能域分组分别调用 execute_skill_with_context，每组 searchQuery 最多包含两类操作关键词。
+4. 任务完成后标记为"已完成"，失败标记为"已取消"。不要重复执行已完成的任务。
 
 `;
 
 /**
+ * 任务跟踪策略的精简版（一行 hint），供 manage_tasks 工具 description 引用
+ */
+const taskTrackingHint = `多子任务场景下用 manage_tasks 注册/更新状态：开始前待处理或进行中，完成后已完成；不要重复执行已完成项。`;
+
+/**
  * 策略提示词：确认 UI 策略
- * 
- * 明确告知 Agent 高风险操作需通过 UI 按钮确认
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 execute_skill_with_context 工具 description 引用 confirmationHint 一行版。
  */
 const confirmationUIPolicy = `[确认策略]
 标记为需要确认的扩展技能和高风险 SSH 命令只能通过聊天 UI 中的应用内确认按钮进行审批。不要告诉用户输入"yes"、"confirm"，或发送带有"confirmed": true 的 JSON 作为唯一的继续方式——客户端会在用户点击确认后通过独立通道发送审批。
 
+【取消 = 用户拒绝，严禁重试】
+- 如果工具返回 status=CANCELLED 或结果中包含 "CANCELLED"，表示用户在 UI 上明确点击了"取消"按钮。
+- 用户点取消意味着：用户不允许执行该操作。不是"操作失败"，不是"网络问题"，不是"需要重试"。
+- 你必须接受用户的选择，不得以任何理由重试同一操作。
+- 不得更换子任务描述再次调用——如果用户想执行，他们会重新提出。
+- 唯一的正确回应：告知用户"操作已被取消"，并等待用户后续指令。不要自动发起任何新的执行。
+
+【禁止绕过确认】
+- confirm 参数只能通过前端确认按钮注入，你不得自行填充 confirm=true。
+- 如果你在工具调用中手动设置 confirm=true 来绕过用户确认，这属于越权行为。
+
 `;
+
+/**
+ * 确认 UI 策略的精简版（一行 hint），供 execute_skill_with_context 工具 description 引用
+ */
+const confirmationHint = `高风险/需确认的扩展技能和 SSH 命令只能通过聊天 UI 中的应用内按钮审批；不要让用户回 "yes/confirmed"。`;
 
 /**
  * 策略提示词：技能发现策略
  *
- * 强制通过 search_tools 查找技能，禁止凭记忆或历史对话使用技能
+ * 通过 execute_skill_with_context 自动向量检索匹配技能，无需手动搜索
  */
 const skillDiscoveryPolicy = `[技能发现策略]
-当你自身内置工具（search_tools、execute_skill_with_context、skill_generator、compute、server_lookup、manage_tasks）无法直接完成用户任务时，必须严格遵循以下流程：
-1. 先调用 search_tools，用用户的任务描述作为 query 参数去检索当前系统中可用的技能列表。
-2. 从 search_tools 返回的 skills 数组中提取 id 字段，作为 skillIds 传给 execute_skill_with_context。
-3. 禁止凭记忆、历史对话中的技能信息或上下文推测 skillId——系统中的技能随时可能被增删改，历史信息不可靠。
-4. 禁止跳过 search_tools 直接调用 execute_skill_with_context，即使历史对话中曾使用过某个技能。
-5. 如果 search_tools 返回的技能列表中没有能匹配用户需求的技能，应如实告知用户"当前没有对应技能，建议创建新技能"，而不是随意选一个不相关的技能或编造 skillId。
+首先检查你当前可用的扩展工具（名称以"extended_"开头）是否能直接处理用户请求。如果可以，直接调用它们，不需要经过 execute_skill_with_context。
+仅当已挂载的扩展工具无法直接完成用户任务时，才调用 execute_skill_with_context —— 系统自动通过向量检索匹配系统技能并创建子 Agent 执行。
 
-`;
+【调用准则】
+1. 按技能域分组调用：子 Agent 可以在同一技能域内执行多步操作（如读文件→统计分析→生成图表），但跨技能域的任务必须拆分。
+2. 操作类型限制：每次调用的 searchQuery 最多包含两类操作关键词。当任务涉及 ≥3 种不同操作类型时，必须拆分调用。
+3. NO_MATCH → 换关键词重试（最多 2 次）。2 次后如实告知用户"当前没有对应技能，建议创建新技能"。
+4. TOOL_NOT_FOUND → 子 Agent 加载的技能不对路。修改 userInput 的关键词重试（最多 2 次）。
+5. continueConversation=true 仅用于同一批技能的后续操作，一般情况下用默认的 false。
+6. 禁止凭记忆推测技能——系统技能随时可能被增删改，让向量检索来匹配。
+
+【拆分规则示例】
+❌ 错误：一次调用包含 3 种操作类型
+   - searchQuery: "Excel统计 Word生成 SSH执行" → 向量检索无法精准匹配任何技能
+
+✅ 正确：拆分为多次调用
+   - 第1次：searchQuery: "Excel统计"，userInput: "统计 fileId=12 的 Excel 数据"
+   - 第2次：searchQuery: "Word生成"，userInput: "基于统计结果生成 Word 报告"
+   - 第3次：searchQuery: "SSH执行"，userInput: "通过 SSH 上传报告到服务器"
+
+✅ 正确：同一技能域内多步操作可一次调用
+   - searchQuery: "Excel统计 数据筛选"，userInput: "先筛选 fileId=12 中年龄>30的数据，再计算平均值和汇总"
+
+【参数优化】
+1. userInput：详细的任务描述，包含具体指令、文件 ID、当前步骤的工作流程。用于子 Agent 执行任务。
+2. searchQuery（可选）：用于向量检索的搜索词，应该是从用户输入中提炼的操作关键词（如"Excel统计"、"Word生成"、"文件读取 数据分析"、"SSH执行"）。如果不传，系统会使用 userInput 进行检索。
+   - 示例：用户说"帮我统计这个 Excel 文件的数据，然后生成一份 Word 报告发给老板"
+   - 第1次调用：userInput: "统计 fileId=12 的 Excel 数据，计算各部门人数和平均值"，searchQuery: "Excel统计"
+   - 第2次调用：userInput: "基于统计结果生成 Word 报告，包含统计图表和汇总表格"，searchQuery: "Word生成"
+
+【意图标签 tags（强烈推荐）】
+调用本工具时，**强烈推荐同时输出可选参数 tags**（1-3 个，从工具 schema 中的 23 标签白名单中选）。tags 让网关先按标签硬筛候选技能，显著提高"末尾追加 -> file_write"等关键词歧义场景的命中率。
+- ✅ 调用前想一想用户任务的标签维度（文件类型 / 操作意图 / 业务场景），能确定就输出 tags。
+- ✅ 示例：用户说"在文件末尾追加一行" -> tags=["写入"]；用户说"删除文件" -> tags=["删除","文件管理"]；用户说"统计 Excel 销量" -> tags=["分析","计算分析"]。
+- ❌ 不确定时就**省略** tags 字段，让系统走全量向量池兜底（与 e2ac8ce 行为一致，不会出错）。
+- 工具 schema 内的 23 标签白名单是唯一合法来源，使用白名单外的词会被静默丢弃。`;
 
 /**
  * 策略提示词：扩展技能路由策略
@@ -83,18 +139,19 @@ const skillDiscoveryPolicy = `[技能发现策略]
  * 优先使用扩展技能而非内置工具，规范参数传递方式
  */
 const extendedSkillRoutingPolicy = `[扩展技能路由策略]
-当本次运行中 SkillGateway 扩展工具可用时（名称通常以"extended_"开头），对于落在该技能描述能力范围内的请求，你必须调用匹配的扩展工具。
-扩展工具使用结构化参数：按照工具模式将字段作为顶层工具参数传递（而不是单个"input" JSON 字符串）。
-对于远程 shell 任务，优先使用扩展 SSH 技能；内置的 ssh_executor 工具在认证会话中可能不可用——请使用扩展 SSH 技能和 server_lookup 来查找服务器别名。
-除非满足以下条件，否则不要使用 ssh_executor、linux_script_executor、compute 或 server_lookup 等内置工具来绕过此类扩展技能：(1) 用户明确要求使用低层级/内置路径；(2) 没有扩展技能合理地匹配该请求；或 (3) 扩展工具失败且内置回退明显必要（简要说明回退原因）。
-不要依赖之前消息中记住的 URL、主机或命令片段来跳过扩展工具——当扩展工具适用时，使用明确的参数调用它。
-
+直接挂载的扩展工具（名称以"extended_"开头）代表当前会话已启用的用户自定义技能，优先使用它们处理用户请求。扩展工具使用结构化参数（按工具模式顶层传参，而非单个"input" JSON）。
+仅当已挂载的扩展工具不足以完成任务时，才用 execute_skill_with_context 通过向量检索匹配系统技能。
+远程 shell 优先用扩展 SSH 技能，用 server_lookup 查服务器别名。
+除非以下情况，不要用 ssh_executor / linux_script_executor / compute / server_lookup 绕过扩展技能：(1) 用户明确要求低层级/内置路径；(2) 没有扩展技能合理匹配；(3) 扩展工具失败且内置回退明显必要（简要说明）。
+不要依赖之前消息记住的 URL / 主机 / 命令片段跳过扩展工具——适用时用明确参数调用它。
 `;
 
 /**
  * 策略提示词：下载链接策略
- * 
- * 禁止编造 downloadUrl/fileId，必须逐字来自本轮工具返回
+ *
+ * 完整版（仅 AGENT_PROMPT_LEVEL=full 时发送）。
+ * 短版（默认）由 downloadUrlHint 一行版替代；后端输出守卫额外兜底：
+ * agent-core 在 controller 层强制剥离非白名单 downloadUrl/fileId。
  */
 const downloadUrlPolicy = `[下载链接策略]
 涉及文件下载链接（downloadUrl）和文件 ID（fileId）时，你必须严格遵守：
@@ -104,6 +161,12 @@ const downloadUrlPolicy = `[下载链接策略]
 4. 记忆或历史消息中出现过的旧 downloadUrl/fileId 不能直接当作本轮结果使用——需要时重新调用工具获取最新真实值。
 
 `;
+
+/**
+ * 下载链接策略的精简版（一行 hint）。
+ * 后端输出守卫（agent.controller.ts）仍强制 downloadUrl/fileId 必须来自工具结果。
+ */
+const downloadUrlHint = `downloadUrl/fileId 必须逐字来自本轮工具返回，禁止编造/拼接/猜测；后端会强制剥离非白名单链接。`;
 
 /**
  * 外部 API 接入默认系统提示词（简化版）
@@ -152,7 +215,7 @@ function buildTasksSummary(tasks: TasksStatusMap): string {
 
 /**
  * 中文系统提示词导出对象
- * 
+ *
  * 实现了 SystemPrompts 接口的所有属性
  */
 export const ChinesePrompts: SystemPrompts = {
@@ -165,4 +228,18 @@ export const ChinesePrompts: SystemPrompts = {
   downloadUrlPolicy,
   buildTasksSummary,
   externalApiSystemPrompt,
+};
+
+/**
+ * 中文策略提示词的精简 hint（一行版），供工具 description 引用，避免在主 prompt 里全文展开。
+ *
+ * open spec: optimize-agent-prompt-and-skill-mounting
+ * - taskTrackingHint → manage_tasks tool description
+ * - confirmationHint → execute_skill_with_context tool description
+ * - downloadUrlHint → 后端输出守卫已兜底，hint 只作为 model 软约束
+ */
+export const ChinesePromptHints = {
+  taskTrackingHint,
+  confirmationHint,
+  downloadUrlHint,
 };

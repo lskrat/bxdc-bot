@@ -11,6 +11,7 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashSet;
 import java.util.Set;
@@ -44,6 +45,7 @@ public class SchemaMigrationRunner implements InitializingBean {
         try (Connection conn = dataSource.getConnection()) {
             migrateAsyncTasks(conn);
             migrateSkills(conn);
+            migrateSkillOwnerType(conn);
             migrateUserFiles(conn);
             migrateConversationApiColumns(conn);
             migrateAsyncTaskChatReply(conn);
@@ -51,9 +53,12 @@ public class SchemaMigrationRunner implements InitializingBean {
             migrateConversationEnabledFiles(conn);
             migrateAsyncTaskParentToolId(conn);
             migrateChatMessageParentToolId(conn);
+            migrateExternalService(conn);
+            migrateExternalServiceInput(conn);
             cleanupDuplicateBxdcbotSubTaskChatMessages(conn);
             migrateConversationsExternalApiColumns(conn);
             migrateExternalApiTenants(conn);
+            migrateTokenUsageIndexes(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
             log.warn("[SchemaMigration] Migration failed: {}", e.getMessage());
@@ -106,6 +111,38 @@ public class SchemaMigrationRunner implements InitializingBean {
             log.warn("[SchemaMigration] Failed to clean up duplicate ASYNC_TASK_RESULT messages: {}",
                     e.getMessage());
         }
+    }
+
+    /**
+     * open spec: add-conversation-token-usage-tab
+     * 为 token 用量查询加复合索引：
+     * - conversation_logs(user_id, updated_at) — 会话列表 + 日期过滤
+     * - conversation_logs(session_id, created_at) — 会话详情倒序
+     * - conversation_logs(user_id, created_at) — 按天聚合
+     * - tool_call_logs(session_id, trace_id) — 详情 round 的 skill 清单
+     *
+     * 注：conversation_logs 已有 idx_conv_user_id / idx_conv_session_id / idx_conv_created_at / idx_conv_trace_id，
+     * 本次加的复合索引是补全 LEFT JOIN + WHERE + GROUP BY 的高效路径。
+     */
+    void migrateTokenUsageIndexes(Connection conn) {
+        String convTable = "conversation_logs";
+        if (!tableExists(conn, convTable)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet, skip", convTable);
+            return;
+        }
+        Set<String> convIdx = getIndexNames(conn, convTable);
+        ensureIndex(conn, convTable, "idx_conv_logs_user_updated", convIdx,
+                "ALTER TABLE conversation_logs ADD INDEX idx_conv_logs_user_updated (user_id, updated_at)");
+        ensureIndex(conn, convTable, "idx_conv_logs_session_created", convIdx,
+                "ALTER TABLE conversation_logs ADD INDEX idx_conv_logs_session_created (session_id, created_at)");
+        ensureIndex(conn, convTable, "idx_conv_logs_user_created", convIdx,
+                "ALTER TABLE conversation_logs ADD INDEX idx_conv_logs_user_created (user_id, created_at)");
+
+        String toolTable = "tool_call_logs";
+        if (!tableExists(conn, toolTable)) return;
+        Set<String> toolIdx = getIndexNames(conn, toolTable);
+        ensureIndex(conn, toolTable, "idx_tool_call_logs_session_trace", toolIdx,
+                "ALTER TABLE tool_call_logs ADD INDEX idx_tool_call_logs_session_trace (session_id, trace_id)");
     }
 
     private void migrateAsyncTasks(Connection conn) {
@@ -186,8 +223,83 @@ public class SchemaMigrationRunner implements InitializingBean {
         ensureColumn(conn, table, "team_id", existingColumns,
                 "ALTER TABLE skills ADD COLUMN team_id VARCHAR(512) NULL " +
                 "COMMENT '团队可见性关联的团队 ID（add-skill-team-visibility 引入）'");
+        // 复合索引：team_id 字段的查询加速（add-skill-team-visibility 引入的 idx_skills_team_id）
         ensureIndex(conn, table, "idx_skills_team_id", existingIndexes,
                 "ALTER TABLE skills ADD INDEX idx_skills_team_id (team_id)");
+
+        // search_weight：向量检索权重（管理员配置，默认 1.0）
+        ensureColumn(conn, table, "search_weight", existingColumns,
+                "ALTER TABLE skills ADD COLUMN search_weight DOUBLE DEFAULT 1.0 " +
+                "COMMENT '向量检索权重；>1 排名靠前，0 不参与检索'");
+
+        // ===== add-skill-tags-and-intent-filtering：技能三维度标签 =====
+        // 文件类型标签（add-skill-tags-and-intent-filtering）：通用/Word/文本/Markdown/Excel
+        ensureColumn(conn, table, "file_type", existingColumns,
+                "ALTER TABLE skills ADD COLUMN file_type VARCHAR(32) DEFAULT NULL " +
+                "COMMENT '文件类型标签（add-skill-tags-and-intent-filtering）：通用/Word/文本/Markdown/Excel'");
+        // 操作意图标签
+        ensureColumn(conn, table, "operation_intent", existingColumns,
+                "ALTER TABLE skills ADD COLUMN operation_intent VARCHAR(32) DEFAULT NULL " +
+                "COMMENT '操作意图标签（add-skill-tags-and-intent-filtering）：展示/删除/读取/写入/生成/提取/搜索/修改/分析/转换/新建/校验'");
+        // 业务场景标签
+        ensureColumn(conn, table, "business_scenario", existingColumns,
+                "ALTER TABLE skills ADD COLUMN business_scenario VARCHAR(32) DEFAULT NULL " +
+                "COMMENT '业务场景标签（add-skill-tags-and-intent-filtering）：文件管理/检索查看/生成导出/提取解析/编辑整理/计算分析'");
+    }
+
+    /**
+     * skills 表：把系统内置能力从 owner_type=1 重新分类为 owner_type=2。
+     *
+     * 背景：旧库里所有 extension 类技能都被存为 owner_type=1（用户自建），
+     * 与 FileToolSeeder 期望的系统能力 owner_type=2 不匹配，导致
+     * FileToolSeeder 启动时 SELECT owner_type=2 找不到同名行，走 INSERT 又触发
+     * name 唯一键冲突 `Duplicate entry 'excel_validate' for key 'skills.name'`，
+     * 升级时系统能力的 schema/description 不会更新。
+     *
+     * 幂等性：SQL 限定 {@code WHERE name = ? AND skill_owner_type = 1}，
+     * 已经是 2 的行不会受影响；行不存在时 SQL 不报错。
+     * 名册与 FileToolSeeder.seedFileManage / seedFileOperate 保持完全一致。
+     */
+    private void migrateSkillOwnerType(Connection conn) throws SQLException {
+        String[] systemSkillNames = {
+                // file_manage 族（4）
+                "file_list", "file_delete", "file_clear_all", "file_detail",
+                // word_operate 族（6）
+                "word_read", "word_write", "word_extract_content",
+                "word_search_keyword", "word_replace_text", "word_template_fill",
+                // txt_operate 族（10）
+                "txt_read", "txt_write", "txt_keyword_lines", "txt_regex",
+                "txt_line_range", "txt_section", "txt_stats",
+                "txt_distinct_lines", "txt_sort_lines", "txt_keyword_freq",
+                // md_operate 族（12）
+                "md_init_temp", "md_read", "md_write", "md_images",
+                "md_headings", "md_table", "md_list_items", "md_tasks",
+                "md_emphasis", "md_toc", "md_filter_section", "md_merge",
+                // excel_operate 族（12）
+                "excel_read", "excel_write", "excel_init_temp", "excel_filter",
+                "excel_sort", "excel_aggregate", "excel_pivot", "excel_calculate",
+                "excel_select_columns", "excel_clean", "excel_convert_format",
+                "excel_validate"
+        };
+
+        // 关键：WHERE 子句限定 owner_type=1，无差异数据（已经是 2）不会被触碰
+        String sql = "UPDATE skills SET skill_owner_type = 2 WHERE name = ? AND skill_owner_type = 1";
+        int migrated = 0;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (String name : systemSkillNames) {
+                ps.setString(1, name);
+                int n = ps.executeUpdate();
+                if (n > 0) {
+                    migrated += n;
+                    log.info("[SchemaMigration] Reclassified system skill '{}' owner_type 1->2", name);
+                }
+            }
+        }
+        if (migrated > 0) {
+            log.info("[SchemaMigration] Migrated {} system skills owner_type 1->2", migrated);
+        } else {
+            log.debug("[SchemaMigration] No system skills need reclassification (already owner_type=2)");
+        }
     }
 
     /**
@@ -204,6 +316,13 @@ public class SchemaMigrationRunner implements InitializingBean {
 
         Set<String> existingColumns = getColumnNames(conn, table);
         Set<String> existingIndexes = getIndexNames(conn, table);
+
+        // 0. source_file_id：cf21bda (wuqilei 6-13 "feat: 新增Excel工具操作能力") 加的列
+        //    关联临时文件与源文件（旧库需要补这列否则 _temp 后缀处理路径会缺字段）。
+        //    当时 commit 漏了 Java migration，这里补齐（已存在则跳过，幂等）。
+        ensureColumn(conn, table, "source_file_id", existingColumns,
+                "ALTER TABLE user_files ADD COLUMN source_file_id BIGINT DEFAULT NULL " +
+                "COMMENT '源文件 ID（用于临时文件关联源文件，cf21bda wuqilei 引入）'");
 
         // 1. session_id 列
         ensureColumn(conn, table, "session_id", existingColumns,
@@ -595,6 +714,7 @@ public class SchemaMigrationRunner implements InitializingBean {
     }
 
     /**
+<<<<<<< HEAD
      * external-api-tenant-access change 配套 schema 迁移。
      *
      * 任务：conversations 表新增 publish_type / external_system_prompt / source 三列。
@@ -652,5 +772,111 @@ public class SchemaMigrationRunner implements InitializingBean {
         } catch (Exception e) {
             log.warn("[SchemaMigration] Failed to create table {}: {}", table, e.getMessage());
         }
+    }
+
+    /**
+     * external-service-skill change 配套 schema 迁移（open spec）。
+     *
+     * 创建 external_service 主表（13 字段）。
+     * 注意：主表 CREATE TABLE 也在 schema-mysql.sql 里（CREATE TABLE IF NOT EXISTS），
+     * 这里 ensureColumn 主要应对历史已部署但表还没建的场景，或后续新增列。
+     */
+    void migrateExternalService(Connection conn) {
+        String table = "external_service";
+        if (!tableExists(conn, table)) {
+            // 表不存在 — schema-mysql.sql 会创建；这里跳过（避免重复 CREATE）
+            log.debug("[SchemaMigration] Table {} will be created by schema-mysql.sql", table);
+            return;
+        }
+
+        // 表已存在 → 检查列；新增列防御
+        Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
+
+        ensureColumn(conn, table, "name", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN name VARCHAR(64) NOT NULL UNIQUE " +
+                "COMMENT '服务引用名'");
+        ensureColumn(conn, table, "endpoint_url", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN endpoint_url VARCHAR(1024) NOT NULL " +
+                "COMMENT '完整 URL'");
+        ensureColumn(conn, table, "http_method", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN http_method VARCHAR(8) NOT NULL DEFAULT 'POST' " +
+                "COMMENT 'GET/POST/PUT/DELETE/PATCH'");
+        ensureColumn(conn, table, "auth_kind", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN auth_kind VARCHAR(16) NOT NULL DEFAULT 'none' " +
+                "COMMENT 'none/apiKey/bearer/dynamicToken'");
+        ensureColumn(conn, table, "auth_config", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN auth_config JSON NULL " +
+                "COMMENT '认证配置 JSON'");
+        ensureColumn(conn, table, "response_format", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN response_format VARCHAR(16) NOT NULL DEFAULT 'json' " +
+                "COMMENT 'json/text/binary-base64'");
+        ensureColumn(conn, table, "retry_max", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN retry_max INT NOT NULL DEFAULT 0 " +
+                "COMMENT '重试次数'");
+        ensureColumn(conn, table, "enabled", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1 " +
+                "COMMENT '是否启用'");
+        ensureColumn(conn, table, "display_order", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN display_order INT NOT NULL DEFAULT 0 " +
+                "COMMENT 'Admin 列表展示顺序'");
+        ensureColumn(conn, table, "description", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN description TEXT NULL " +
+                "COMMENT 'Admin 备注'");
+
+        // 索引
+        ensureIndex(conn, table, "idx_es_enabled_sort", existingIndexes,
+                "CREATE INDEX idx_es_enabled_sort ON " + table + "(enabled, display_order)");
+    }
+
+    /**
+     * external-service-skill 子表 schema 迁移。
+     */
+    void migrateExternalServiceInput(Connection conn) {
+        String table = "external_service_input";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} will be created by schema-mysql.sql", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+        Set<String> existingIndexes = getIndexNames(conn, table);
+
+        ensureColumn(conn, table, "service_id", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN service_id BIGINT NOT NULL " +
+                "COMMENT 'FK -> external_service.id'");
+        ensureColumn(conn, table, "external_param_name", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN external_param_name VARCHAR(64) NOT NULL " +
+                "COMMENT '第三方 API 入参名'");
+        ensureColumn(conn, table, "display_name", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN display_name VARCHAR(64) NULL " +
+                "COMMENT '中文 label'");
+        ensureColumn(conn, table, "is_required", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN is_required TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT 'LLM tool schema required'");
+        ensureColumn(conn, table, "is_raw_transmission", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN is_raw_transmission TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT '原文透传标志'");
+        ensureColumn(conn, table, "param_location", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN param_location VARCHAR(16) NOT NULL DEFAULT 'body' " +
+                "COMMENT 'query/body/path/header'");
+        ensureColumn(conn, table, "body_content_type", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN body_content_type VARCHAR(16) NULL " +
+                "COMMENT 'json/form/text/binary'");
+        ensureColumn(conn, table, "param_type", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN param_type VARCHAR(16) NOT NULL DEFAULT 'string' " +
+                "COMMENT 'string/number/boolean'");
+        ensureColumn(conn, table, "is_sensitive", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN is_sensitive TINYINT(1) NOT NULL DEFAULT 0 " +
+                "COMMENT '审计脱敏标志'");
+        ensureColumn(conn, table, "description", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN description TEXT NULL " +
+                "COMMENT '详细说明'");
+        ensureColumn(conn, table, "display_order", existingColumns,
+                "ALTER TABLE " + table + " ADD COLUMN display_order INT NOT NULL DEFAULT 0 " +
+                "COMMENT '渲染/出站顺序'");
+
+        ensureIndex(conn, table, "idx_esi_service_sort", existingIndexes,
+                "CREATE INDEX idx_esi_service_sort ON " + table + "(service_id, display_order)");
     }
 }

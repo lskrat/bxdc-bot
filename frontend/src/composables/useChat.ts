@@ -50,7 +50,10 @@ export interface ThinkBlock {
   id: string
   parentToolId: string
   parentToolName?: string
+  /** 子 Agent 执行文本内容（markdown） */
   content: string
+  /** 首行摘要，显示在折叠标题栏"思考"后面 */
+  summary: string
   status: 'running' | 'completed' | 'failed'
   startedAt: number
   completedAt?: number
@@ -158,7 +161,7 @@ export interface ChatState {
   isThinking: ReturnType<typeof ref<boolean>>
   error: ReturnType<typeof ref<string | null>>
   clearError: () => void
-  sendMessage: (content: string, userId?: string, attachedFiles?: UploadFileInfo[]) => Promise<void>
+  sendMessage: (content: string, userId?: string, attachedFiles?: UploadFileInfo[], memoryEnabled?: boolean) => Promise<void>
   /** Stop the current in-flight SSE stream (cancel button while agent is reasoning). */
   stop: () => void
   addMessage: (message: Message) => void
@@ -248,6 +251,17 @@ export function provideChat() {
     }))
   }
 
+  /**
+   * Streaming 增量剥离 <think>...</think> 块。
+   *
+   * 关键：SSE 逐 token 到达时，单 token 不含完整闭合标签，简单 regex `/<think>[\s\S]*?<\/think>/`
+   * 无法匹配，于是 partial think 文本会泄漏到 UI。
+   *
+   * 修复：每个 message 维护跨 token 的 `_thinkStreamState`，把累积 rawContent 用状态机扫描：
+   *   - 不在 think 内 → 累积到 cleanContent，遇到 <think> 切换状态
+   *   - 在 think 内 → 丢弃直到 </think>
+   * 这样无论 token 多碎都不会泄漏 <think> 标签文本。
+   */
   function applyAssistantContent(rawContent: string) {
     const content = removeThinkTags(rawContent)
     if (!content && content !== '') return
@@ -275,7 +289,7 @@ export function provideChat() {
       return {
         ...current,
         content: current.content + newPart,
-        contentSegments: segments,
+        contentSegments: [...segments],
       }
     })
   }
@@ -332,8 +346,10 @@ export function provideChat() {
   }
 
   function removeThinkTags(content: string): string {
-    // 移除 <think>...</think> 标签及其内容
-    return content.replace(/<think[\s\S]*?<\/think>/gi, '')
+    // 移除完整闭合的 <think>...</think> 标签及其内容。
+    // 注意：streaming 场景下，单 token 不含完整闭合对时无法去除 partial tag；
+    // 见 MessageList.vue 的 assistantContentWithDownloads 中的兜底剥离。
+    return content.replace(/<think>[\s\S]*?<\/think>/gi, '')
   }
 
   function extractContent(content: unknown): string | null {
@@ -567,10 +583,15 @@ export function provideChat() {
     updateLastAssistantMessage((last) => {
       const toolInvocations = [...(last.toolInvocations ?? [])]
       if (toolEvent.parentToolId || toolEvent.parentToolName) {
+        // 先按 parentToolId 精确匹配；找不到时，只有当未提供 parentToolId 时才按 parentToolName 回退
+        // 原因：并行 execute_skill_with_context 调用有各自的 invocationId（parentToolId），
+        // 名字回退会把所有并行调用的子工具误挂到第一个同名父节点下
         const parentIndex = toolInvocations.findIndex((tool) => tool.id === toolEvent.parentToolId)
         const fallbackParentIndex = parentIndex >= 0
           ? parentIndex
-          : toolInvocations.findIndex((tool) => tool.name === toolEvent.parentToolName)
+          : (!toolEvent.parentToolId && toolEvent.parentToolName)
+            ? toolInvocations.findIndex((tool) => tool.name === toolEvent.parentToolName)
+            : -1
         const targetParentIndex = parentIndex >= 0 ? parentIndex : fallbackParentIndex
         const parent: ToolInvocation = targetParentIndex >= 0 && toolInvocations[targetParentIndex]
           ? toolInvocations[targetParentIndex]
@@ -807,7 +828,7 @@ export function provideChat() {
     }));
   }
 
-  async function sendMessage(content: string, userId?: string, attachedFiles?: UploadFileInfo[]) {
+  async function sendMessage(content: string, userId?: string, attachedFiles?: UploadFileInfo[], memoryEnabled?: boolean) {
     if (isThinking.value) return
 
     const conversationEnabledSkillIds = (() => {
@@ -898,6 +919,8 @@ export function provideChat() {
           history,
           enabledSkillIds: conversationEnabledSkillIds,
           conversationId,
+          // 记忆开关：默认 true；为 false 时后端不读记忆也不写记忆
+          memoryEnabled: memoryEnabled !== false,
         }),
         signal: abortController.signal,
       })
@@ -958,7 +981,7 @@ export function provideChat() {
           }
 
           // 上报本次对话涉及的文件名（任务 8.3）
-          if (attachedFiles && attachedFiles.length > 0 && userId) {
+          if (attachedFiles && attachedFiles.length > 0 && userId && memoryEnabled !== false) {
             const fileNames = attachedFiles.map((f) => f.fileName)
             try {
               await fetch(agentUrl('/memory/add'), {
@@ -1064,7 +1087,7 @@ export function provideChat() {
                   segments.push({ type: 'think', thinkId: data.thinkId })
                   return {
                     ...last,
-                    contentSegments: segments,
+                    contentSegments: [...segments],
                     thinkBlocks: [
                       ...(last.thinkBlocks ?? []),
                       {
@@ -1072,6 +1095,7 @@ export function provideChat() {
                         parentToolId: data.parentToolId,
                         parentToolName: data.parentToolName,
                         content: '',
+                        summary: data.parentToolName || '',
                         status: 'running' as const,
                         startedAt: Date.now(),
                       },
@@ -1085,10 +1109,26 @@ export function provideChat() {
                 updateLastAssistantMessage((last) => {
                   const thinkBlocks = (last.thinkBlocks ?? []).map((tb) => {
                     if (tb.id === data.thinkId) {
-                      if (data.replace) {
-                        return { ...tb, content: data.content }
+                      const newContent = data.replace ? data.content : tb.content + data.content
+                      let summary = tb.summary
+                      if (!summary && newContent.trim()) {
+                        const firstLine = (newContent.split('\n')[0] || '').replace(/^#+\s*/, '').trim()
+                        const thinkingPrefixes = ['我来', '让我', '尝试', '开始', '现在', '接下来', '将', '准备', '正在']
+                        let processedLine = firstLine
+                        for (const prefix of thinkingPrefixes) {
+                          if (processedLine.startsWith(prefix)) {
+                            processedLine = processedLine.slice(prefix.length).trim()
+                            break
+                          }
+                        }
+                        summary = processedLine.length > 2
+                          ? (processedLine.length > 60 ? processedLine.slice(0, 60) + '…' : processedLine)
+                          : '执行中...'
                       }
-                      return { ...tb, content: tb.content + data.content }
+                      if (data.replace) {
+                        return { ...tb, content: data.content, summary }
+                      }
+                      return { ...tb, content: tb.content + data.content, summary }
                     }
                     return tb
                   })

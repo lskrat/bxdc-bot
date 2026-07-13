@@ -1,21 +1,95 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ChatSender as TChatSender } from '@tdesign-vue-next/chat'
-import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
+import { DialogPlugin, MessagePlugin, Switch as TSwitch } from 'tdesign-vue-next'
 import { DeleteIcon } from 'tdesign-icons-vue-next'
 import { useChat } from '../composables/useChat'
 import { useUser } from '../composables/useUser'
 import { useConversations } from '../composables/useConversations'
 import { useFileUpload } from '../composables/useFileUpload'
+import { useMemory } from '../composables/useMemory'
 import { fileService } from '../services/fileService'
 import { apiUrl } from '../services/config'
 import { FILE_INPUT_ACCEPT, FILE_TYPE_ICONS, FILE_TYPE_LABELS } from '../types/fileUpload'
 import type { FileType, UploadFileInfo } from '../types/fileUpload'
+import SlashSkillPicker from './SlashSkillPicker.vue'
+import { fetchConversationEnabledSkills, type ConversationEnabledSkill } from '../services/api'
 
 const { sendMessage, isThinking, stop } = useChat()
 const { currentUser } = useUser()
-const { currentConversationId } = useConversations()
+const { currentConversationId, currentConversation } = useConversations()
 const fileUpload = useFileUpload()
+const memoryApi = useMemory()
+
+/** localStorage key prefix，按 userId 隔离记忆开关偏好 */
+const MEMORY_LS_PREFIX = 'memoryEnabled:'
+const readStoredMemory = (uid?: string) => {
+  if (!uid) return null
+  const raw = localStorage.getItem(MEMORY_LS_PREFIX + uid)
+  if (raw === 'false') return false
+  if (raw === 'true') return true
+  return null
+}
+const writeStoredMemory = (uid: string, val: boolean) => {
+  localStorage.setItem(MEMORY_LS_PREFIX + uid, String(val))
+}
+
+/** 记忆开关：默认 true，用 localStorage 覆盖默认值避免刷新闪烁 */
+const memoryEnabled = ref(readStoredMemory(currentUser.value?.id) ?? true)
+/** 全局记忆开关（MEM0_ENABLED）；false 时本页开关被强制为 off */
+const memoryGloballyEnabled = ref(true)
+/** 用户是否已手动操作过；true 后不再用 backend status 覆盖 */
+let _userToggledMemory = false
+/** status 接口是否已回来，避免请求未归时用户手改被覆盖 */
+let _memoryStatusLoaded = false
+
+/** 从 backend /memory/status 同步 MEM0_ENABLED 状态 */
+async function syncMemoryStatusFromBackend() {
+  if (_userToggledMemory || _memoryStatusLoaded) return
+  const uid = currentUser.value?.id
+  if (!uid) return
+  try {
+    const status = await memoryApi.getMemoryStatus(uid)
+    if (_userToggledMemory || _memoryStatusLoaded) return
+    _memoryStatusLoaded = true
+    memoryGloballyEnabled.value = status.enabled !== false
+    if (!memoryGloballyEnabled.value) {
+      memoryEnabled.value = false
+      writeStoredMemory(uid, false)
+    }
+  } catch {
+    console.warn('[MessageInput] getMemoryStatus failed, keep default')
+    _memoryStatusLoaded = true
+  }
+}
+
+/** 用户手动切换开关：标记 + 持久化 */
+function onMemoryToggleChange() {
+  _userToggledMemory = true
+  _memoryStatusLoaded = true
+  const uid = currentUser.value?.id
+  if (uid) writeStoredMemory(uid, memoryEnabled.value)
+}
+
+/** 全局禁用时强制置 off，并持久化 */
+watch([memoryEnabled, memoryGloballyEnabled], ([memVal, globalVal]) => {
+  if (!globalVal && memVal === true) {
+    memoryEnabled.value = false
+    const uid = currentUser.value?.id
+    if (uid) writeStoredMemory(uid, false)
+  }
+})
+
+onMounted(() => { syncMemoryStatusFromBackend() })
+
+/** 切换用户时重置状态，读新用户的 localStorage 偏好 */
+watch(currentUser, () => {
+  _userToggledMemory = false
+  _memoryStatusLoaded = false
+  memoryGloballyEnabled.value = true
+  memoryEnabled.value = readStoredMemory(currentUser.value?.id) ?? true
+  syncMemoryStatusFromBackend()
+})
 
 // 会话切换时：同步 conversationId + 清空文件（每个会话独立选择，首次挂载不清空）
 let _watchSessionInitial = true
@@ -28,6 +102,131 @@ watch(currentConversationId, (cid) => {
 }, { immediate: true })
 const input = ref('')
 const fileInputRef = ref<HTMLInputElement | null>(null)
+
+// open spec: add-slash-skill-invocation
+// Slash / hash picker 状态：会话切换时拉取 enabled_skills，输入框以 / 或 # 开头时显示 picker。
+// 开关默认关闭（VITE_SLASH_SKILL_INVOCATION 未设 → false），不打开就完全没行为，不影响原功能。
+const slashSkillPickerEnabled = computed(() => {
+  const raw = (import.meta.env.VITE_SLASH_SKILL_INVOCATION || '').toString().trim().toLowerCase()
+  return ['true', '1', 'yes', 'on'].includes(raw)
+})
+const slashSkills = ref<ConversationEnabledSkill[]>([])
+const showSlashPicker = ref(false)
+const slashTrigger = ref<'/' | '#'>('/')
+const slashQuery = ref('')
+const slashPickerRef = ref<InstanceType<typeof SlashSkillPicker> | null>(null)
+
+async function refreshSlashSkills(cid: string | null | undefined) {
+  if (!cid) {
+    slashSkills.value = []
+    return
+  }
+  slashSkills.value = await fetchConversationEnabledSkills(cid)
+}
+// 会话切换 OR 当前会话的 enabled_skills 字段变更（用户在配置面板勾选/取消）都要重拉
+watch(currentConversationId, (cid) => {
+  refreshSlashSkills(cid)
+}, { immediate: true })
+watch(
+  () => currentConversation.value?.enabled_skills,
+  () => {
+    if (currentConversationId.value) refreshSlashSkills(currentConversationId.value)
+  },
+)
+
+function parseSlashTrigger(value: string): { trigger: '/' | '#'; query: string } | null {
+  if (typeof value !== 'string' || value.length === 0) return null
+  const head = value[0]
+  if (head !== '/' && head !== '#') return null
+  // 必须以 / 字符开头（无前缀空白），后续是 query；允许 query 含空格（用户在继续输入参数）
+  const rest = value.slice(1)
+  // query 取到第一个空格前；如果没空格，query = rest
+  const spaceIdx = rest.indexOf(' ')
+  const query = spaceIdx === -1 ? rest : rest.slice(0, spaceIdx)
+  return { trigger: head as '/' | '#', query }
+}
+
+watch(input, (value) => {
+  if (!slashSkillPickerEnabled.value) {
+    showSlashPicker.value = false
+    return
+  }
+  const parsed = parseSlashTrigger(value)
+  if (!parsed) {
+    showSlashPicker.value = false
+    return
+  }
+  // open spec: add-slash-skill-invocation
+  // 如果值中已有空格（用户已选择技能并在输入参数），不再打开 picker。
+  // 否则 onSlashSkillSelected 写入 "/技能名 " 后 watch 再次触发会重新打开 picker，阻塞输入。
+  const rest = value.slice(1)
+  if (rest.includes(' ')) {
+    showSlashPicker.value = false
+    return
+  }
+  slashTrigger.value = parsed.trigger
+  slashQuery.value = parsed.query
+  showSlashPicker.value = slashSkills.value.length > 0
+})
+
+function onSlashSkillSelected(skill: ConversationEnabledSkill) {
+  // open spec: add-slash-skill-invocation
+  // 直接更新 Vue ref，让 v-model 驱动 TChatSender 内部状态同步
+  const newText = `${slashTrigger.value}${skill.name} `
+  input.value = newText
+  showSlashPicker.value = false
+  slashQuery.value = ''
+  nextTick(() => {
+    focusChatInputNextTick()
+  })
+}
+
+function closeSlashPicker() {
+  showSlashPicker.value = false
+  slashQuery.value = ''
+}
+
+function focusChatInputNextTick(newText?: string) {
+  nextTick(() => {
+    // TChatSender (TDesign) 实际 DOM: t-chat__footer__textarea > t-textarea > textarea
+    const candidates = [
+      '.chat-sender textarea',
+      '.t-chat__footer__textarea textarea',
+      '.chat-sender input',
+      'textarea',
+      'input',
+    ]
+    for (const sel of candidates) {
+      const el = document.querySelector(sel) as HTMLTextAreaElement | HTMLInputElement | null
+      if (el) {
+        // 如果给了 newText（来自 picker 选中），用 native setter 写入 + 触发 input 事件让 v-model 同步
+        if (newText !== undefined) {
+          const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+          const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+          if (setter) setter.call(el, newText)
+          else el.value = newText
+          // v-model: 通过 Vue 的 input 事件让它同步 ref
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+        el.focus()
+        if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+          const end = el.value.length
+          try {
+            el.setSelectionRange(end, end)
+          } catch {
+            // ignore
+          }
+        }
+        console.log(`[SlashSkill] focused ${sel}${newText ? ` with text '${newText}'` : ''}`)
+        return
+      }
+    }
+    console.warn('[SlashSkill] focusChatInputNextTick: no input/textarea found in chat-sender')
+  })
+}
+
+
 
 /** 等待解析时的 loading 状态（spinner） */
 const isWaitingForParse = ref(false)
@@ -416,9 +615,9 @@ async function doSendMessage(text: string) {
 
   const files = allFiles.value
   if (files.length > 0) {
-    await sendMessage(text, currentUser.value?.id, files)
+    await sendMessage(text, currentUser.value?.id, files, memoryEnabled.value)
   } else {
-    await sendMessage(text, currentUser.value?.id)
+    await sendMessage(text, currentUser.value?.id, undefined, memoryEnabled.value)
   }
 }
 
@@ -431,6 +630,13 @@ async function handleSend(value: string) {
   // @ts-ignore
   const text = (typeof value === 'string' ? value : value?.text || '').trim()
   if (!text || isThinking.value) return
+
+  // open spec: add-slash-skill-invocation
+  // Picker 显示中按 Enter → 选当前 active skill 而不是发送消息。
+  if (showSlashPicker.value) {
+    slashPickerRef.value?.pickActive()
+    return
+  }
 
   const files = allFiles.value
   const hasParsing = files.some((f) => f.status === 'parsing')
@@ -623,8 +829,35 @@ async function handleSend(value: string) {
       </div>
     </div>
 
+    <!-- 记忆开关行 -->
+    <div class="memory-toggle-row">
+      <TSwitch
+        v-model="memoryEnabled"
+        size="small"
+        :disabled="!memoryGloballyEnabled"
+        @change="onMemoryToggleChange"
+      />
+      <span class="memory-toggle-label">启用记忆</span>
+      <span v-if="!memoryGloballyEnabled" class="memory-toggle-hint memory-toggle-hint--disabled">
+        后端记忆功能已被禁用（MEM0_ENABLED=false），开关不可开启
+      </span>
+      <span v-else class="memory-toggle-hint">
+        关闭后本次对话不使用之前的记忆，且不写入新记忆
+      </span>
+    </div>
+
     <!-- 文本输入区 + 按钮组 -->
     <div class="chat-sender-row" data-ref="chat-input-area">
+      <!-- open spec: add-slash-skill-invocation: slash / hash picker（输入框以 / 或 # 开头时显示） -->
+      <SlashSkillPicker
+        ref="slashPickerRef"
+        :visible="showSlashPicker"
+        :trigger="slashTrigger"
+        :query="slashQuery"
+        :skills="slashSkills"
+        @select="onSlashSkillSelected"
+        @close="closeSlashPicker"
+      />
       <TChatSender
         v-model="input"
         class="chat-sender"
@@ -1177,6 +1410,32 @@ async function handleSend(value: string) {
 .chat-sender {
   flex: 1;
   min-width: 0;
+}
+
+/* ---------- 记忆开关行 ---------- */
+.memory-toggle-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+}
+
+.memory-toggle-label {
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+  user-select: none;
+}
+
+.memory-toggle-hint {
+  color: var(--td-text-color-placeholder);
+  font-size: 11px;
+}
+
+.memory-toggle-hint--disabled {
+  color: var(--td-error-color);
 }
 
 /* ---------- 通用样式 ---------- */

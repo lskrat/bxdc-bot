@@ -1,15 +1,19 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.dto.ParseFromDescriptionRequest;
+import com.lobsterai.skillgateway.dto.SkillMatchRequest;
+import com.lobsterai.skillgateway.dto.SkillMatchResponse;
 import com.lobsterai.skillgateway.dto.SkillImportRequest;
 import com.lobsterai.skillgateway.dto.SkillImportValidator;
 import com.lobsterai.skillgateway.dto.SkillParseResponse;
 import com.lobsterai.skillgateway.entity.Skill;
+import com.lobsterai.skillgateway.mapper.SkillMapper;
 import com.lobsterai.skillgateway.service.AsyncTaskPollingService;
 import com.lobsterai.skillgateway.service.BuiltinToolExecutionService;
 import com.lobsterai.skillgateway.service.GatewayOutboundAuditService;
 import com.lobsterai.skillgateway.service.LinuxScriptExecutionService;
 import com.lobsterai.skillgateway.service.ServerLedgerService;
+import com.lobsterai.skillgateway.service.SkillEmbeddingService;
 import com.lobsterai.skillgateway.service.SkillParseService;
 import com.lobsterai.skillgateway.service.SkillService;
 import org.springframework.http.ResponseEntity;
@@ -18,9 +22,10 @@ import org.springframework.web.bind.annotation.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -64,6 +69,10 @@ public class SkillController {
 
     private final ConversationService conversationService;
 
+    private final SkillEmbeddingService skillEmbeddingService;
+
+    private final SkillMapper skillMapper;
+
     public SkillController(
             SkillService skillService,
             SkillParseService skillParseService,
@@ -77,7 +86,9 @@ public class SkillController {
             AsyncPollingAuditService pollingAuditService,
             ObjectMapper objectMapper,
             SkillExecutionService skillExecutionService,
-            ConversationService conversationService
+            ConversationService conversationService,
+            SkillEmbeddingService skillEmbeddingService,
+            SkillMapper skillMapper
     ) {
         this.skillService = skillService;
         this.skillParseService = skillParseService;
@@ -92,6 +103,8 @@ public class SkillController {
         this.objectMapper = objectMapper;
         this.skillExecutionService = skillExecutionService;
         this.conversationService = conversationService;
+        this.skillEmbeddingService = skillEmbeddingService;
+        this.skillMapper = skillMapper;
     }
 
     // --- Skill Management (CRUD) ---
@@ -127,6 +140,100 @@ public class SkillController {
     ) {
         List<Long> enabledSkillIds = conversationService.getEnabledSkillIds(conversationId, userId);
         return skillService.listEnabledSkillsForUserByIds(userId, enabledSkillIds);
+    }
+
+    /**
+     * 向量检索系统技能（agent-core execute_skill_with_context 内部调用）。
+     *
+     * <p>
+     * 接收 LLM 提炼的任务关键词/描述，返回按余弦相似度 × search_weight 排序的 top-K 技能。
+     * 仅检索 skill_owner_type=2 的系统技能。
+     * </p>
+     */
+    @PostMapping("/match")
+    public SkillMatchResponse matchSkills(@RequestBody SkillMatchRequest request) {
+        String query = request.getQuery();
+        int limit = request.getLimit();
+        // add-skill-tags-and-intent-filtering：透传标签（可选；null = 走 e2ac8ce 原路径）
+        List<String> tags = request.getTags();
+
+        if (query == null || query.trim().isEmpty()) {
+            SkillMatchResponse empty = new SkillMatchResponse();
+            empty.setQuery(query);
+            empty.setMatches(Collections.emptyList());
+            empty.setTotal(0);
+            return empty;
+        }
+
+        // add-skill-tags-and-intent-filtering：tags 透传 + excludeNames 基础工具排除
+        List<SkillEmbeddingService.MatchResult> results = skillEmbeddingService.match(
+                query, tags, limit, request.getExcludeNames());
+
+        List<SkillMatchResponse.MatchItem> items = new ArrayList<>();
+        for (SkillEmbeddingService.MatchResult r : results) {
+            SkillMatchResponse.MatchItem item = new SkillMatchResponse.MatchItem();
+            item.setSkillId(r.skillId);
+            item.setName(r.name);
+            item.setDescription(r.description);
+            item.setType(r.type);
+            item.setExecutionMode(r.executionMode);
+            item.setRequiresConfirmation(r.requiresConfirmation);
+            item.setAvatar(r.avatar);
+            item.setScore(r.score);
+            items.add(item);
+        }
+
+        SkillMatchResponse response = new SkillMatchResponse();
+        response.setQuery(query);
+        response.setMatches(items);
+        response.setTotal(results.size());
+        return response;
+    }
+
+    /**
+     * 按技能名称列表 + ownerType 直接数据库查询（不走向量检索）。
+     *
+     * <p>
+     * 用于基础工具（file_list/file_read/file_write）等已知名称的技能快速获取。
+     * 不走 embedding API，无延迟，适合高频调用。
+     * </p>
+     *
+     * @param names    技能名称列表（逗号分隔）
+     * @param ownerType 技能所有者类型（2=系统技能）
+     */
+    @GetMapping("/by-names")
+    public SkillMatchResponse findByNames(
+            @RequestParam("names") String names,
+            @RequestParam(value = "ownerType", defaultValue = "2") int ownerType) {
+        SkillMatchResponse response = new SkillMatchResponse();
+        response.setQuery(names);
+
+        if (names == null || names.trim().isEmpty()) {
+            response.setMatches(Collections.emptyList());
+            response.setTotal(0);
+            return response;
+        }
+
+        java.util.List<String> nameList = java.util.Arrays.asList(names.split(","));
+        java.util.List<Skill> skills = skillMapper.findByNamesAndOwnerType(nameList, ownerType);
+
+        java.util.List<SkillMatchResponse.MatchItem> items = new java.util.ArrayList<>();
+        for (Skill s : skills) {
+            SkillMatchResponse.MatchItem item = new SkillMatchResponse.MatchItem();
+            item.setSkillId(s.getId());
+            item.setName(s.getName());
+            item.setDescription(s.getDescription());
+            item.setType(s.getType());
+            item.setExecutionMode(s.getExecutionMode());
+            item.setRequiresConfirmation(s.isRequiresConfirmation());
+            item.setAvatar(s.getAvatar());
+            item.setScore(0);
+            items.add(item);
+        }
+
+        response.setMatches(items);
+        response.setTotal(items.size());
+        return response;
     }
 
     @GetMapping("/{id}")

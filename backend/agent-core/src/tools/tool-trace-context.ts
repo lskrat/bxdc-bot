@@ -44,7 +44,7 @@ export interface ThinkEndEvent {
   type: "think_end";
   thinkId: string;
   parentToolId: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "retry";
 }
 
 /** Union type for all SSE events emitted through the trace context. */
@@ -54,6 +54,8 @@ interface ToolTraceContextValue {
   emit: (event: SseEvent) => void;
   activeParentToolIds: Map<string, string>;
   activeThinkIds: Map<string, string>;
+  /** 并行 tool 调用的 invocationId FIFO 队列，按 toolName 分组 */
+  pendingInvocationIds: Map<string, string[]>;
 }
 
 const toolTraceContext = new AsyncLocalStorage<ToolTraceContextValue>();
@@ -114,7 +116,7 @@ export async function runWithToolTraceContext<T>(
   emit: (event: SseEvent) => void,
   work: () => Promise<T>,
 ): Promise<T> {
-  return await toolTraceContext.run({ emit, activeParentToolIds: new Map(), activeThinkIds: new Map() }, work);
+  return await toolTraceContext.run({ emit, activeParentToolIds: new Map(), activeThinkIds: new Map(), pendingInvocationIds: new Map() }, work);
 }
 
 export function emitToolTraceEvent(event: ToolTraceEvent): void {
@@ -167,4 +169,33 @@ export function getActiveThinkId(parentToolId: string): string | undefined {
 
 export function clearActiveThinkId(parentToolId: string): void {
   toolTraceContext.getStore()?.activeThinkIds.delete(parentToolId);
+}
+
+/**
+ * 将 invocationId 推入 FIFO 队列，供控制器消费后替换 tool_status 的 toolId。
+ * 并行调用各自 push，控制器按序 consume，精准匹配。
+ */
+export function pushInvocationId(toolName: string, invocationId: string): void {
+  if (!toolName || !invocationId) return;
+  const store = toolTraceContext.getStore();
+  if (!store) return;
+  const queue = store.pendingInvocationIds.get(toolName);
+  if (queue) {
+    queue.push(invocationId);
+  } else {
+    store.pendingInvocationIds.set(toolName, [invocationId]);
+  }
+}
+
+/**
+ * 从 FIFO 队列消费一个 invocationId（先进先出）。
+ * 控制器在 on_tool_start 时调用，拿到 func 中对应的 invocationId。
+ */
+export function consumeInvocationId(toolName: string): string | undefined {
+  if (!toolName) return undefined;
+  const store = toolTraceContext.getStore();
+  if (!store) return undefined;
+  const queue = store.pendingInvocationIds.get(toolName);
+  if (!queue || queue.length === 0) return undefined;
+  return queue.shift();
 }

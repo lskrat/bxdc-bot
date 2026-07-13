@@ -34,14 +34,20 @@ public class SkillService {
     private final UserTeamMapper userTeamMapper;
     private final UserMapper userMapper;
     private final LlmHttpClient llmHttpClient;
+    private final ExternalServiceSkillExecutor externalServiceSkillExecutor;
+    private final ExternalServiceRegistry externalServiceRegistry;
 
     public SkillService(SkillMapper skillMapper, ObjectMapper objectMapper, UserTeamMapper userTeamMapper,
-                       UserMapper userMapper, LlmHttpClient llmHttpClient) {
+                       UserMapper userMapper, LlmHttpClient llmHttpClient,
+                       ExternalServiceSkillExecutor externalServiceSkillExecutor,
+                       ExternalServiceRegistry externalServiceRegistry) {
         this.skillMapper = skillMapper;
         this.objectMapper = objectMapper;
         this.userTeamMapper = userTeamMapper;
         this.userMapper = userMapper;
         this.llmHttpClient = llmHttpClient;
+        this.externalServiceSkillExecutor = externalServiceSkillExecutor;
+        this.externalServiceRegistry = externalServiceRegistry;
     }
 
     public List<Skill> listSkillsForUser(String userId) {
@@ -102,6 +108,8 @@ public class SkillService {
         if (skillMapper.findByName(skill.getName()).isPresent()) {
             throw new IllegalArgumentException("Skill with name " + skill.getName() + " already exists");
         }
+        // external-service-skill：kind=external 时 FK 校验 serviceName
+        validateExternalKindIfPresent(skill);
         skill.setCreatedBy(userId);
         if (skill.getVisibility() == null) {
             skill.setVisibility(SkillVisibility.PRIVATE);
@@ -240,6 +248,26 @@ public class SkillService {
             }
             java.util.Map<String, java.util.Map<String, Object>> props =
                 Skill.computeSchemaPropertiesInternal(config);
+
+            // external-service-skill 设计决策 11：kind=external 时 computeSchemaPropertiesInternal
+            // 返回 null 哨兵值，由本方法调用 ExternalServiceSkillExecutor.deriveSchemaProperties() 派生
+            if (props == null) {
+                String kind = parseKind(config);
+                if ("external".equals(kind) && externalServiceSkillExecutor != null) {
+                    java.util.Map<String, Object> externalProps =
+                            externalServiceSkillExecutor.deriveSchemaProperties(skill);
+                    @SuppressWarnings("unchecked")
+                    java.util.Map<String, java.util.Map<String, Object>> properties =
+                            (java.util.Map<String, java.util.Map<String, Object>>) externalProps.get("properties");
+                    if (properties == null || properties.isEmpty()) {
+                        skill.setSchemaPropertiesJson(null);
+                        return;
+                    }
+                    skill.setSchemaPropertiesJson(objectMapper.writeValueAsString(properties));
+                }
+                return;
+            }
+
             if (props.isEmpty()) {
                 skill.setSchemaPropertiesJson(null);
                 return;
@@ -248,6 +276,50 @@ public class SkillService {
         } catch (Exception e) {
             skill.setSchemaPropertiesJson(null);
         }
+    }
+
+    /**
+     * 解析 configuration.kind（供 persistSchemaProperties 使用）。
+     */
+    private String parseKind(String config) {
+        try {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> cfg = objectMapper.readValue(config,
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+            return (String) cfg.get("kind");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * external-service-skill：kind=external 时 FK 校验 serviceName 存在 + 启用。
+     * 仅对 kind=external 触发（其他 kind 不进此分支）；空数据时由 registry.assertExists 抛出可读 IllegalArgumentException。
+     */
+    private void validateExternalKindIfPresent(Skill skill) {
+        if (skill == null || skill.getConfiguration() == null) {
+            return;
+        }
+        String kind = parseKind(skill.getConfiguration());
+        if (!"external".equals(kind)) {
+            return; // 其它 kind 完全不进此分支，原有逻辑零变化
+        }
+        if (externalServiceRegistry == null) {
+            throw new IllegalStateException("ExternalServiceRegistry not available");
+        }
+        String serviceName;
+        try {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> cfg = objectMapper.readValue(skill.getConfiguration(),
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+            serviceName = (String) cfg.get("serviceName");
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid configuration JSON: " + e.getMessage());
+        }
+        if (serviceName == null || serviceName.trim().isEmpty()) {
+            throw new IllegalArgumentException("serviceName is required for kind=external");
+        }
+        externalServiceRegistry.assertExists(serviceName);
     }
 
     /** Optional emoji; when set, same length bound as user avatar. */
@@ -411,6 +483,9 @@ public class SkillService {
             case "python":
                 normalized.put("kind", "python");
                 return normalized;
+            case "external":
+                normalized.put("kind", "external");
+                return normalized;
             default:
                 throw new IllegalArgumentException("Unsupported CONFIG kind: " + kind);
         }
@@ -465,6 +540,10 @@ public class SkillService {
                 requiredText(root, "sandboxName");
                 requiredText(root, "code");
                 requiredText(root, "operation");
+                optionalText(root, "interfaceDescription");
+                break;
+            case "external":
+                requiredText(root, "serviceName");
                 optionalText(root, "interfaceDescription");
                 break;
             case "time":

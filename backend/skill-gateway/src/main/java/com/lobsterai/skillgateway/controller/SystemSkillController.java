@@ -2,6 +2,7 @@ package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.entity.PythonSandbox;
 import com.lobsterai.skillgateway.entity.SystemSkill;
+import com.lobsterai.skillgateway.service.ExternalServiceRegistry;
 import com.lobsterai.skillgateway.service.PythonSandboxService;
 import com.lobsterai.skillgateway.service.SystemSkillService;
 import com.lobsterai.skillgateway.util.StringUtils;
@@ -26,11 +27,14 @@ public class SystemSkillController {
 
     private final SystemSkillService systemSkillService;
     private final PythonSandboxService pythonSandboxService;
+    private final ExternalServiceRegistry externalServiceRegistry;
 
     public SystemSkillController(SystemSkillService systemSkillService,
-                                 PythonSandboxService pythonSandboxService) {
+                                 PythonSandboxService pythonSandboxService,
+                                 ExternalServiceRegistry externalServiceRegistry) {
         this.systemSkillService = systemSkillService;
         this.pythonSandboxService = pythonSandboxService;
+        this.externalServiceRegistry = externalServiceRegistry;
     }
 
     /**
@@ -69,6 +73,20 @@ public class SystemSkillController {
                     + (StringUtils.isBlank(sandbox.getDescription()) ? "" : ": " + sandbox.getDescription()));
             pythonType.put("configSchema", buildPythonConfigSchema());
             types.add(pythonType);
+        }
+
+        // External Skill（动态从 external_service 表加载；每行 enabled=true 一项）
+        // 注：每个 service 一个独立的 executionType 项，但 type 都是 "external"；
+        //     通过唯一 value（"external:<serviceName>"）让前端下拉框区分具体服务。
+        for (com.lobsterai.skillgateway.entity.ExternalService svc : externalServiceRegistry.listEnabled()) {
+            Map<String, Object> externalType = new LinkedHashMap<>();
+            externalType.put("type", "external");
+            externalType.put("serviceName", svc.getName());
+            externalType.put("value", "external:" + svc.getName()); // 唯一 value（前端下拉框 key）
+            externalType.put("label", svc.getName()
+                    + (StringUtils.isBlank(svc.getDescription()) ? "" : ": " + svc.getDescription()));
+            externalType.put("configSchema", buildExternalConfigSchema(svc));
+            types.add(externalType);
         }
 
         return types;
@@ -378,6 +396,75 @@ public class SystemSkillController {
         promptAiOpt.put("fieldId", "template_prompt");
         prompt.put("aiOptimize", promptAiOpt);
         props.put("prompt", prompt);
+
+        schema.put("properties", props);
+        return schema;
+    }
+
+    private Map<String, Object> buildExternalConfigSchema(com.lobsterai.skillgateway.entity.ExternalService svc) {
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        Map<String, Object> props = new LinkedHashMap<>();
+
+        Map<String, Object> serviceName = new LinkedHashMap<>();
+        serviceName.put("type", "string");
+        serviceName.put("label", "服务名称");
+        serviceName.put("ui", "input");
+        serviceName.put("readonly", true);
+        serviceName.put("default", svc.getName());
+        props.put("serviceName", serviceName);
+
+        Map<String, Object> operation = new LinkedHashMap<>();
+        operation.put("type", "string");
+        operation.put("label", "操作标识");
+        operation.put("required", true);
+        operation.put("ui", "input");
+        operation.put("placeholder", "例如：weather-query");
+        operation.put("aiHint", "唯一标识该 Skill 操作的 key（LLM 工具名后缀）");
+        props.put("operation", operation);
+
+        Map<String, Object> iface = new LinkedHashMap<>();
+        iface.put("type", "string");
+        iface.put("label", "接口功能描述");
+        iface.put("ui", "textarea");
+        iface.put("aiHint", "向 LLM 解释这个外部服务的用途和入参约束");
+        Map<String, Object> ifaceAiOpt = new LinkedHashMap<>();
+        ifaceAiOpt.put("fieldId", "external_interface_description");
+        iface.put("aiOptimize", ifaceAiOpt);
+        props.put("interfaceDescription", iface);
+
+        List<com.lobsterai.skillgateway.entity.ExternalServiceInput> inputs = externalServiceRegistry.listInputs(svc.getId());
+        if (inputs != null && !inputs.isEmpty()) {
+            for (com.lobsterai.skillgateway.entity.ExternalServiceInput input : inputs) {
+                Map<String, Object> paramField = new LinkedHashMap<>();
+                String paramName = input.getExternalParamName();
+                boolean isParameterContract = "parameterContract".equals(paramName);
+                if (isParameterContract) {
+                    paramField.put("type", "object");
+                    paramField.put("label", input.getDisplayName() != null ? input.getDisplayName() : paramName);
+                    paramField.put("ui", "jsonEditor");
+                    paramField.put("aiHint", "以 JSON 对象格式描述每个参数的语义、取值范围、示例值，如 {\"q\": {\"description\": \"城市名\", \"example\": \"北京\"}}");
+                    Map<String, Object> paramAiOpt = new LinkedHashMap<>();
+                    paramAiOpt.put("fieldId", "external_parameter_contract");
+                    paramField.put("aiOptimize", paramAiOpt);
+                } else {
+                    paramField.put("type", input.getParamType() != null ? input.getParamType() : "string");
+                    paramField.put("label", input.getDisplayName() != null ? input.getDisplayName() : paramName);
+                    paramField.put("required", input.getIsRequired() != null && input.getIsRequired() == 1);
+                    paramField.put("ui", "textarea");
+                    paramField.put("placeholder", input.getDescription());
+                    paramField.put("aiHint", input.getDescription());
+                    Map<String, Object> paramAiOpt = new LinkedHashMap<>();
+                    paramAiOpt.put("fieldId", "external_param_" + paramName);
+                    paramField.put("aiOptimize", paramAiOpt);
+                }
+                paramField.put("description", input.getDescription());
+                if (input.getParamLocation() != null) {
+                    paramField.put("paramLocation", input.getParamLocation());
+                }
+                props.put(paramName, paramField);
+            }
+        }
 
         schema.put("properties", props);
         return schema;

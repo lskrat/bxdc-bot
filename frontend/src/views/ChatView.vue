@@ -262,21 +262,27 @@ onUnmounted(() => {
 })
 
 // Initialize conversations and load first conversation's history
-onMounted(async () => {
-  if (!currentUser.value) return
-
-  await conversations.init(currentUser.value.id)
+async function initChatForUser(userId: string) {
+  await conversations.init(userId)
 
   // Load first conversation's messages
   if (conversations.currentConversationId.value) {
     const historyMessages = await conversations.switchConversation(
       conversations.currentConversationId.value,
-      currentUser.value.id,
+      userId,
     )
     // Convert API messages to chat messages format.
     // 问好语已作为持久化历史消息随 switchConversation 返回，无需前端模拟。
     messages.value = convertHistoryMessages(historyMessages)
+  } else {
+    messages.value = []
   }
+}
+
+onMounted(async () => {
+  if (!currentUser.value) return
+
+  await initChatForUser(currentUser.value.id)
 
   const taskId = route.query.taskId
   if (typeof taskId === 'string' && taskId) {
@@ -287,6 +293,30 @@ onMounted(async () => {
     }
   }
 })
+
+// 用户切换（A 登出 → B 登录）时，<keep-alive> 让 ChatView 不会重新挂载，
+// 但 useConversations / useChat 的单例状态保留旧用户数据 → 显示老用户对话。
+// 监听 currentUser.id 变化，登录新用户后清空本地 messages 并重拉会话。
+// 注：默认 watch 不在 setup 时触发（immediate=false），所以"打开 App 时已登录"
+// 的场景由 onMounted 处理；watch 只在 currentUser 后续变化时触发。
+watch(
+  () => currentUser.value?.id,
+  async (newId, oldId) => {
+    if (newId === oldId) return
+    if (!newId) {
+      // 登出：清空本地视图状态
+      messages.value = []
+      conversations.currentConversationId.value = null
+      conversations.historyMessages.value = []
+      return
+    }
+    // 用户切换：清空旧数据并按新用户重新加载
+    messages.value = []
+    conversations.currentConversationId.value = null
+    conversations.historyMessages.value = []
+    await initChatForUser(newId)
+  },
+)
 
 // Watch for history loads triggered by sidebar
 watch(

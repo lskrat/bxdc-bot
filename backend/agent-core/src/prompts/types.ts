@@ -45,7 +45,7 @@ export interface SystemPrompts {
   /**
    * 策略提示词：技能发现策略
    *
-   * 强制通过 search_tools 查找技能，禁止凭记忆或历史对话使用技能
+   * 通过 execute_skill_with_context 自动向量检索匹配技能
    */
   skillDiscoveryPolicy: string;
 
@@ -86,9 +86,9 @@ export interface SystemPrompts {
 
   /**
    * 构建任务状态摘要
-   * 
+   *
    * 根据任务状态映射表生成用于注入到 LLM 提示词中的摘要文本
-   * 
+   *
    * @param tasks - 任务状态映射表
    * @returns 格式化的任务状态摘要
    */

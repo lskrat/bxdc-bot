@@ -133,6 +133,12 @@ public class ConversationApiService {
             agentRequest.put("history", history);
             agentRequest.put("conversationId", conv.getConversationId());
             agentRequest.put("enabledSkillIds", parseEnabledSkills(conv.getEnabledSkills()));
+            
+            // Context is required for agent-core to initialize LLM config and session
+            Map<String, Object> context = new LinkedHashMap<>();
+            context.put("userId", conv.getUserId());
+            context.put("sessionId", conv.getConversationId());
+            agentRequest.put("context", context);
 
             // Call agent-core via SSE
             String url = agentCoreUrl + "/agent/run";
@@ -267,15 +273,21 @@ public class ConversationApiService {
                                                 denyConfirmation(taskId);
                                             }
                                         } else if (eventType.isEmpty()) {
-                                            // Final message chunk (role + content, no type field)
+                                            // Streaming message chunk (role + content, no type field)
+                                            // 流式事件：每次追加内容而非覆盖，避免丢失之前的 token
                                             String role = (String) event.get("role");
+                                            Object content = event.get("content");
+                                            log.debug("[agent-chat] received no-type event: role={}, contentType={}, contentLen={}", 
+                                                role, content != null ? content.getClass().getSimpleName() : "null",
+                                                content != null ? (content instanceof String ? ((String) content).length() : -1) : 0);
                                             if ("assistant".equals(role)) {
-                                                Object content = event.get("content");
                                                 if (content != null) {
-                                                    replyBuilder.setLength(0);
                                                     replyBuilder.append(content);
+                                                    log.debug("[agent-chat] appended content, total len now={}", replyBuilder.length());
                                                 }
                                             }
+                                        } else {
+                                            log.debug("[agent-chat] received unhandled event type: {}", eventType);
                                         }
                                     } catch (Exception e) {
                                         log.warn("[agent-chat] failed to parse SSE event: {}", data, e);
@@ -372,10 +384,18 @@ public class ConversationApiService {
     @Transactional
     public Map<String, Object> updateApiDescription(String conversationId, String userId, String apiDescription) {
         Conversation conv = conversationService.getById(conversationId, userId);
-        conv.setApiDescription(apiDescription);
+        
+        if (apiDescription == null || apiDescription.trim().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "API description is required");
+        }
+        
+        conv.setApiDescription(apiDescription.trim());
         conv.setUpdatedAt(LocalDateTime.now());
         conversationMapper.updateById(conv);
-        return toConversationDto(conv);
+        
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("conversation", toConversationDto(conv));
+        return result;
     }
 
     // ---- Helpers ----

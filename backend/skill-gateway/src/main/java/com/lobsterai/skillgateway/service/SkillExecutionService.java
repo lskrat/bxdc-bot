@@ -20,7 +20,6 @@ import org.springframework.util.MultiValueMap;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -63,7 +62,8 @@ public class SkillExecutionService {
             ObjectMapper objectMapper,
             FileToolService fileToolService,
             PythonSandboxService pythonSandboxService,
-            JsonSchemaValidator jsonSchemaValidator
+            JsonSchemaValidator jsonSchemaValidator,
+            ExternalServiceSkillExecutor externalServiceSkillExecutor
     ) {
         this.skillService = skillService;
         this.apiProxyService = apiProxyService;
@@ -79,7 +79,10 @@ public class SkillExecutionService {
         this.jsonSchemaValidator = jsonSchemaValidator;
         this.objectMapper = objectMapper;
         this.fileToolService = fileToolService;
+        this.externalServiceSkillExecutor = externalServiceSkillExecutor;
     }
+
+    private final ExternalServiceSkillExecutor externalServiceSkillExecutor;
 
     public Object execute(ExecuteRequest request) throws Exception {
         Skill skill = skillService.getSkillByIdForUser(request.skillId, request.userId)
@@ -162,6 +165,14 @@ public class SkillExecutionService {
                 return executeFileToolSkill(config, effectiveParameters, request.userId, request.conversationId);
             case "python":
                 return executePythonSkill(skill, config, effectiveParameters, request.userId);
+            case "external":
+                // external-service-skill：直接委托给独立的 ExternalServiceSkillExecutor。
+                // 原 5 个 case 完全不变；新增 case 只在 kind=external 时触发。
+                if (externalServiceSkillExecutor == null) {
+                    throw new IllegalStateException("ExternalServiceSkillExecutor not available");
+                }
+                return externalServiceSkillExecutor.executeExternalSkill(
+                        skill, config, effectiveParameters, request.userId);
             default:
                 throw new IllegalArgumentException("Unsupported skill kind: " + kind);
         }
@@ -619,6 +630,11 @@ public class SkillExecutionService {
         return "POST".equals(method) || "PUT".equals(method) || "PATCH".equals(method) || "DELETE".equals(method);
     }
 
+    /**
+     * 拼装带 query 参数的 URL。不做 URL 编码——编码由下游
+     * {@link com.lobsterai.skillgateway.http.OutboundUrlNormalizer#normalizeForOutboundHttp}
+     * 统一处理，这里只负责 key=value 拼接。
+     */
     private String buildUrlWithQuery(String endpoint, Map<String, Object> queryParams) {
         if (queryParams.isEmpty()) {
             return endpoint;
@@ -629,17 +645,9 @@ public class SkillExecutionService {
             if (entry.getValue() == null) continue;
             sb.append(first ? "?" : "&");
             first = false;
-            try {
-                // 单次 URL 编码（RFC 3986 percent-encoding）。
-                // URLEncoder.encode(String, String) 自 JDK 1.4 就存在，不是 JDK 10+。
-                // 修复前这里误加了一段冗余的 URLEncoder.encode(key) 单参数调用，导致
-                // 拼出来的 URL 是 "key=valkey=val" 双重编码，后端解析失败。
-                sb.append(URLEncoder.encode(entry.getKey(), "UTF-8"));
-                sb.append("=");
-                sb.append(URLEncoder.encode(String.valueOf(entry.getValue()), "UTF-8"));
-            } catch (java.io.UnsupportedEncodingException e) {
-                throw new RuntimeException(e);
-            }
+            sb.append(entry.getKey());
+            sb.append("=");
+            sb.append(entry.getValue());
         }
         return sb.toString();
     }

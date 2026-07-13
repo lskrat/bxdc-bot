@@ -48,7 +48,8 @@ import { AgentFactory } from '../agent/agent';
 import { MemoryService } from '../mem/memory.service';
 import { SkillManager } from '../skills/skill.manager';
 import { LoggerService } from '../utils/logger.service';
-import { describeGatewayExtendedTool } from '../tools/java-skills';
+import { describeGatewayExtendedTool, type BindableAgentTool } from '../tools/java-skills';
+import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import {
   clearActiveParentToolId,
   getActiveParentToolId,
@@ -58,17 +59,107 @@ import {
   setActiveParentToolId,
   getActiveThinkId,
   emitThinkEndEvent,
+  pushInvocationId,
   type ToolTraceEvent,
 } from '../tools/tool-trace-context';
 import { pickMergedLlm } from '../utils/llm-merge';
 import { logAgentRunRawIfEnabled } from '../utils/agent-run-raw-log';
 import { sanitizeHistoryForAgent } from '../utils/history-sanitize';
 import { Command, INTERRUPT } from '@langchain/langgraph';
-import { buildStaticSystemPrompt, Prompts } from '../prompts';
+import { buildStaticSystemPrompt, resolvePromptLevel, Prompts } from '../prompts';
 import { ConversationLogger } from '../utils/conversation-logger';
 import { gatewayCompactClient } from '../services/gateway-compact-client';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { collectDownloadUrls, sanitizeDownloadUrls } from '../utils/download-url-guard';
+import axios from 'axios';
+import { gatewaySkillReadHeaders } from '../tools/java-skills';
+
+// open spec: add-slash-skill-invocation
+// Slash / hash 前缀触发「强制调用某技能」：检测 instruction 开头，跟 conversation 的 enabled_skills 比对 name。
+// `/技能名 参数` 或 `#技能名 参数` 都视为强制调用。开关默认关闭 → 完全不影响老路径。
+// 返回值：matched=true 时附带 trigger 字符 + 匹配到的 skill id/name/args。
+const SLASH_SKILL_INVOCATION_REGEX = /^[/#]([^\s]+)\s*(.*)$/s;
+
+function detectSlashSkillInvocation(
+  instruction: string,
+  enabledSkills: Array<{ id: number; name: string }>,
+):
+  | { matched: false }
+  | { matched: true; trigger: '/' | '#'; skillId: number; skillName: string; args: string } {
+  const trimmed = instruction.trimStart();
+  const m = SLASH_SKILL_INVOCATION_REGEX.exec(trimmed);
+  if (!m) return { matched: false };
+  const trigger = trimmed[0] as '/' | '#';
+  const token = m[1].trim();
+  const args = (m[2] || '').trim();
+  if (!token) return { matched: false };
+  const lower = token.toLowerCase();
+  const hit = enabledSkills.find((s) => s.name.trim().toLowerCase() === lower);
+  if (!hit) return { matched: false };
+  return { matched: true, trigger, skillId: hit.id, skillName: hit.name, args };
+}
+
+// open spec: add-slash-skill-invocation
+// 强制调用指令块（追加到 userContent 末尾，≤ 300 chars）。
+// 关键：明确告诉 LLM 调哪个 skill + 怎么传参数，绕过 LLM 的"自己 search 选技能"路径。
+function injectForcedSkillDirective(skillId: number, skillName: string, trigger: '/' | '#', args: string): string {
+  const argsLine = args
+    ? `\nUser's natural-language args (extract into the skill's parameter schema): "${args}"`
+    : '\nNo extra arguments — call the skill with an empty parameter object.';
+  return (
+    `\n\n[Forced Skill Invocation via '${trigger}']\n` +
+    `The user explicitly selected skill "${skillName}" (id=${skillId}) via '${trigger}' syntax.\n` +
+    `You MUST call the tool named "extended_${skillName.toLowerCase().replace(/\s+/g, '_')}" directly with appropriate parameters.\n` +
+    `Do NOT call search_tools, execute_skill_with_context, or any other selection tool. Do NOT echo the slash prefix back as text.${argsLine}`
+  );
+}
+
+// open spec: add-slash-skill-invocation
+// AGENT_SLASH_SKILL_INVOCATION env 解析：truthy = true|1|yes|on，case-insensitive。
+let slashInvFlagLogged = false;
+function isSlashSkillInvocationEnabled(): boolean {
+  const raw = (process.env.AGENT_SLASH_SKILL_INVOCATION || '').trim().toLowerCase();
+  if (!raw) return false;
+  if (['true', '1', 'yes', 'on'].includes(raw)) return true;
+  if (!slashInvFlagLogged) {
+    console.warn(
+      `[LLM] AGENT_SLASH_SKILL_INVOCATION has unrecognized value '${process.env.AGENT_SLASH_SKILL_INVOCATION}', defaulting to false. Valid: true|1|yes|on.`,
+    );
+    slashInvFlagLogged = true;
+  }
+  return false;
+}
+
+// open spec: add-slash-skill-invocation
+// 调 gateway /api/skills/by-conversation 拿 enabled skills 列表（id + name）。
+// 返回空数组表示无勾选 / 不可用 / 出错（slash detection 自然 fallback）。
+async function fetchConversationEnabledSkills(
+  gatewayUrl: string,
+  apiToken: string,
+  userId: string,
+  conversationId: string,
+): Promise<Array<{ id: number; name: string }>> {
+  try {
+    const resp = await axios.get(`${gatewayUrl}/api/skills/by-conversation`, {
+      headers: gatewaySkillReadHeaders(apiToken, userId),
+      params: { conversationId },
+      timeout: 5000,
+    });
+    const list = Array.isArray(resp.data) ? resp.data : [];
+    return list
+      .filter((s: any) => s && typeof s.id === 'number' && typeof s.name === 'string')
+      .map((s: any) => ({ id: s.id, name: s.name }));
+  } catch (e: any) {
+    const status = e?.response?.status;
+    if (status === 404 || status === 400) {
+      // 会话不存在 / 用户不匹配 / 跨用户访问 → 静默 fallback（spec: 退化成 search_tools 路径）
+      console.log(`[SlashSkill] by-conversation unavailable (${status}) for conv=${conversationId}, user=${userId} → slash detection skipped`);
+    } else {
+      console.warn(`[SlashSkill] by-conversation failed: ${(e as Error)?.message || e}`);
+    }
+    return [];
+  }
+}
 
 /** Payload from {@link interrupt} in extended skills / SSH tools (see java-skills). */
 type SkillInterruptPayload = {
@@ -487,9 +578,14 @@ export class AgentController {
 
     const gatewayToolInfo = describeGatewayExtendedTool(toolCall.toolName);
     const toolInfo = gatewayToolInfo ?? this.skillManager.describeTool(toolCall.toolName);
+    // 并行 execute_skill_with_context：控制器 push LLM tool_call ID → func 端 pop 消费
+    if (toolCall.toolName === 'execute_skill_with_context' && toolCall.status === 'running') {
+      pushInvocationId('execute_skill_with_context', toolCall.toolId);
+    }
+    const effectiveToolId = toolCall.toolId;
     const event: ToolTraceEvent = {
       type: 'tool_status',
-      toolId: toolCall.toolId,
+      toolId: effectiveToolId,
       toolName: toolCall.toolName,
       displayName: toolInfo.displayName,
       kind: toolInfo.kind,
@@ -501,7 +597,7 @@ export class AgentController {
     };
 
     if (toolCall.status === 'running') {
-      setActiveParentToolId(toolCall.toolName, toolCall.toolId);
+      setActiveParentToolId(toolCall.toolName, effectiveToolId);
       toolCallStartTimes.set(toolCall.toolId, Date.now());
       console.log(`[ToolCallLog] Tool started: ${toolCall.toolName}, toolId: ${toolCall.toolId}, sessionId: ${sessionId}`);
     } else {
@@ -567,8 +663,10 @@ export class AgentController {
    */
   @Post('run')
   @Sse()
-  async runTask(@Body() body: { instruction: string; context: any; history?: any[]; enabledSkillIds?: number[]; conversationId?: string }): Promise<Observable<MessageEvent>> {
+  async runTask(@Body() body: { instruction: string; context: any; history?: any[]; enabledSkillIds?: number[]; conversationId?: string; memoryEnabled?: boolean }): Promise<Observable<MessageEvent>> {
     const { instruction, context, history, enabledSkillIds, conversationId } = body;
+    // 记忆开关：默认 true；为 false 时本次对话不读记忆也不写入记忆
+    const memoryEnabled = body.memoryEnabled !== false;
     const safeHistory = Array.isArray(history) ? history : [];
     const sanitizedHistory = sanitizeHistoryForAgent(safeHistory as Array<{ role?: string; content?: unknown }>);
     console.log('[DEBUG] Sanitized history roles:', sanitizedHistory.map(m => m?.role));
@@ -615,14 +713,14 @@ export class AgentController {
               llmApiKey: llmConfig.llmApiKey,
             };
           }
-          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, conversationId, memoryEnabled);
         })
         .catch((e) => {
           console.error('[agent] Error fetching LLM config:', e);
-          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+          this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, conversationId, memoryEnabled);
         });
     } else {
-      this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, enabledSkillIds, conversationId);
+      this.executeAgentTask(instruction, llmContext, compactedHistory, userId, sessionId, subject, gatewayUrl, apiToken, conversationId, memoryEnabled);
     }
 
     return subject.asObservable();
@@ -674,8 +772,8 @@ export class AgentController {
     subject: Subject<MessageEvent>,
     gatewayUrl: string,
     apiToken: string,
-    enabledSkillIds?: number[],
     conversationId?: string,
+    memoryEnabled: boolean = true,
   ) {
     const llm = pickMergedLlm(llmContext);
     const openAiApiKey = llm.apiKey;
@@ -715,28 +813,56 @@ export class AgentController {
         const lastToolArguments = new Map<string, unknown>();
         const lastEmittedToolResult = new Map<string, string | undefined>();
         const toolCallStartTimes = new Map<string, number>();
+        // open spec: fix-llm-request-full-payload — hoist out of try block so finally can read it
+        let mainAgentTools: BindableAgentTool[] | undefined;
+        let agent: any;
         try {
           const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
             subject.next({ data: JSON.stringify(event) });
           });
+
+          // open spec: add-slash-skill-invocation
+          // Slash/hash prefix 检测：提前到 createMainAgent 之前，因为我们需要把 forcedSkillIds 传进去
+          // （单技能模式：LLM 只能看到这一个技能，没有"选择"余地，100% 调它）。
+          // 没命中 → slashHit.matched=false，老路径完全不变。
+          let slashHit: { matched: false } | { matched: true; trigger: '/' | '#'; skillId: number; skillName: string; args: string } = { matched: false };
+          if (isSlashSkillInvocationEnabled() && conversationId && gatewayUrl && apiToken) {
+            const enabledSkills = await fetchConversationEnabledSkills(gatewayUrl, apiToken, userId!, conversationId);
+            slashHit = detectSlashSkillInvocation(instruction, enabledSkills);
+            if (slashHit.matched) {
+              console.log(
+                `[SlashSkill] Forced invocation matched: trigger='${slashHit.trigger}' skill='${slashHit.skillName}' (id=${slashHit.skillId}) args='${slashHit.args.slice(0, 80)}'`,
+              );
+            } else if (SLASH_SKILL_INVOCATION_REGEX.test(instruction.trimStart())) {
+              console.log(`[SlashSkill] Slash/hash prefix detected but no enabled-skill match → falling back to normal routing`);
+            }
+          }
+
           // 使用主 Agent（仅携带基础工具，不加载扩展技能）
           // 具体技能执行由主 Agent 通过 search_tools + execute_skill_with_context 创建子 Agent 完成
-          const { agent } = await AgentFactory.createMainAgent(
+          // open spec: add-slash-skill-invocation: 如果 slash 检测到，传 forcedSkillIds 让主 agent 只挂载这一个技能，
+          // 同时隐藏 search / execute / generator 类工具（LLM 没有"选择"余地，100% 调指定技能）。
+          // open spec: fix-llm-request-full-payload: 同时取 tools 用于拼装完整 Chat Completions body 写入 requestData
+          ({ agent, tools: mainAgentTools } = await AgentFactory.createMainAgent(
             gatewayUrl,
             apiToken,
             openAiApiKey,
-            { 
-              modelName, 
-              baseUrl, 
-              callbacks: [llmCallbackHandler], 
-              sessionId, 
+            {
+              modelName,
+              baseUrl,
+              callbacks: [llmCallbackHandler],
+              sessionId,
               conversationId,
+              ...(slashHit.matched ? { forcedSkillIds: [slashHit.skillId] } : {}),
             },
             userId,
-          );
+          ));
 
-          const memories = await this.memoryService.searchMemories(instruction, userId, 10);
-          console.log(`[Memory] Retrieved ${memories.length} memories for user ${userId}`);
+          // 记忆开关：关闭时不检索记忆（保持远端 c8d9330 的 new structure 不变）
+          const memories = memoryEnabled
+            ? await this.memoryService.searchMemories(instruction, userId, 10)
+            : [];
+          console.log(`[Memory] memoryEnabled=${memoryEnabled}, retrieved ${memories.length} memories for user ${userId}`);
           if (memories.length > 0) {
             console.log(`[Memory] First memory: ${memories[0]}`);
           }
@@ -745,19 +871,59 @@ export class AgentController {
             ? `[User Profile & Preferences]\n${memories.map(m => `- ${m}`).join('\n')}\n\nWhen the user asks about their profile or family (e.g. 籍贯、家乡、喜好、昵称、我儿子叫啥、我女儿叫什么、我爱人叫什么), you MUST answer using the relevant information above and state it explicitly (e.g. "你儿子叫yoyo" when they ask 我儿子叫啥). Do not proactively list all facts unless asked.\n\n`
             : '';
 
-          const staticSystemPrompt = buildStaticSystemPrompt();
-          const profileDetails = await this.memoryService.fetchUserProfile(userId);
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // 显式读取 AGENT_PROMPT_LEVEL（默认 'short'）。fallback 逻辑在 resolvePromptLevel 内部。
+          const promptLevel = resolvePromptLevel();
+          const staticSystemPrompt = buildStaticSystemPrompt(promptLevel);
+          // 记忆开关：关闭时跳过 profile 检索（systemContent 回退到 c8d9330 兜底文案）
+          const profileDetails = memoryEnabled
+            ? await this.memoryService.fetchUserProfile(userId)
+            : '';
 
           // system 消息：只放长期记忆/个人特征
           const systemContent = profileDetails || '你是与本平台 Skill Gateway 集成的智能助手，请根据用户的指令和可用工具完成任务。';
 
-          // user 消息：静态提示词 + 技能上下文 + 对话记忆 + 当前指令
-          const userContent = [
-            `System:\n${staticSystemPrompt}`,
-            skillContext || '',
-            memoryContext || '',
-            `User Instruction:\n${instruction}`,
-          ].filter(s => s).join('\n\n');
+          // user 消息：静态提示词 + 技能上下文 + 对话记忆（不含当前 instruction）
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // instruction 单独开一个 user role，避免和 prompt 上下文拼到一条 user 消息里
+          // （LLM 看到 "System:\n..." + "User Instruction:\n..." 在同一条 message 里容易混淆）
+          // open spec: add-slash-skill-invocation
+          // 强制调用指令：slashHit 已在 createMainAgent 之前检测，复用同一个变量。
+          // 当 slash 命中，把 directive 追加到 userContent 末尾，进一步告诉 LLM 调这个 skill。
+          // （即使 tools 已限定为单技能，directive 也作为防御性 prompt 锚点。）
+          let forcedSkillDirective = '';
+          if (slashHit.matched) {
+            forcedSkillDirective = injectForcedSkillDirective(slashHit.skillId, slashHit.skillName, slashHit.trigger, slashHit.args);
+          }
+
+          // open spec: add-slash-skill-invocation
+          // slash 命中时，user 消息只保留：精简静态提示 + 记忆 + 强制指令
+          // 跳过 skillContext（已无意义，因为只挂载一个技能，且 SKILL 文档不会出现在 prompt 上下文）
+          // 跳过 [技能发现策略] / [技能生成策略] / [扩展技能路由策略] / [Filesystem Skills] 等全文段落（避免误导 LLM 去 search_tools）
+          const userContent = slashHit.matched
+            ? [
+                // 极简静态提示：只告诉 LLM 用对话方式回复 + 调用挂载的工具
+                `System:\nYou are a helpful assistant. You MUST call the only tool provided to answer the user's request. Do NOT call any other tool. Respond briefly in Chinese unless the user wrote in another language.`,
+                memoryContext || '',
+                forcedSkillDirective,
+              ].filter(s => s).join('\n\n')
+            : [
+                `System:\n${staticSystemPrompt}`,
+                skillContext || '',
+                memoryContext || '',
+                forcedSkillDirective,
+              ].filter(s => s).join('\n\n');
+
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // 监控 prompt 体积（内网模型负载关键指标）
+          const historyChars = sanitizedHistory.reduce((sum, m) => {
+            const c = m?.content;
+            if (typeof c === 'string') return sum + c.length;
+            if (Array.isArray(c)) return sum + JSON.stringify(c).length;
+            return sum;
+          }, 0);
+          const totalPromptChars = systemContent.length + userContent.length + historyChars + instruction.length;
+          console.log(`[LLM] Prompt level=${promptLevel}, static=${staticSystemPrompt.length}, skillCtx=${(skillContext || '').length}, memoryCtx=${(memoryContext || '').length}, system=${systemContent.length}, userCtx=${userContent.length}, instruction=${instruction.length}, history=${historyChars}, total=${totalPromptChars}`);
   
           const allowedHistoryRoles = new Set(['user', 'assistant']);
           const validHistory = sanitizedHistory
@@ -770,11 +936,29 @@ export class AgentController {
             })
             .filter((m): m is NonNullable<typeof m> => m != null);
 
-          // 首条唯一的 system 消息，对话记忆放在 user 消息中
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // 去重：客户端会把当前 instruction 也写进 history 末尾（导致 user 重复发送）。
+          // 保留末尾的 instruction，移除 history 里内容相同的末条 user role。
+          const trimmedHistory =
+            validHistory.length > 0
+              && validHistory[validHistory.length - 1].role === 'user'
+              && typeof validHistory[validHistory.length - 1].content === 'string'
+              && (validHistory[validHistory.length - 1].content as string).trim() === instruction.trim()
+              ? validHistory.slice(0, -1)
+              : validHistory;
+
+          // open spec: add-slash-skill-invocation
+          // slash 命中时，instruction 只保留用户参数部分（去掉 /技能名 前缀），让 LLM 专注于解析参数
+          const effectiveInstruction = slashHit.matched ? (slashHit.args || '') : instruction;
+
+          // 首条唯一的 system 消息 + user 消息（prompt 上下文） + user 消息（实际指令）
+          // open spec: optimize-agent-prompt-and-skill-mounting
+          // instruction 单独作为一条 user 消息，结构更清晰
           const messages: any[] = [
             { role: 'system', content: systemContent },
-            ...(validHistory as any[]),
+            ...(trimmedHistory as any[]),
             { role: 'user', content: userContent },
+            { role: 'user', content: effectiveInstruction },
           ];
 
           console.log('[DEBUG] Final messages roles:', messages.map(m => m.role));
@@ -785,21 +969,27 @@ export class AgentController {
           let iterator = (stream as AsyncIterable<any>)[Symbol.asyncIterator]();
           // 记录 messages 模式已流式推送的内容，用于 updates 模式去重
           let messagesModeAccum = '';
+          let totalTokenChunks = 0;
+          let blockedTokenChunks = 0;
 
           outer: while (true) {
             const { value: raw, done } = await iterator.next();
             if (done) {
+              console.log(`[Stream] Done. Total token chunks: ${totalTokenChunks}, blocked by sub-agent: ${blockedTokenChunks}`);
               break;
             }
 
             // Token 级流式：messages 模式 chunk 携带 LLM 逐 token 内容
             const tokenText = extractMessageStreamToken(raw);
             if (tokenText.length > 0) {
+              totalTokenChunks++;
               // 若 execute_skill_with_context 正在运行，跳过主 token 发射
               // （子 Agent token 已通过 agent_text 事件独立推送）
               if (!getActiveParentToolId('execute_skill_with_context')) {
                 messagesModeAccum += tokenText;
                 subject.next({ data: JSON.stringify({ role: 'assistant', content: tokenText }) });
+              } else {
+                blockedTokenChunks++;
               }
               continue;
             }
@@ -858,91 +1048,15 @@ export class AgentController {
 
                 if (!confirmedResult.confirmed) {
                   console.log(`[DEBUG-confirmation] ==================== USER CANCELLED ====================`);
-                  console.log(`[DEBUG-confirmation] User cancelled, creating cancelResumeStream`);
-                  const ac = new AbortController();
+                  // 跟确认流程一致：替换 iterator，让主 Agent 流自然产出取消总结
                   const cancelResumeStream = await agent.stream(
                     new Command({ resume: { confirmed: false } }),
-                    { configurable: { thread_id: sessionId }, signal: ac.signal, streamMode: ["updates", "messages"] as any },
+                    { configurable: { thread_id: sessionId }, streamMode: ["updates", "messages"] as any },
                   );
-                  console.log(`[DEBUG-confirmation] cancelResumeStream created, getting iterator`);
-                  let cancelIter = cancelResumeStream[Symbol.asyncIterator]();
-                  const MAX_CANCEL_CHUNKS = 24;
-                  for (let step = 0; step < MAX_CANCEL_CHUNKS; step += 1) {
-                    let raw: any;
-                    try {
-                      const n = await cancelIter.next();
-                      if (n.done) break;
-                      raw = n.value;
-                    } catch (e) {
-                      const name = e && typeof e === 'object' && 'name' in e ? (e as Error).name : '';
-                      if (name === 'AbortError' || ac.signal.aborted) break;
-                      throw e;
-                    }
-                    // 取消流也处理 messages 模式 token
-                    const cancelToken = extractMessageStreamToken(raw);
-                    if (cancelToken.length > 0) {
-                      subject.next({ data: JSON.stringify({ role: 'assistant', content: cancelToken }) });
-                      continue;
-                    }
-                    const payload = unwrapLangGraphStreamPayload(raw);
-                    const forward = stripInterruptForClient(payload);
-                    if (forward != null) {
-                      subject.next({ data: JSON.stringify(forward) });
-                      this.emitToolEvents(subject, forward, seenToolStatuses, lastToolArguments, lastEmittedToolResult, toolCallStartTimes, conversationLogger, traceId, sessionId, userId, allowedDownloadUrls);
-                      if (typeof forward === 'object') {
-                        const forwardObj = forward as Record<string, unknown>;
-                        let nextContent: string | null = null;
-
-                        if (typeof forwardObj.content === 'string') {
-                          nextContent = forwardObj.content;
-                        }
-
-                        if (!nextContent) {
-                          const lastAssistantMessage = getChunkMessages(forward)
-                            .filter((message) => isAssistantMessage(message))
-                            .at(-1);
-                          nextContent = getMessageContent(lastAssistantMessage);
-                        }
-
-                        if (nextContent && nextContent.length > 0) {
-                          const newContent = fullAssistantResponse.length > 0 && nextContent.startsWith(fullAssistantResponse)
-                            ? nextContent.slice(fullAssistantResponse.length)
-                            : nextContent;
-                          if (newContent.length > 0) {
-                            fullAssistantResponse = nextContent;
-                            subject.next({ data: JSON.stringify({ role: 'assistant', content: newContent }) });
-                          }
-                        }
-                      }
-                    }
-                    if (chunkContainsCancelledToolForId([payload, forward].filter(Boolean), v.toolCallId)) {
-                      ac.abort();
-                      break;
-                    }
-                  }
-                  if (!ac.signal.aborted) {
-                    ac.abort();
-                  }
-                  const parentToolId = getActiveParentToolId('execute_skill_with_context');
-                  const activeThinkId = getActiveThinkId(parentToolId || 'execute_skill_with_context');
-                  if (activeThinkId) {
-                    emitThinkEndEvent({
-                      type: 'think_end',
-                      thinkId: activeThinkId,
-                      parentToolId: parentToolId || v.toolCallId,
-                      status: 'completed',
-                    });
-                  }
-                  const cancelMessage = `已取消执行「${skillName}」。`;
-                  if (fullAssistantResponse.length > 0 && !fullAssistantResponse.endsWith(cancelMessage)) {
-                    fullAssistantResponse = fullAssistantResponse + '\n\n' + cancelMessage;
-                    subject.next({ data: JSON.stringify({ role: 'assistant', content: '\n\n' + cancelMessage }) });
-                  } else {
-                    fullAssistantResponse = cancelMessage;
-                    subject.next({ data: JSON.stringify({ role: 'assistant', content: cancelMessage }) });
-                  }
-                  console.log(`[DEBUG-confirmation] User cancelled, breaking outer loop`);
-                  break outer;
+                  console.log(`[DEBUG-confirmation] cancelResumeStream created, replacing iterator`);
+                  iterator = cancelResumeStream[Symbol.asyncIterator]();
+                  console.log(`[DEBUG-confirmation] continue outer loop with cancel stream`);
+                  continue outer;
                 }
 
                 console.log(`[DEBUG-confirmation] User confirmed, creating resumeStream with adjustedParams=${JSON.stringify(confirmedResult.adjustedParams)}`);
@@ -1032,7 +1146,7 @@ export class AgentController {
           const safeAssistantResponse = (fullAssistantResponse && typeof fullAssistantResponse === 'string') ? fullAssistantResponse : ' ';
           console.log(`[Memory] Analysis started. User: "${instruction}", Agent: "${safeAssistantResponse.slice(0, 50)}..."`);
 
-          if (instruction) {
+          if (instruction && memoryEnabled) {
             await this.memoryService.processTurn({
               sessionId,
               userId,
@@ -1070,7 +1184,10 @@ export class AgentController {
               llmModel: modelName,
               skillName: skillNames.join(','),
               toolName: toolNames.join(','),
-              requestData: JSON.stringify({ instruction, context: llmContext, history: sanitizedHistory }),
+              // open spec: fix-llm-request-full-payload — 把 tools 转 OpenAI Chat Completions 格式后
+              // 拼到 requestData 里，skill-gateway 才能算出"实际送给大模型的字符数"。
+              // 结构：{ modelName, params: { options: { tools: [...], signal: {} } }, messages: [...] }
+              requestData: JSON.stringify(buildFullLlmRequestBody(modelName, mainAgentTools, sanitizedHistory, instruction, llmContext)),
               responseData: JSON.stringify({ response: fullAssistantResponse }),
               conversationContent: JSON.stringify({
                 messages: [
@@ -1088,4 +1205,70 @@ export class AgentController {
         }
       });
   }
+}
+
+/**
+ * open spec: fix-llm-request-full-payload
+ *
+ * 构造"实际送给大模型"的完整 Chat Completions body，序列化后写入 conversation_logs.request_data。
+ * 这样 skill-gateway 就能用 CHAR_LENGTH(request_data) 算出真实 prompt 字符数（含 tools + messages）。
+ *
+ * 结构对齐 OpenAI Chat Completions API：
+ * {
+ *   modelName: "MiniMax-M3",
+ *   params: { options: { tools: [{type:"function", function:{name,description,parameters}}, ...], signal: {} }, batch_size: 1 },
+ *   messages: [{role:"system",content:instruction}, ...sanitizedHistory, {role:"user",content:userInput}]
+ * }
+ */
+function buildFullLlmRequestBody(
+  modelName: string,
+  tools: BindableAgentTool[] | undefined,
+  sanitizedHistory: Array<{ role?: string; content?: unknown }>,
+  instruction: string,
+  llmContext: Record<string, unknown>,
+): Record<string, unknown> {
+  // 1. tools → OpenAI Chat Completions format
+  let openAiTools: Array<Record<string, unknown>> = [];
+  if (Array.isArray(tools) && tools.length > 0) {
+    try {
+      openAiTools = tools.map((t) => {
+        const def = convertToOpenAITool(t) as any;
+        // convertToOpenAITool returns { type, function } — already the wire format
+        return def as Record<string, unknown>;
+      });
+    } catch (e) {
+      console.warn(`[buildFullLlmRequestBody] convertToOpenAITool failed, falling back to name+description only: ${e instanceof Error ? e.message : e}`);
+      openAiTools = tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: { type: 'object', properties: {} },
+        },
+      }));
+    }
+  }
+
+  // 2. messages = [system(instruction) + ...history + user(instruction as final user turn)]
+  //    匹配 agent-core 实际喂给 LLM 的格式（SystemMessage = llmContext/历史 + UserMessage = 本轮 instruction）
+  const messages: Array<Record<string, unknown>> = [
+    ...sanitizedHistory.map((m) => ({
+      role: typeof m.role === 'string' ? m.role : 'user',
+      content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+    })),
+    { role: 'user', content: instruction },
+  ];
+
+  return {
+    modelName,
+    params: {
+      options: {
+        tools: openAiTools,
+        signal: {},
+      },
+      batch_size: 1,
+    },
+    context: llmContext,  // 保留 context 元信息（不影响 token 计数但保留诊断信息）
+    messages,
+  };
 }

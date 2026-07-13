@@ -19,6 +19,7 @@ import {
   isSshDraft,
   isTemplateDraft,
   isPythonDraft,
+  isExternalDraft,
   isOpenClawDraft,
   parseSkillDraft,
   serializeSkillDraft,
@@ -29,6 +30,7 @@ import {
   type SshConfigDraft,
   type TemplateConfigDraft,
   type PythonConfigDraft,
+  type ExternalConfigDraft,
 } from '../utils/skillEditor';
 
 const emit = defineEmits<{
@@ -58,6 +60,10 @@ interface ExecutionType {
   type: string;
   label: string;
   configSchema: ConfigSchema;
+  /** 唯一 value（前端下拉框 key）。外部服务 = "external:<serviceName>"，其他 type = undefined（退到 type） */
+  value?: string;
+  /** 外部服务名（executionTypes 里 external 类型时携带） */
+  serviceName?: string;
 }
 
 interface PythonSandboxItem {
@@ -140,6 +146,14 @@ function draftToFormValues(draft: SkillConfigDraft): Record<string, unknown> {
       parameterContract: pc,
     };
   }
+  if (isExternalDraft(draft)) {
+    return {
+      serviceName: draft.serviceName,
+      operation: draft.operation,
+      interfaceDescription: draft.interfaceDescription,
+      ...draft.parameters,
+    };
+  }
   return {};
 }
 
@@ -187,6 +201,22 @@ function updateDraftFromFormValues(values: Record<string, unknown>) {
     d.operation = (values.operation as string) ?? d.operation;
     d.interfaceDescription = (values.interfaceDescription as string) ?? d.interfaceDescription;
     d.parameterContractText = values.parameterContract === null ? '' : (values.parameterContract && typeof values.parameterContract === 'object' ? JSON.stringify(values.parameterContract, null, 2) : (typeof values.parameterContract === 'string' ? values.parameterContract : d.parameterContractText));
+  } else if (isExternalDraft(configDraft.value)) {
+    const d = configDraft.value as ExternalConfigDraft;
+    d.serviceName = (values.serviceName as string) ?? d.serviceName;
+    d.operation = (values.operation as string) ?? d.operation;
+    d.interfaceDescription = (values.interfaceDescription as string) ?? d.interfaceDescription;
+    // 把所有非固定字段收进 parameters（子表动态字段：q / units / lang / parameterContract 等）
+    const fixedKeys = new Set<string>(['serviceName', 'operation', 'interfaceDescription']);
+    const newParams: Record<string, string> = {};
+    for (const key of Object.keys(values)) {
+      if (!fixedKeys.has(key)) {
+        const v = values[key];
+        if (v == null) continue;
+        newParams[key] = typeof v === 'string' ? v : JSON.stringify(v);
+      }
+    }
+    d.parameters = newParams;
   }
 }
 
@@ -202,6 +232,17 @@ watch(configFormValues, (val) => {
 }, { deep: true });
 
 const currentExecutionType = computed(() => {
+  // external 类型下，需要按 serviceName 精确匹配到对应的 executionType
+  // （executionTypes 里多个 type=external 项，每个对应一个 service）
+  if (currentConfigKind.value === 'external' && isExternalDraft(configDraft.value)) {
+    const svcName = configDraft.value.serviceName;
+    if (svcName) {
+      const matched = executionTypes.value.find(
+        t => t.type === 'external' && t.serviceName === svcName
+      );
+      if (matched) return matched;
+    }
+  }
   return executionTypes.value.find(t => t.type === currentConfigKind.value) ?? null;
 });
 
@@ -268,7 +309,8 @@ const formData = reactive({
 
 const configKindOptions = computed(() => {
   return executionTypes.value.map(t => ({
-    value: t.type,
+    // 优先用后端给的 value（外部服务用 "external:<serviceName>" 区分不同服务）；无 value 时退到 type
+    value: t.value || t.type,
     label: t.label,
   }));
 });
@@ -277,7 +319,28 @@ const currentConfigKind = computed<ConfigKind>(() => {
   if (isApiDraft(configDraft.value)) return 'api';
   if (isTemplateDraft(configDraft.value)) return 'template';
   if (isPythonDraft(configDraft.value)) return 'python';
+  if (isExternalDraft(configDraft.value)) return 'external';
   return 'ssh';
+});
+
+/**
+ * 当前选中项的 unique value（与 configKindOptions.value 对齐）。
+ * - api/ssh/template/python：value == type
+ * - external：value == "external:<serviceName>"，按 draft.serviceName 匹配
+ * 用于 <t-select :model-value> 让 select 正确显示 label。
+ */
+const currentConfigKindValue = computed<string>(() => {
+  const kind = currentConfigKind.value;
+  if (kind === 'external' && isExternalDraft(configDraft.value)) {
+    const svcName = configDraft.value.serviceName;
+    if (svcName) {
+      const matched = executionTypes.value.find(
+        t => t.type === 'external' && t.serviceName === svcName
+      );
+      if (matched) return matched.value || `external:${svcName}`;
+    }
+  }
+  return kind;
 });
 
 const apiDraft = computed(() => (isApiDraft(configDraft.value) ? configDraft.value : null));
@@ -312,6 +375,7 @@ function resetForm() {
   parseError.value = null;
   rawConfiguration.value = '{}';
   configDraft.value = createDefaultSkillDraft('CONFIG');
+  syncDraftToConfigForm();
 }
 
 function openCreateForm() {
@@ -387,8 +451,20 @@ function handleExecutionModeChange(value: string) {
 }
 
 function handleConfigKindChange(value: string) {
-  const kind = configKindOptions.value.some(option => option.value === value) ? (value as ConfigKind) : 'api';
+  // 通过唯一 value 找到对应的 executionType（外部服务用 "external:<serviceName>" 区分）
+  const matchedType = executionTypes.value.find(t => (t.value || t.type) === value);
+  const kind = matchedType ? (matchedType.type as ConfigKind) : 'api';
   configDraft.value = createDefaultSkillDraft('CONFIG', kind);
+  // external 类型：按 unique value 找到对应 executionType，用 serviceName / schema.default 填入 draft
+  if (kind === 'external' && isExternalDraft(configDraft.value)) {
+    const externalType = matchedType ?? executionTypes.value.find(t => t.type === 'external');
+    // 优先用 executionType.serviceName（按 unique value 精确匹配），其次 schema.default（向后兼容）
+    const svcName = externalType?.serviceName
+      ?? externalType?.configSchema?.properties?.serviceName?.default;
+    if (typeof svcName === 'string' && svcName) {
+      (configDraft.value as ExternalConfigDraft).serviceName = svcName;
+    }
+  }
   parseError.value = null;
   syncDraftToConfigForm();
 }
@@ -515,7 +591,7 @@ defineExpose({ openCreateForm, openEditForm, openViewForm, handleDelete })
       <template v-else-if="formData.executionMode === 'CONFIG'">
         <t-form-item label="基础类型" name="configKind">
           <t-select
-            :model-value="currentConfigKind"
+            :model-value="currentConfigKindValue"
             :options="configKindOptions"
             :disabled="isViewMode"
             @change="handleConfigKindChange"

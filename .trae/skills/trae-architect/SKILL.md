@@ -1,3 +1,8 @@
+---
+name: "trae-architect"
+description: "对 OpenSpec proposal / design / specs / tasks 工件做架构一致性审查（对照 AGENTS.md 6 条约束 + 平台架构原则）。在 openspec-propose 完成后、openspec-apply 之前调用，或用户明确要求架构/需求审核时调用。评审产出落在 openspec/reviews/。"
+---
+
 # TRAE-architect — bxdc-bot 架构审视 Skill
 
 > **版本**: v1.0.0 | **最后更新**: 2026-06-17

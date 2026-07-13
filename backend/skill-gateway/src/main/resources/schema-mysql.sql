@@ -23,6 +23,11 @@ CREATE TABLE IF NOT EXISTS skills (
     created_by VARCHAR(128),
     team_id VARCHAR(512) NULL,
     intro_md TEXT,
+    skill_owner_type TINYINT(1) DEFAULT 1 COMMENT '1=用户技能, 2=系统技能, 0=未指定',
+    search_weight DOUBLE DEFAULT 1.0 COMMENT '向量检索权重，默认 1.0；>1 排名靠前，0 不参与检索',
+    file_type VARCHAR(32) DEFAULT NULL COMMENT '文件类型标签：通用/Word/文本/Markdown/Excel（add-skill-tags-and-intent-filtering）',
+    operation_intent VARCHAR(32) DEFAULT NULL COMMENT '操作意图标签：展示/删除/读取/写入/生成/提取/搜索/修改/分析/转换/新建/校验（add-skill-tags-and-intent-filtering）',
+    business_scenario VARCHAR(32) DEFAULT NULL COMMENT '业务场景标签：文件管理/检索查看/生成导出/提取解析/编辑整理/计算分析（add-skill-tags-and-intent-filtering）',
     created_at DATETIME,
     updated_at DATETIME,
     INDEX idx_skills_team_id (team_id)
@@ -362,6 +367,45 @@ CREATE TABLE IF NOT EXISTS python_sandbox  (
   UNIQUE INDEX name(name) USING BTREE,
   INDEX idx_python_sandbox_enabled(enabled) USING BTREE
 ) ENGINE = InnoDB AUTO_INCREMENT = 2 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'Python ' ROW_FORMAT = Dynamic;
+
+-- external_service（外部服务注册表 - 第三方 HTTP 服务接入信息，由 admin 维护）
+-- 设计参考 openspec/changes/add-external-service-skill/
+CREATE TABLE IF NOT EXISTS external_service (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(64) NOT NULL UNIQUE COMMENT '服务引用名（被 skills.configuration.serviceName 引用）',
+    endpoint_url VARCHAR(1024) NOT NULL COMMENT '完整 URL；支持 {external_param_name} 占位符供 path 替换',
+    http_method VARCHAR(8) NOT NULL DEFAULT 'POST' COMMENT 'GET/POST/PUT/DELETE/PATCH',
+    auth_kind VARCHAR(16) NOT NULL DEFAULT 'none' COMMENT 'none/apiKey/bearer/dynamicToken',
+    auth_config JSON NULL COMMENT '认证配置（JSON；schema 取决于 auth_kind；valueStatic 用 AesCipher 加密存储）',
+    response_format VARCHAR(16) NOT NULL DEFAULT 'json' COMMENT 'json/text/binary-base64',
+    retry_max INT NOT NULL DEFAULT 0 COMMENT '失败重试次数（不含首次）；0=不重试；最大 5；退避基数固定 500ms 指数',
+    enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用；禁用后无法调用',
+    display_order INT NOT NULL DEFAULT 0 COMMENT 'Admin 列表展示顺序；小值靠前；并列按 id ASC',
+    description TEXT NULL COMMENT 'Admin 备注',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_es_enabled_sort (enabled, display_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='外部服务注册表（主表）';
+
+-- external_service_input（外部服务入参契约 - 第三方 API 入参定义，由 admin 维护；运行时单一数据源）
+-- 设计参考 openspec/changes/add-external-service-skill/
+CREATE TABLE IF NOT EXISTS external_service_input (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    service_id BIGINT NOT NULL COMMENT 'FK -> external_service.id',
+    external_param_name VARCHAR(64) NOT NULL COMMENT '第三方 API 文档入参名（字符级与第三方一致）；同时是 LLM tool schema property key 与出站 key',
+    display_name VARCHAR(64) NULL COMMENT 'Skill 创建页 textarea label（中文）',
+    is_required TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'LLM tool schema required；Gateway 执行时必填校验',
+    is_raw_transmission TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=原文透传（不做 URL 编码/JSON 序列化/转义）；0=标准编码',
+    param_location VARCHAR(16) NOT NULL DEFAULT 'body' COMMENT 'query/body/path/header',
+    body_content_type VARCHAR(16) NULL COMMENT 'param_location=body 时必填：json/form/text/binary',
+    param_type VARCHAR(16) NOT NULL DEFAULT 'string' COMMENT 'string/number/boolean（LLM tool schema property 类型）',
+    is_sensitive TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'api_call_log 审计脱敏标志；1=***MASKED***',
+    description TEXT NULL COMMENT 'textarea helper text + LLM tool schema property description',
+    display_order INT NOT NULL DEFAULT 0 COMMENT '表单渲染顺序 + Gateway 出站遍历顺序',
+    UNIQUE KEY uk_service_external_param (service_id, external_param_name),
+    INDEX idx_esi_service_sort (service_id, display_order),
+    CONSTRAINT fk_esi_service FOREIGN KEY (service_id) REFERENCES external_service(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='外部服务入参契约（子表；运行时单一数据源）';
 
 -- sys_label（系统标签表 - 用于分类和标记数据）
 CREATE TABLE IF NOT EXISTS sys_label (

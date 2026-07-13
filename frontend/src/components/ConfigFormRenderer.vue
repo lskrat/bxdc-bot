@@ -172,12 +172,33 @@ function handleOptimize(key: string) {
       @change="(val: number) => setFieldValue(key, val)"
     />
 
+    <div v-else-if="prop.ui === 'table'" class="parameter-table-wrap">
+      <t-table
+        :columns="[
+          { key: 'externalParamName', label: '参数名' },
+          { key: 'displayName', label: '显示名称' },
+          { key: 'paramType', label: '类型' },
+          { key: 'isRequired', label: '必填' },
+          { key: 'paramLocation', label: '位置' },
+          { key: 'description', label: '描述' }
+        ]"
+        :data="Array.isArray(getFieldValue(key)) ? getFieldValue(key) : []"
+        :bordered="true"
+        :stripe="true"
+      >
+        <template #isRequired="{ row }">
+          <span :class="row.isRequired ? 'required-yes' : 'required-no'">
+            {{ row.isRequired ? '是' : '否' }}
+          </span>
+        </template>
+      </t-table>
+    </div>
+
     <div v-else-if="prop.ui === 'textarea' || prop.ui === 'jsonEditor' || prop.ui === 'keyValue'" class="optimize-textarea-wrap">
       <t-textarea
         :model-value="prop.ui === 'jsonEditor' || prop.ui === 'keyValue' ? formatJsonValue(getFieldValue(key)) : String(getFieldValue(key) ?? '')"
         :placeholder="prop.placeholder"
         :autosize="{ minRows: 3, maxRows: 8 }"
-        :maxlength="prop.ui === 'textarea' ? 1000000 : undefined"
         :readonly="props.readonly"
         :disabled="props.readonly"
         @change="(val: string) => prop.ui === 'jsonEditor' || prop.ui === 'keyValue' ? handleJsonChange(key, val) : setFieldValue(key, val)"
@@ -239,5 +260,19 @@ function handleOptimize(key: string) {
   line-height: 1.5;
   color: var(--td-text-color-placeholder);
   font-weight: 400;
+}
+
+.parameter-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.required-yes {
+  color: var(--td-success-color, #20c997);
+  font-weight: 500;
+}
+
+.required-no {
+  color: var(--td-text-color-placeholder);
 }
 </style>

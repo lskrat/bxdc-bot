@@ -52,15 +52,27 @@ public class FileToolSeeder implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
-        // ===== 文件管理（模块五 / 6.x）=====
-        seedFileManage("file_list", "列出当前用户已上传的所有文件（支持类型/关键词过滤、按上传时间/大小/名称排序、分页）",
+        // ===== 文件管理 =====
+        seedFileManage("file_list", "功能说明：列出/搜索会话内已上传文件，按类型/关键词/上传时间/大小排序分页。用于回答\"我上传了哪些文件\"\"帮我找下报告\"，或为后续文件操作（读/改/删）提供候选 fileId。\n触发关键词：列出、查询、搜索、筛选、找文件、查看文件\n注意事项：只查文件列表不返回内容（读内容用 file_read）；不删不改。",
                 fileListSchema());
-        seedFileManage("file_delete", "删除指定文件。通过 fileRef 指定文件名或 ID。支持二次确认：首次调用返回确认请求，LLM 引导用户确认后再次调用并设置 confirmed=true 才执行",
+        seedFileManage("file_delete", "功能说明：按 fileId 或文件名删除指定文件，需二次确认。用于删除误传/不再使用的单个文件，回应用户\"这个不要了\"\"帮我删掉\"\"撤回刚才那个\"。\n触发关键词：删除、删文件、移除、删除文件\n注意事项：只删单个文件；批量清空用 file_clear_all；需 confirm=true 二次确认。",
                 fileDeleteSchema());
-        seedFileManage("file_clear_all", "清空当前会话内的所有文件（其他会话的文件不受影响）。存量未启用会话隔离的对话会清空用户全部文件。支持二次确认：首次调用返回确认请求，LLM 引导用户确认后再次调用并设置 confirmed=true 才执行",
+        seedFileManage("file_clear_all", "功能说明：清空当前会话内所有文件，需二次确认。用于彻底重开会话、换一批文件、清理工作区，回应用户\"全部清空\"\"重置一下\"\"把刚才的删了重来\"。\n触发关键词：清空、全部删除、批量删除、清理文件\n注意事项：清空不可恢复；单文件删除用 file_delete。",
                 confirmedOnlySchema());
-        seedFileManage("file_detail", "查看文件详情（名称、大小、类型、上传时间、downloadUrl、parsedSummary 反序列化结果）。可通过 fileId（数字）或 fileName（原始文件名）指定目标文件",
+        seedFileManage("file_detail", "功能说明：查看指定文件名称、大小、类型、上传时间、downloadUrl、fileId。用于核对文件状态、获取下载链接、确认 fileId，回应用户\"这个文件多大\"\"给我下载链接\"\"这个 fileId 是多少\"。\n触发关键词：详情、查看信息、获取链接、文件信息、属性\n注意事项：只查元数据不读内容（用 file_read）。",
                 fileDetailSchema());
+        seedFileManage("file_init_temp", "功能说明：为 Word/Excel/Markdown/文本源文件创建可编辑临时副本。所有修改类操作（excel_filter/excel_clean/word_replace_text/md_filter_section 等）调用前必须先执行，回应用户\"改一下这个 Excel\"\"我想编辑这份文档\"\"修改后再给我\"。\n触发关键词：初始化、临时副本、创建副本、init、可编辑副本\n注意事项：只支持这几类；做修改类操作前先调用；excel_init_temp/md_init_temp/txt_init_temp 已废。",
+                fileRefSchema());
+        seedFileOperate("file_read", "功能说明：自动按文件类型读取 txt/md/log/html/doc/docx/xls/xlsx/csv 内容。用于打开/预览文件、读取表格分页、查看文档全文，回应用户\"打开看看\"\"读一下内容\"\"看下文件说了什么\"\"把表格数据给我\"。\n触发关键词：读取、打开、查看全文、读文件、读内容、查看内容\n注意事项：只读不改；不返回元数据（用 file_detail）。",
+                fileReadSchema());
+        seedFileOperate("file_write", "功能说明：创建或覆盖/追加文本/Markdown/Word/Excel/CSV 文件。用于生成新报告、导出分析结果、保存结论、创建 Word 文档或 Excel 表格，回应用户\"生成一份报告\"\"导出统计结果\"\"创建新 Excel\"\"把分析写到文件里\"。\n触发关键词：写入、生成、创建文件、导出、输出、新建\n注意事项：默认 in-place 覆盖；改文件先 file_init_temp。",
+                fileWriteSchema());
+
+        // 删除旧的初始化方法（已合并为 file_init_temp）
+        deleteLegacyInitTempSkills();
+
+        // 删除旧的读写工具（已合并为 file_read/file_write）
+        deleteLegacyReadWriteSkills();
 
         // ===== Word 操作（5.3）=====
         // 回退方案 B：恢复 6 个细粒度 word_* 工具，删除 word_ops 整合行。
@@ -69,74 +81,142 @@ public class FileToolSeeder implements ApplicationRunner {
         //         3) 重新 seed 6 个 word_*（缺哪个补哪个）。
         rollbackWordOpsIntegration();
 
-        // ===== TXT/MD/LOG/HTML 操作（5.4）=====
-        seedFileOperate("txt_init_temp", "初始化文本临时文件：根据源文件（.txt/.md/.log/.html）创建临时文件副本，后续所有 txt_read/txt_write/txt_keyword_lines 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",
-                fileRefSchema());
-        seedFileOperate("txt_read", "读取文本文件全文或指定行范围（支持 .txt/.md/.log/.html 及指定编码）", txtReadSchema());
-        seedFileOperate("txt_write", "向文本文件写入内容（支持 .txt/.md/.log/.html）。两种场景：1) 传入 fileId/fileRef 时在已有文件上操作（基于源文件生成 _temp 临时副本，源文件保持不变；append=true 追加，append=false 覆盖）；2) 不传 fileId/fileRef 时创建全新 TXT 文件，自动上传并返回新 fileId。多次调用同一个 fileId 时会自动续接到同一个临时文件上。\n\n【重要】执行完成后，必须将返回的 fileId/fileName/fileSize/lineCount/totalChars 以 Markdown 表格形式展示给用户，并在表格下方展示下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n示例表格：\n| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告_temp.txt |\n| 文件大小 | 1.5 KB |\n| 总行数 | 25 |\n| 总字符数 | 1024 |\n\n🖱️ [点击下载 报告_temp.txt](downloadUrl)", txtWriteSchema());
-        seedFileOperate("txt_keyword_lines", "提取包含关键词的所有行（支持 .txt/.md/.log/.html，可选上下文行）", txtKeywordLinesSchema());
-        seedFileOperate("txt_regex", "用正则表达式匹配文本行并返回捕获组（支持 .txt/.md/.log/.html）", txtRegexSchema());
-        seedFileOperate("txt_line_range", "提取指定行范围 1-based（支持 .txt/.md/.log/.html）", txtLineRangeSchema());
-        seedFileOperate("txt_section", "提取 Markdown 标题章节（支持嵌套控制；.log/.html 文件不适用，会返回空）", txtSectionSchema());
-        seedFileOperate("txt_stats", "统计字符数/词数/行数/字节数（支持 .txt/.md/.log/.html）");
-        seedFileOperate("txt_distinct_lines", "对文本文件去重行（支持 .txt/.md/.log/.html）。原文件保持不变，生成新文件并返回 downloadUrl。", txtDistinctLinesSchema());
-        seedFileOperate("txt_sort_lines", "对文本文件按行排序（支持 .txt/.md/.log/.html）。原文件保持不变，生成新文件并返回 downloadUrl。", txtSortLinesSchema());
-        seedFileOperate("txt_keyword_freq", "统计关键词在文本中的出现频率（支持 .txt/.md/.log/.html）", txtKeywordFreqSchema());
+        // ===== TXT/MD/LOG/HTML 操作 =====
+        seedFileOperate("txt_keyword_lines", "功能说明：从 txt/log/html/md 文件搜索包含关键词的行并返回前后几行上下文。\n触发关键词：grep、查日志、ERROR 前后、日志查找、搜索行、关键字行\n注意事项：按行精确匹配；正则用 txt_regex。", txtKeywordLinesSchema());
+        seedFileOperate("txt_regex", "功能说明：用正则表达式搜索文本行并提取捕获组。\n触发关键词：正则、regex、匹配、提取捕获组\n注意事项：需写正则；按行匹配（多行用 multiline flag）。", txtRegexSchema());
+        seedFileOperate("txt_line_range", "功能说明：按起止行号提取 txt/log/md/html 行内容。\n触发关键词：行范围、截取片段、指定行、起止行号\n注意事项：按行号取，不搜关键词（用 txt_keyword_lines）。", txtLineRangeSchema());
+        seedFileOperate("txt_section", "功能说明：按标题提取 Markdown 指定章节，可含子标题。\n触发关键词：章节、Section、提取章节、读某节\n注意事项：仅 Markdown；生成目录用 md_toc。", txtSectionSchema());
+        seedFileOperate("txt_stats", "功能说明：统计字符/词/行/字节数。\n触发关键词：统计、字数、行数、字节、规模\n注意事项：仅统计；词频分析用 txt_keyword_freq。");
+        seedFileOperate("txt_distinct_lines", "功能说明：对 txt/log/md 行去重，可控大小写与空行。\n触发关键词：去重、删除重复、整理\n注意事项：只去重不排序（用 txt_sort_lines）。", txtDistinctLinesSchema());
+        seedFileOperate("txt_sort_lines", "功能说明：按字典序/数字升序或降序排序行。\n触发关键词：排序、整理列表、按字段排序、升降序\n注意事项：只排序不去重（用 txt_distinct_lines）。", txtSortLinesSchema());
+        seedFileOperate("txt_keyword_freq", "功能说明：统计多个关键词出现次数。\n触发关键词：词频、频次、出现次数、统计次数\n注意事项：只计数不提取上下文行（用 txt_keyword_lines）。", txtKeywordFreqSchema());
 
-        // ===== MD 扩展操作（5.5 / 模块四 §4）=====
-        seedFileOperate("md_init_temp", "初始化 Markdown 临时文件：根据源文件创建临时文件副本，后续所有 md_read/md_write/md_filter_section 等修改操作都应在此临时文件上进行。调用后返回新 fileId（作为后续工具入参）、fileName、downloadUrl。",
-                fileRefSchema());
-        seedFileOperate("md_read", "读取 Markdown 文件全文内容。返回 fileId、downloadUrl、filePath、content（全文）、totalChars、totalLines。支持 maxChars 参数限制返回字符数。",
-                mdReadSchema());
-        seedFileOperate("md_write", "创建或覆盖 Markdown 文件。两种场景：1) 传入 fileId 时在临时文件上覆盖写入内容（fileId 不变，结果在原文件就地覆盖）；2) 不传 fileId 时创建全新文件，自动上传到 FTP 并插入 userfile 表，返回新 fileId 供后续操作使用。返回 fileId、downloadUrl、filePath、lineCount、totalChars。需提供 content（Markdown 文本内容，必填）。",
-                mdWriteSchema());
-        seedFileOperate("md_images", "提取 Markdown 文件所有图片引用（内联 / 引用式）");
-        seedFileOperate("md_headings", "提取 Markdown 文件全层级标题（ATX + Setext）");
-        seedFileOperate("md_table", "提取 Markdown GFM 表格（header + rows，含对齐说明符）");
-        seedFileOperate("md_list_items", "提取 Markdown 所有列表项（无序 + 有序 + 缩进）");
-        seedFileOperate("md_tasks", "提取 Markdown 任务清单项（[ ]/[x]）");
-        seedFileOperate("md_emphasis", "提取 Markdown 加粗/斜体/删除线/行内代码（代码块内不解析）");
-        seedFileOperate("md_toc", "生成 Markdown 文档目录（嵌套 outline 树，支持跳级）");
+        // ===== MD 扩展操作 =====
+        seedFileOperate("md_images", "功能说明：提取 Markdown 所有图片链接和 alt 文本。\n触发关键词：图片、images、提取图片、图片引用\n注意事项：只列链接不下载。");
+        seedFileOperate("md_headings", "功能说明：提取全层级标题结构。\n触发关键词：标题、大纲、headings、目录结构\n注意事项：仅结构不生成 TOC（用 md_toc）。");
+        seedFileOperate("md_table", "功能说明：解析 GFM 表格内容。\n触发关键词：表格、table、解析表格、表格数据\n注意事项：仅 Markdown 表格。");
+        seedFileOperate("md_list_items", "功能说明：提取有序/无序列表内容。\n触发关键词：列表、清单、列表项\n注意事项：仅 list 项不含表格。");
+        seedFileOperate("md_tasks", "功能说明：提取 - [ ] / - [x] 任务项及完成状态。\n触发关键词：任务、todo、待办、任务清单\n注意事项：仅 GFM task list。");
+        seedFileOperate("md_emphasis", "功能说明：提取加粗/斜体/删除线/行内代码。\n触发关键词：强调、emphasis、加粗、斜体、删除线\n注意事项：仅格式标记不含链接。");
+        seedFileOperate("md_toc", "功能说明：根据 #/##/### 标题生成 TOC 目录大纲。\n触发关键词：目录、TOC、大纲、标题导航\n注意事项：只生成目录不提取正文章节（用 md_section/txt_section）。");
         seedFileOperate("md_filter_section",
-                "【修改操作】删除或保留 Markdown 文件中指定标题的整节内容，结果覆盖写回同一文件。需传入临时文件的 fileId（先调 md_init_temp）。\n"
-                        + "参数说明（二选一，不可同时使用）：\n"
-                        + "  • remove: 要删除的标题文本数组——这些标题及其下属整节会被移除，其余内容保留。\n"
-                        + "    例：{\"remove\":[\"第二章\"]} 删除 # 第二章 整节\n"
-                        + "  • keep: 要保留的标题文本数组——文档只保留这些标题整节，其余内容全部删除。\n"
-                        + "    例：{\"keep\":[\"第三章\"]} 只保留 # 第三章\n"
-                        + "  • fileRef: 临时文件 ID（如 \"80\"）\n"
-                        + "一节定义为：从该标题行到下一个同级或更高级标题行之前的所有内容。标题匹配区分大小写。\n"
-                        + "返回 fileId、downloadUrl、filePath、message。",
+                "功能说明：按标题删除或保留整节内容。\n触发关键词：裁剪、过滤章节、删除章节、保留章节\n注意事项：按节操作不做行级别过滤（用 txt_keyword_lines）。",
                 mdFilterSectionSchema());
-        seedFileOperate("md_merge", "【修改操作】多 Markdown 文件拼接合并。传入 sourceFileIds 数组指定要合并的文件 ID 列表（至少 2 个），合并结果覆盖写回到 fileRef 指定的临时文件（先调 md_init_temp 获得临时 fileId）。frontmatter 冲突可配置（error/first/last），prefixHeaders 控制是否在每个源文件前加 # 文件名 标题。返回 fileId、downloadUrl、filePath、合并文件名。",
+        seedFileOperate("md_merge", "功能说明：合并多个 Markdown 文件为新文件。\n触发关键词：合并、拼接、汇总\n注意事项：仅 Markdown，输出新文件不覆盖。",
                 mdMergeSchema());
 
         // ===== Excel 操作（支持 xlsx/xls/csv）=====
-        seedFileOperate("excel_read", "分页读取 Excel/CSV 内容，返回表头与当前页数据（默认每页 50 行，用 page 翻页）。多工作表：默认读第一个，可用 sheetName 或 sheetIndex 指定其他工作表。大文件请逐页读取。", excelReadSchema());
-        seedFileOperate("excel_write", "创建或覆盖 Excel：传 fileId 则在该文件上追加/替换 sheetName 指定的工作表（其余工作表保留），不传则按 headers/rows 新建文件并返回 fileId。建多工作表文件：先不传 fileId 写第一个 sheet 拿到 fileId，再用同一 fileId + 不同 sheetName 依次追加其余 sheet（同名会覆盖）。downloadUrl 请以 Markdown 链接展示。", excelWriteSchema());
-        seedFileOperate("excel_init_temp", "初始化临时文件：复制原文件为临时副本，返回 fileId 供后续 Excel 操作使用。多步处理前先调用此工具。", fileRefSchema());
-        seedFileOperate("excel_filter", "按条件筛选数据行，操作符：equals/contains/gt/lt/gte/lte/notEquals。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelFilterSchema());
-        seedFileOperate("excel_sort", "按指定列排序（asc/desc）。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelSortSchema());
-        seedFileOperate("excel_aggregate", "按列分组聚合，类型：sum/avg/count/min/max。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelAggregateSchema());
-        seedFileOperate("excel_pivot", "透视分析：按 rowDimension（行维度）、colDimension（列维度）、valueColumn（值列）交叉汇总。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelPivotSchema());
-        seedFileOperate("excel_calculate", "列运算：用 formula 生成新计算列，可用 {列名} 引用其他列，如 {销售额}*{数量}。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelCalculateSchema());
-        seedFileOperate("excel_select_columns", "保留 columns 指定的列、删除其余列。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelSelectColumnsSchema());
-        seedFileOperate("excel_clean", "数据清洗，类型：trim（去首尾空格）/deduplicate（去重）/removeEmpty（删空行）。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。结果写回临时文件。", excelCleanSchema());
-        seedFileOperate("excel_convert_format", "格式转换：xlsx/xls/csv 互转。转 CSV 时可用 sheetName 或 sheetIndex 指定导出的工作表（默认第一个）。结果写回临时文件。", excelConvertFormatSchema());
-        seedFileOperate("excel_validate", "合规校验：按 rules 规则校验数据（如必填、范围、格式），以 JSON 返回结果，不改原文件。可用 sheetName 或 sheetIndex 指定工作表（默认第一个）。", excelValidateSchema());
+        seedFileOperate("excel_filter", "功能说明：按列条件筛选 xlsx/xls/csv 数据行，支持比较运算符（大于/小于/等于/包含等）。\n触发关键词：筛选、过滤、查询、查找、保留行、条件\n注意事项：只行筛选不排序/汇总/透视（用 excel_sort/aggregate/pivot）。", excelFilterSchema());
+        seedFileOperate("excel_sort", "功能说明：按指定列升序/降序排序 xlsx/xls/csv 数据。\n触发关键词：排序、整理、升降序、按列排序\n注意事项：只调整行顺序不筛选/统计（用 excel_filter/aggregate）。", excelSortSchema());
+        seedFileOperate("excel_aggregate", "功能说明：按字段 group by 计算 sum/avg/count/min/max。\n触发关键词：统计、汇总、分组、聚合、合计、平均值\n注意事项：单层 group by 不是透视表（用 excel_pivot）；不新增列（用 excel_calculate）。", excelAggregateSchema());
+        seedFileOperate("excel_pivot", "功能说明：按行字段和列字段生成二维交叉汇总表。\n触发关键词：透视表、交叉统计、行列汇总、多维分析\n注意事项：二维交叉不是普通 group by（用 excel_aggregate）。", excelPivotSchema());
+        seedFileOperate("excel_calculate", "功能说明：基于已有列生成新计算列。\n触发关键词：计算、派生列、公式、比例\n注意事项：新增计算列不统计汇总（用 excel_aggregate）。", excelCalculateSchema());
+        seedFileOperate("excel_select_columns", "功能说明：保留指定列并删除其余列。\n触发关键词：列选择、裁剪字段、导出部分列\n注意事项：列裁剪不是行筛选（用 excel_filter）。", excelSelectColumnsSchema());
+        seedFileOperate("excel_clean", "功能说明：去空格、去重、删除空行。\n触发关键词：清洗、去重、去空、清理\n注意事项：只清洗不做业务计算（用 excel_calculate）。", excelCleanSchema());
+        seedFileOperate("excel_convert_format", "功能说明：在 xlsx/xls/csv 之间转换并生成文件。\n触发关键词：格式转换、导出 CSV、导出 Excel\n注意事项：仅格式转换不改数据。", excelConvertFormatSchema());
+        seedFileOperate("excel_validate", "功能说明：按规则检查数据合规性并返回校验结果。\n触发关键词：校验、检查、合规性、格式校验\n注意事项：只检查不修改（修用 excel_clean）。", excelValidateSchema());
     }
 
     // ========== 整合方案 B：word_ops 单一入口 ==========
 
-    /** 旧的 6 个 word_* 工具，启动时 disable，避免 LLM 看到重复功能 */
+    /** 旧的 word_* 工具，word_read/word_write 已合并到 file_read/file_write */
     private static final java.util.Set<String> LEGACY_WORD_TOOLS;
     static {
         // JDK 1.8 兼容：不能使用 Set.of（Java 9+），用 HashSet + Collections.addAll
         java.util.Set<String> s = new java.util.HashSet<String>();
         java.util.Collections.addAll(s,
-                "word_read", "word_write", "word_extract_content",
-                "word_search_keyword", "word_replace_text", "word_template_fill");
+                "word_read", "word_write");
         LEGACY_WORD_TOOLS = java.util.Collections.unmodifiableSet(s);
+    }
+
+    // ===== add-skill-tags-and-intent-filtering：技能三维度标签 =====
+    /**
+     * 工具的 file_type / operation_intent / business_scenario 标签三元组。
+     * </p>
+     * 单一权威源：此表必须在 PR 中与 agent-core prompts/zh.ts 的
+     * INTENT_RECOGNITION_SYSTEM_PROMPT 同步；任何分歧在 PR review 阶段拒绝合入。
+     */
+    private static class ToolTag {
+        final String fileType;
+        final java.util.List<String> operationIntent;   // 多值，序列化到 DB 用 "," 分隔（对应 SQL FIND_IN_SET）
+        final String businessScenario;
+        ToolTag(String f, java.util.List<String> o, String b) {
+            this.fileType = f;
+            this.operationIntent = o;
+            this.businessScenario = b;
+        }
+        // 单值快捷构造（大多数工具的 operationIntent 只有 1 个）
+        ToolTag(String f, String o, String b) {
+            this(f, java.util.Collections.singletonList(o), b);
+        }
+    }
+
+    /**
+     * 标签权威源：覆盖本次需求图示的 38 个工具。
+     *
+     * 词表经本次重构收紧：
+     * - file_type(5): 通用 / Word / 文本 / Markdown / Excel
+     * - operation_intent(4 合并): 读取查看 / 编辑修改 / 创建写入 / 分析计算
+     * - business_scenario(6): 文件管理 / 检索查看 / 生成导出 / 提取解析 / 编辑整理 / 计算分析
+     * 合计 15。operation_intent 多值（"编辑修改、创建写入"）以 "," 分隔存储，SQL 用 FIND_IN_SET 命中任一。
+     *
+     * 唯一权威源；agent-core execute-skill.ts 的 INTENT_TAG_WHITELIST 与 tool schema describe 必须镜像此表。
+     */
+    private static final java.util.Map<String, ToolTag> TOOL_TAGS = new LinkedHashMap<>();
+    static {
+        // 多值快捷构造
+        java.util.List<String> editWrite = java.util.Arrays.asList("编辑修改", "创建写入");
+        java.util.List<String> writeRead = java.util.Arrays.asList("创建写入", "读取查看");
+
+        // file_manage 族（7）
+        TOOL_TAGS.put("file_list",             new ToolTag("通用",     "读取查看", "文件管理"));
+        TOOL_TAGS.put("file_delete",           new ToolTag("通用",     "编辑修改", "文件管理"));
+        TOOL_TAGS.put("file_clear_all",        new ToolTag("通用",     "编辑修改", "文件管理"));
+        TOOL_TAGS.put("file_detail",           new ToolTag("通用",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("file_read",             new ToolTag("通用",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("file_write",            new ToolTag("通用",     "创建写入", "生成导出"));
+        TOOL_TAGS.put("file_init_temp",        new ToolTag("通用",     "创建写入", "文件管理"));
+        // word_operate 族（4）
+        TOOL_TAGS.put("word_extract_content",  new ToolTag("Word",     "读取查看", "提取解析"));
+        TOOL_TAGS.put("word_search_keyword",   new ToolTag("Word",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("word_replace_text",     new ToolTag("Word",     "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("word_template_fill",    new ToolTag("Word",     "创建写入", "生成导出"));
+        // txt_operate 族（8）
+        TOOL_TAGS.put("txt_keyword_lines",     new ToolTag("文本",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("txt_regex",             new ToolTag("文本",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("txt_line_range",        new ToolTag("文本",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("txt_section",           new ToolTag("文本",     "读取查看", "检索查看"));
+        TOOL_TAGS.put("txt_stats",             new ToolTag("文本",     "分析计算", "检索查看"));
+        TOOL_TAGS.put("txt_distinct_lines",    new ToolTag("文本",     editWrite,   "编辑整理"));
+        TOOL_TAGS.put("txt_sort_lines",        new ToolTag("文本",     editWrite,   "编辑整理"));
+        TOOL_TAGS.put("txt_keyword_freq",      new ToolTag("文本",     "分析计算", "检索查看"));
+        // md_operate 族（9）
+        TOOL_TAGS.put("md_images",             new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_headings",           new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_table",              new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_list_items",         new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_tasks",              new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_emphasis",           new ToolTag("Markdown", "读取查看", "提取解析"));
+        TOOL_TAGS.put("md_toc",                new ToolTag("Markdown", writeRead,   "检索查看"));
+        TOOL_TAGS.put("md_filter_section",     new ToolTag("Markdown", "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("md_merge",              new ToolTag("Markdown", editWrite,   "编辑整理"));
+        // excel_operate 族（10）—— excel_init_temp 当前被 deleteLegacyInitTempSkills 删除；
+        // TOOL_TAGS 保留条目，未来如需重新启用只需在 run() 里补一行 seedFileOperate("excel_init_temp", ...)。
+        TOOL_TAGS.put("excel_init_temp",       new ToolTag("Excel",    "创建写入", "文件管理"));
+        TOOL_TAGS.put("excel_filter",          new ToolTag("Excel",    "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("excel_sort",            new ToolTag("Excel",    "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("excel_aggregate",       new ToolTag("Excel",    "分析计算", "计算分析"));
+        TOOL_TAGS.put("excel_pivot",           new ToolTag("Excel",    "分析计算", "计算分析"));
+        TOOL_TAGS.put("excel_calculate",       new ToolTag("Excel",    "分析计算", "计算分析"));
+        TOOL_TAGS.put("excel_select_columns",  new ToolTag("Excel",    "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("excel_clean",           new ToolTag("Excel",    "编辑修改", "编辑整理"));
+        TOOL_TAGS.put("excel_convert_format",  new ToolTag("Excel",    editWrite,   "生成导出"));
+        TOOL_TAGS.put("excel_validate",        new ToolTag("Excel",    "分析计算", "计算分析"));
+    }
+
+    /** 查表；不在表里返回 null（未知工具不加标签，匹配走全量向量池即可）。 */
+    private static ToolTag tagOf(String toolName) {
+        return TOOL_TAGS.get(toolName);
     }
 
     /** word_ops 工具的 description（agent-core 透给 LLM） */
@@ -214,38 +294,70 @@ public class FileToolSeeder implements ApplicationRunner {
             }
         }
 
-        // 3. 重新 seed 6 个老 word_*（与昨天方案 B 之前一致）
-        seedFileOperate("word_read", "读取 Word（.doc/.docx）文档的全文正文，返回段落列表与全文文本");
-        seedFileOperate("word_write", "创建一个新的 Word（.docx）文档。参数：title（必填，文档主标题）、content（必填，正文，使用 Markdown 语法输出，后端会将其渲染为 Word 原生格式）。文件名由系统自动生成（时间_temp.docx）。\n\n" +
-                "支持的 Markdown 语法：\n" +
-                "# ## — 一/二级标题（加粗，字号递减）；\n" +
-                "- — 无序列表（•）；\n" +
-                "1. 2. — 有序列表；\n" +
-                "**加粗** — 行内加粗（不渲染星号）；\n" +
-                "| 表格 — GFM pipe 表格（表头加粗灰底）；\n" +
-                "段落用空行分隔；\n" +
-                "严禁```代码块、HTML，会被当纯文本写入。\n\n" +
-                "示例：\n" +
-                "# 项目周报\n\n" +
-                "## 本周进展\n" +
-                "本周完成了**用户认证模块**开发：\n" +
-                "- 登录接口联调\n" +
-                "- Token 刷新机制\n\n" +
-                "## 任务统计\n" +
-                "| 模块 | 完成度 | 负责人 |\n" +
-                "| --- | --- | --- |\n" +
-                "| 认证 | 100% | 张三 |\n" +
-                "| 支付 | 80% | 李四 |\n\n" +
-                "【重要】执行完成后，将 fileId/fileName/fileSize/lineCount/totalChars 用 Markdown 表格展示，并在表格下方放下载链接：🖱️ [点击下载 文件名](downloadUrl)。不要直接输出原始 URL。\n\n" +
-                "| 属性 | 值 |\n|------|-----|\n| 文件ID | 123 |\n| 文件名 | 报告.docx |\n| 文件大小 | 12.3 KB |\n| 总行数 | 50 |\n| 总字符数 | 2048 |\n\n🖱️ [点击下载 报告.docx](downloadUrl)",
-                wordWriteSchema());
-        seedFileOperate("word_extract_content", "提取 Word 文档的结构化内容（标题大纲/表格/图片）");
-        seedFileOperate("word_search_keyword", "在 Word 文档中搜索关键字，返回带上下文的匹配结果",
+        // 3. 重新 seed 4 个老 word_*（word_read/word_write 已合并到 file_read/file_write）
+        seedFileOperate("word_extract_content", "功能说明：从 doc/docx 提取标题大纲、段落、表格、图片。\n触发关键词：提取内容、抽取、解析 Word、读结构\n注意事项：只读不改；不替换文字（用 word_replace_text）。");
+        seedFileOperate("word_search_keyword", "功能说明：在 doc/docx 搜索关键词返回上下文。\n触发关键词：搜索关键字、查找、检索、搜索词\n注意事项：只读不改；替换用 word_replace_text。",
                 keywordSearchSchema());
-        seedFileOperate("word_replace_text", "替换 Word 文档中的文本（支持全部替换或仅替换第一个）。原文件保持不变，生成新文件并返回 downloadUrl。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。",
+        seedFileOperate("word_replace_text", "功能说明：把 oldText 替换为 newText，支持首个/全部。\n触发关键词：替换、修改文字、改文字、批量替换\n注意事项：只改文字不处理 {{placeholder}}（用 word_template_fill）。",
                 replaceTextSchema());
-        seedFileOperate("word_template_fill", "用 values 填充 Word 文档中的 {{placeholder}} 占位符。原文件保持不变，生成新文件并返回 downloadUrl。注意：返回的 downloadUrl 请以 Markdown 链接或下载按钮形式展示，不要直接输出原始 URL。",
+        seedFileOperate("word_template_fill", "功能说明：用 values 填充 {{placeholder}} 占位符。\n触发关键词：模板、占位符、填充、生成合同、生成报告\n注意事项：只填占位符不做普通文本替换（用 word_replace_text）。",
                 templateFillSchema());
+    }
+
+    /**
+     * 删除旧的读写工具（已合并为 file_read/file_write）。
+     * <p>
+     * 启动时自动执行，可重入。删除 skills 表和 system_skills 表中
+     * txt_read、txt_write、md_read、md_write、word_read、word_write、excel_read、excel_write 记录。
+     * </p>
+     */
+    private void deleteLegacyReadWriteSkills() {
+        for (String name : new String[]{"txt_read", "txt_write", "md_read", "md_write", "word_read", "word_write", "excel_read", "excel_write"}) {
+            Skill existing = skillMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
+                            .eq(Skill::getName, name)
+                            .eq(Skill::getSkillOwnerType, 2));
+            if (existing != null) {
+                skillMapper.deleteById(existing.getId());
+                log.info("Deleted legacy read/write skill: {} (id={})", name, existing.getId());
+            }
+            SystemSkill existingSys = systemSkillMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<SystemSkill>()
+                            .eq(SystemSkill::getToolName, name)
+                            .eq(SystemSkill::getKind, KIND));
+            if (existingSys != null) {
+                systemSkillMapper.deleteById(existingSys.getId());
+                log.info("Deleted legacy read/write system skill: {} (id={})", name, existingSys.getId());
+            }
+        }
+    }
+
+    /**
+     * 删除旧的初始化方法（已合并为 file_init_temp）。
+     * <p>
+     * 启动时自动执行，可重入。删除 skills 表和 system_skills 表中
+     * excel_init_temp、md_init_temp、txt_init_temp 三条记录。
+     * </p>
+     */
+    private void deleteLegacyInitTempSkills() {
+        for (String name : new String[]{"excel_init_temp", "md_init_temp", "txt_init_temp"}) {
+            Skill existing = skillMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<Skill>()
+                            .eq(Skill::getName, name)
+                            .eq(Skill::getSkillOwnerType, 2));
+            if (existing != null) {
+                skillMapper.deleteById(existing.getId());
+                log.info("Deleted legacy init_temp skill: {} (id={})", name, existing.getId());
+            }
+            SystemSkill existingSys = systemSkillMapper.selectOne(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<SystemSkill>()
+                            .eq(SystemSkill::getToolName, name)
+                            .eq(SystemSkill::getKind, KIND));
+            if (existingSys != null) {
+                systemSkillMapper.deleteById(existingSys.getId());
+                log.info("Deleted legacy init_temp system skill: {} (id={})", name, existingSys.getId());
+            }
+        }
     }
 
     /**
@@ -361,6 +473,9 @@ public class FileToolSeeder implements ApplicationRunner {
             // 构建 schema_properties JSON（每次启动都用最新版）
             String schemaJson = objectMapper.writeValueAsString(schema);
 
+            // add-skill-tags-and-intent-filtering：从 TOOL_TAGS 读取三维度标签（未命中不影响写入）
+            ToolTag tag = tagOf(toolName);
+
             // 检查是否已存在同名 skill — 已存在则更新 schema（description 和 schema 跟随代码升级）
             // 必须限定 skill_owner_type=2（系统技能），避免误匹配到用户自建的同名技能（ownerType=1）后被当系统技能覆盖。
             // 仅存在用户同名技能时此查询返回 null，走下方 insert 新建一条 ownerType=2 的系统技能行。
@@ -369,10 +484,17 @@ public class FileToolSeeder implements ApplicationRunner {
                             .eq(Skill::getName, toolName)
                             .eq(Skill::getSkillOwnerType, 2));
             if (existing != null) {
-                // 已存在系统技能：直接更新 schema/description/ownerType，不再依据内容是否变化判断。
+                // 已存在系统技能：直接更新 schema/description/ownerType/三标签（add-skill-tags-and-intent-filtering），
+                // 不再依据内容是否变化判断；标签值在 TOOL_TAGS 里改了什么 seed 就在 DB 写什么。
                 existing.setSchemaPropertiesJson(schemaJson);
                 existing.setDescription(description);
                 existing.setSkillOwnerType(2); // 确保已存在的系统技能标记为 2
+                if (tag != null) {
+                    existing.setFileType(tag.fileType);
+                    // operationIntent 多值用 "," 分隔存储；SQL 用 FIND_IN_SET 命中任一
+                    existing.setOperationIntent(joinOperationIntent(tag.operationIntent));
+                    existing.setBusinessScenario(tag.businessScenario);
+                }
                 skillMapper.updateById(existing);
                 log.info("Updated existing skill: {} (id={})", toolName, existing.getId());
                 return;
@@ -396,12 +518,24 @@ public class FileToolSeeder implements ApplicationRunner {
             skill.setVisibility(SkillVisibility.PUBLIC);
             skill.setCreatedBy(CREATED_BY);
             skill.setSchemaPropertiesJson(schemaJson);
+            if (tag != null) {
+                skill.setFileType(tag.fileType);
+                // operationIntent 多值用 "," 分隔存储；SQL 用 FIND_IN_SET 命中任一
+                skill.setOperationIntent(joinOperationIntent(tag.operationIntent));
+                skill.setBusinessScenario(tag.businessScenario);
+            }
 
             skillMapper.insert(skill);
             log.info("Seeded skill: {} (id={}, type={}, kind=file_tool)", toolName, skill.getId(), SKILL_TYPE);
         } catch (Exception e) {
             log.error("Failed to seed skill '{}': {}", toolName, e.getMessage());
         }
+    }
+
+    /** 把 ToolTag.operationIntent 列表拼成 "," 分隔字符串写入 DB 列（对应 SQL FIND_IN_SET）。 */
+    private static String joinOperationIntent(java.util.List<String> list) {
+        if (list == null || list.isEmpty()) return null;
+        return String.join(",", list);
     }
 
     // ========== Schema 定义 ==========
@@ -472,6 +606,41 @@ public class FileToolSeeder implements ApplicationRunner {
         confirmed.put("type", "boolean");
         confirmed.put("description", "二次确认标志。首次调用不传，LLM 引导用户确认文件名后再次调用时设置 confirmed=true");
         s.put("confirmed", confirmed);
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> fileReadSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（优先使用），通过 file_list 获取到的文件 ID");
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名或文件 ID（fileId 优先）", false));
+        s.put("encoding", stringProp("文件编码（如 UTF-8/GBK），仅对文本文件有效，默认 UTF-8", false));
+        s.put("startLine", intProp("起始行号（1-based），仅对文本文件有效，默认 1", false));
+        s.put("endLine", intProp("结束行号（1-based），仅对文本文件有效，默认文件末尾", false));
+        s.put("maxChars", intProp("最大返回字符数（截断保护），仅对文本文件有效，默认不限制", false));
+        s.put("page", intProp("页码，从 1 开始，仅对 Excel 文件有效，默认 1", false));
+        s.put("pageSize", intProp("每页行数，仅对 Excel 文件有效，默认 50", false));
+        s.put("sheetIndex", intProp("工作表索引，从 0 开始，仅对 Excel 文件有效，默认 0", false));
+        s.put("sheetName", stringProp("工作表名称，仅对 Excel 文件有效", false));
+        return s;
+    }
+
+    private static Map<String, Map<String, Object>> fileWriteSchema() {
+        Map<String, Map<String, Object>> s = new LinkedHashMap<>();
+        Map<String, Object> fileId = new LinkedHashMap<>();
+        fileId.put("type", "integer");
+        fileId.put("description", "文件 ID（可选）。传入时在临时文件基础上操作；不传时创建新文件");
+        s.put("fileId", fileId);
+        s.put("fileRef", stringProp("文件名或文件 ID（与 fileId 二选一）", false));
+        s.put("content", stringProp("要写入的文本内容（必填，文本/Markdown 文件）", true));
+        s.put("title", stringProp("Word 文档标题（仅 Word 文件）", false));
+        s.put("headers", stringProp("Excel 列头列表，如 [\"姓名\", \"年龄\"]（仅 Excel 文件）", false));
+        s.put("rows", stringProp("Excel 数据行列表，如 [[\"张三\", 25]]（仅 Excel 文件）", false));
+        s.put("encoding", stringProp("文件编码（如 UTF-8/GBK），仅对文本文件有效，默认 UTF-8", false));
+        s.put("append", boolProp("是否追加模式，仅对文本文件有效，默认 false（覆盖）", false));
+        s.put("sheetName", stringProp("工作表名称，仅对 Excel 文件有效，默认 Sheet1", false));
         return s;
     }
 
@@ -736,7 +905,7 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> mdFilterSectionSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("临时文件 ID（必填，先调 md_init_temp 获得）。结果覆盖写入此文件。", true));
+        s.put("fileRef", stringProp("临时文件 ID（必填，先调 file_init_temp 获得）。结果覆盖写入此文件。", true));
         Map<String, Object> keep = new LinkedHashMap<>();
         keep.put("type", "array");
         keep.put("description",
@@ -758,7 +927,7 @@ public class FileToolSeeder implements ApplicationRunner {
 
     private static Map<String, Map<String, Object>> mdMergeSchema() {
         Map<String, Map<String, Object>> s = new LinkedHashMap<>();
-        s.put("fileRef", stringProp("临时文件 ID（必填，先调 md_init_temp 获得）。合并结果覆盖写入此文件。", true));
+        s.put("fileRef", stringProp("临时文件 ID（必填，先调 file_init_temp 获得）。合并结果覆盖写入此文件。", true));
         Map<String, Object> sourceFileIds = new LinkedHashMap<>();
         sourceFileIds.put("type", "array");
         sourceFileIds.put("description", "要合并的源文件 ID 列表（至少 2 个）。合并后生成新文件，返回 fileId 和 downloadUrl。");
@@ -828,6 +997,7 @@ public class FileToolSeeder implements ApplicationRunner {
         s.put("column", stringProp("列名（必填）", true));
         s.put("operator", stringProp("操作符：equals/contains/gt/lt/gte/lte/notEquals，默认 equals", false));
         s.put("value", stringProp("筛选值（必填）", true));
+        s.put("inPlace", boolProp("是否原地覆盖当前 sheet（true=覆盖原数据，便于后续操作；false=新建 sheet），默认 true", false));
         return s;
     }
 
@@ -843,6 +1013,7 @@ public class FileToolSeeder implements ApplicationRunner {
         s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("column", stringProp("排序列名（必填）", true));
         s.put("order", stringProp("排序方向：asc/desc，默认 asc", false));
+        s.put("inPlace", boolProp("是否原地覆盖当前 sheet（true=覆盖原数据，便于后续操作；false=新建 sheet），默认 true", false));
         return s;
     }
 
@@ -875,6 +1046,7 @@ public class FileToolSeeder implements ApplicationRunner {
         s.put("rowDimension", stringProp("行维度（必填）", true));
         s.put("colDimension", stringProp("列维度（必填）", true));
         s.put("valueColumn", stringProp("值列（必填）", true));
+        s.put("inPlace", boolProp("是否原地覆盖当前 sheet（true=覆盖原数据，便于后续操作；false=新建 sheet），默认 true", false));
         return s;
     }
 
@@ -890,6 +1062,7 @@ public class FileToolSeeder implements ApplicationRunner {
         s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("newColumn", stringProp("新列名（必填）", true));
         s.put("formula", stringProp("计算公式，支持引用列名，如 {col1} + {col2} * 1.1", true));
+        s.put("inPlace", boolProp("是否原地覆盖当前 sheet（true=覆盖原数据，便于后续操作；false=新建 sheet），默认 true", false));
         return s;
     }
 
@@ -910,6 +1083,7 @@ public class FileToolSeeder implements ApplicationRunner {
         columns.put("required", true);
         s.put("columns", columns);
         
+        s.put("inPlace", boolProp("是否原地覆盖当前 sheet（true=覆盖原数据，便于后续操作；false=新建 sheet），默认 true", false));
         return s;
     }
 
@@ -924,6 +1098,7 @@ public class FileToolSeeder implements ApplicationRunner {
         s.put("sheetIndex", intProp("工作表索引，从 0 开始，默认 0（第一个工作表）。与 sheetName 互斥，sheetName 优先", false));
         s.put("sheetName", stringProp("工作表名称。与 sheetIndex 互斥，优先使用 sheetName 指定工作表", false));
         s.put("cleanType", stringProp("清洗类型：trim（去除首尾空格）/deduplicate（去重）/removeEmpty（移除空行）", true));
+        s.put("inPlace", boolProp("是否原地覆盖当前 sheet（true=覆盖原数据，便于后续操作；false=新建 sheet），默认 true", false));
         return s;
     }
 

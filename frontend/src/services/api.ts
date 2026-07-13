@@ -313,3 +313,166 @@ export async function fetchSkillUsageDetails(
   if (!response.ok) throw new Error('Failed to fetch skill usage details')
   return response.json()
 }
+
+// open spec: add-slash-skill-invocation
+// 拉取 conversation 当前勾选的技能（id + name），用于前端 slash / hash picker。
+// 返回空数组表示未勾选 / 出错（picker 自然隐藏）。
+export interface ConversationEnabledSkill {
+  id: number
+  name: string
+}
+
+export async function fetchConversationEnabledSkills(
+  conversationId: string,
+): Promise<ConversationEnabledSkill[]> {
+  if (!conversationId) return []
+  try {
+    const response = await fetch(apiUrl(`/api/skills/by-conversation?conversationId=${encodeURIComponent(conversationId)}`), {
+      headers: { 'X-User-Id': localStorage.getItem('user_id') || '' },
+    })
+    if (!response.ok) {
+      console.warn(`[SlashSkill] by-conversation returned ${response.status}`)
+      return []
+    }
+    const data = await response.json()
+    if (!Array.isArray(data)) return []
+    return data
+      .filter((s: any) => s && typeof s.id === 'number' && typeof s.name === 'string')
+      .map((s: any) => ({ id: s.id, name: s.name }))
+  } catch (e) {
+    console.warn(`[SlashSkill] fetchConversationEnabledSkills failed: ${(e as Error)?.message || e}`)
+    return []
+  }
+}
+
+// --- Token Usage (add-conversation-token-usage-tab) ---
+
+export interface TokenUsageOverview {
+  totalPromptTokens: number
+  totalCompletionTokens: number
+  totalTokens: number
+  // 估算 token 数（chars / 2），仅供参考
+  totalPromptEstimatedTokens?: number
+  totalCompletionEstimatedTokens?: number
+  totalEstimatedTokens?: number
+  totalCalls: number
+  totalSessions: number
+  failedCalls: number
+}
+
+export interface TokenUsageConversationSummary {
+  sessionId: string
+  conversationName: string | null
+  userId: string
+  startedAt: string | null
+  endedAt: string | null
+  totalPromptTokens: number
+  totalCompletionTokens: number
+  totalTokens: number
+  totalPromptEstimatedTokens?: number
+  totalCompletionEstimatedTokens?: number
+  totalEstimatedTokens?: number
+  totalRounds: number
+  totalToolRounds: number
+  uniqueSkillsCount: number
+  failedCalls: number
+  status: 'SUCCESS' | 'FAILED'
+}
+
+export interface TokenUsageConversationPage {
+  overview: TokenUsageOverview
+  conversations: TokenUsageConversationSummary[]
+  total: number
+  page: number
+  size: number
+}
+
+export interface TokenUsageCallDetail {
+  traceId: string | null
+  sessionId: string
+  calledAt: string
+  llmModel: string | null
+  promptTokens: number | null
+  completionTokens: number | null
+  totalTokens: number | null
+  promptEstimatedTokens?: number | null
+  completionEstimatedTokens?: number | null
+  estimatedTokens?: number | null
+  roundIndex: number | null
+  durationSeconds: number | null
+  skillNames: string[]
+  toolCallRounds: number | null
+  isSuccess: boolean | null
+  status: 'SUCCESS' | 'FAILED'
+  finishReason: string | null
+  errorMessage: string | null
+}
+
+export interface TokenUsageSessionDetail {
+  sessionId: string
+  conversationName: string
+  calls: TokenUsageCallDetail[]
+  totals: TokenUsageOverview
+  uniqueSkillNames: string[]
+}
+
+export interface TokenUsageDailyPoint {
+  date: string
+  totalTokens: number
+  promptTokens: number
+  completionTokens: number
+  estimatedTokens?: number
+  promptEstimatedTokens?: number
+  completionEstimatedTokens?: number
+  callCount: number
+  failedCount: number
+}
+
+export interface TokenUsageDailyResponse {
+  points: TokenUsageDailyPoint[]
+}
+
+function buildUserIdHeaders(): HeadersInit {
+  return { 'X-User-Id': localStorage.getItem('user_id') || '' }
+}
+
+export async function fetchTokenUsageConversations(
+  userId: string,
+  params: { startDate?: string; endDate?: string; page?: number; size?: number; keyword?: string } = {},
+): Promise<TokenUsageConversationPage> {
+  const sp = new URLSearchParams({ userId })
+  if (params.startDate) sp.set('startDate', params.startDate)
+  if (params.endDate) sp.set('endDate', params.endDate)
+  if (params.keyword) sp.set('keyword', params.keyword)
+  if (params.page) sp.set('page', String(params.page))
+  if (params.size) sp.set('size', String(params.size))
+  const res = await fetch(apiUrl(`/api/token-usage/conversations?${sp.toString()}`), {
+    headers: buildUserIdHeaders(),
+  })
+  if (!res.ok) throw new Error(`Failed to fetch token usage conversations: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchTokenUsageSessionDetail(
+  userId: string,
+  sessionId: string,
+): Promise<TokenUsageSessionDetail> {
+  const res = await fetch(
+    apiUrl(`/api/token-usage/conversations/${encodeURIComponent(sessionId)}?userId=${encodeURIComponent(userId)}`),
+    { headers: buildUserIdHeaders() },
+  )
+  if (!res.ok) throw new Error(`Failed to fetch session detail: ${res.status}`)
+  return res.json()
+}
+
+export async function fetchTokenUsageDaily(
+  userId: string,
+  params: { startDate: string; endDate: string },
+): Promise<TokenUsageDailyResponse> {
+  const sp = new URLSearchParams({ userId, startDate: params.startDate, endDate: params.endDate })
+  const res = await fetch(apiUrl(`/api/token-usage/daily?${sp.toString()}`), {
+    headers: buildUserIdHeaders(),
+  })
+  if (!res.ok) throw new Error(`Failed to fetch token usage daily: ${res.status}`)
+  return res.json()
+}

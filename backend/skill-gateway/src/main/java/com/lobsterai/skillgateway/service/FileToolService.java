@@ -44,6 +44,7 @@ public class FileToolService {
     private final ConversationService conversationService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
     private final FtpConfig ftpConfig;
+    private final FtpFileService ftpFileService;
     private final Map<String, ToolHandler> handlers = new ConcurrentHashMap<String, ToolHandler>();
 
     /** Per-file write lock pool: key = "userId:fileId", value = lock object */
@@ -59,7 +60,7 @@ public class FileToolService {
         java.util.Collections.addAll(WRITE_TOOLS,
             "excel_write", "excel_filter", "excel_sort", "excel_aggregate",
             "excel_pivot", "excel_calculate", "excel_select_columns", "excel_clean",
-            "excel_convert_format", "excel_init_temp"
+            "excel_convert_format", "file_init_temp"
         );
         // Word
         java.util.Collections.addAll(WRITE_TOOLS,
@@ -68,7 +69,8 @@ public class FileToolService {
         // TXT / MD
         java.util.Collections.addAll(WRITE_TOOLS,
             "txt_write", "txt_distinct_lines", "txt_sort_lines",
-            "md_write", "md_filter_section", "md_merge"
+            "md_write", "md_filter_section", "md_merge",
+            "file_write"
         );
     }
 
@@ -78,7 +80,8 @@ public class FileToolService {
                            ExcelToolService excelToolService,
                            ConversationService conversationService,
                            com.fasterxml.jackson.databind.ObjectMapper objectMapper,
-                           FtpConfig ftpConfig) {
+                           FtpConfig ftpConfig,
+                           FtpFileService ftpFileService) {
         this.fileRefResolver = fileRefResolver;
         this.userFileMapper = userFileMapper;
         this.fileParseService = fileParseService;
@@ -86,6 +89,7 @@ public class FileToolService {
         this.conversationService = conversationService;
         this.objectMapper = objectMapper;
         this.ftpConfig = ftpConfig;
+        this.ftpFileService = ftpFileService;
         initHandlers();
     }
 
@@ -116,11 +120,48 @@ public class FileToolService {
             }
         });
 
+        handlers.put("file_init_temp", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                return initTempFile(userFile, userId);
+            }
+        });
+
+        handlers.put("file_read", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                return routeByExtension(userFile, params, userId, "read");
+            }
+        });
+
+        handlers.put("file_write", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                return routeByExtension(userFile, params, userId, "write");
+            }
+        });
+
         // ===== Excel 操作（task 5.2）=====
         handlers.put("excel_read", new ToolHandler() {
             @Override
             public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
                 return excelToolResultToResponse(excelToolService.read(userFile.getId(), userId));
+            }
+        });
+        handlers.put("excel_write", new ToolHandler() {
+            @Override
+            public FileToolResponse handle(UserFile userFile, Map<String, Object> params, String userId) {
+                @SuppressWarnings("unchecked")
+                List<String> headers = (List<String>) params.get("headers");
+                @SuppressWarnings("unchecked")
+                List<List<Object>> rows = (List<List<Object>>) params.get("rows");
+                String sheetName = params.get("sheetName") != null ? String.valueOf(params.get("sheetName")) : "Sheet1";
+                String fileName = userFile.getOriginalFileName();
+                ExcelOperationResult.SheetData sheetData = new ExcelOperationResult.SheetData();
+                sheetData.setSheetName(sheetName);
+                sheetData.setColumns(headers);
+                sheetData.setRows(rows);
+                return excelToolResultToResponse(excelToolService.write(sheetData, fileName, userId));
             }
         });
         handlers.put("excel_filter", new ToolHandler() {
@@ -262,7 +303,18 @@ public class FileToolService {
                         return FileToolResponse.error("Access denied: file does not belong to current user");
                     }
                 } else if (fileRef != null && !fileRef.trim().isEmpty()) {
-                    userFile = fileRefResolver.resolve(userId, fileRef);
+                    try {
+                        userFile = fileRefResolver.resolve(userId, fileRef);
+                    } catch (IllegalArgumentException e) {
+                        // 对于允许创建新文件的工具（如 file_write），
+                        // 文件不存在时允许 userFile=null，Handler 内走新建路径
+                        if (isOptionalFileIdTool(toolName)) {
+                            log.debug("File not found but tool={} allows creating new file, proceed with userFile=null", toolName);
+                            // userFile 保持 null，传给 Handler 处理
+                        } else {
+                            throw e;
+                        }
+                    }
                 } else if (!isOptionalFileIdTool(toolName)) {
                     // 非 OptionalFileId 工具必须提供 fileId 或 fileRef
                     return FileToolResponse.error("fileId or fileRef is required for tool: " + toolName);
@@ -507,6 +559,59 @@ public class FileToolService {
         return FileToolResponse.ok(detail, userFile.getOriginalFileName());
     }
 
+    private FileToolResponse initTempFile(UserFile userFile, String userId) {
+        try {
+            Long sourceFileId = userFile.getId();
+
+            byte[] fileBytes = ftpFileService.downloadFile(userId, userFile.getFileName()).toByteArray();
+
+            String originalFileName = userFile.getOriginalFileName();
+            int dotIndex = originalFileName.lastIndexOf('.');
+            String baseName = dotIndex > 0 ? originalFileName.substring(0, dotIndex) : originalFileName;
+            String extension = dotIndex > 0 ? originalFileName.substring(dotIndex) : "";
+            String tempFileName = baseName + "_temp" + extension;
+
+            String ftpPath = ftpFileService.uploadFile(userId, tempFileName, new java.io.ByteArrayInputStream(fileBytes));
+            String storageFileName = ftpPath.substring(ftpPath.lastIndexOf('/') + 1);
+
+            String conversationId = FileToolConversationContext.getConversationId();
+            UserFile tempUserFile = new UserFile();
+            tempUserFile.setUserId(userId);
+            tempUserFile.setOriginalFileName(tempFileName);
+            tempUserFile.setFileName(storageFileName);
+            tempUserFile.setFileSize((long) fileBytes.length);
+            tempUserFile.setFileType(userFile.getFileType());
+            tempUserFile.setFtpPath(ftpPath);
+            tempUserFile.setSourceFileId(sourceFileId);
+            tempUserFile.setIsToolGenerated(1);
+            tempUserFile.setConversationId(conversationId);
+            tempUserFile.setUploadTime(java.time.LocalDateTime.now());
+            userFileMapper.insert(tempUserFile);
+
+            Long tempFileId = tempUserFile.getId();
+
+            String downloadUrl = ftpConfig.buildDownloadUrl(tempFileId, userId);
+            tempUserFile.setDownloadUrl(downloadUrl);
+            userFileMapper.updateById(tempUserFile);
+
+            log.info("file_init_temp created temp file: id={}, sourceFileId={}, tempFileName={}, downloadUrl={}",
+                    tempFileId, sourceFileId, tempFileName, downloadUrl);
+
+            Map<String, Object> result = new LinkedHashMap<String, Object>();
+            result.put("message", "临时文件初始化成功");
+            result.put("fileId", tempFileId);
+            result.put("sourceFileId", sourceFileId);
+            result.put("fileName", tempFileName);
+            result.put("filePath", ftpPath);
+            result.put("downloadUrl", downloadUrl);
+
+            return FileToolResponse.ok(result, tempFileName);
+        } catch (Exception e) {
+            log.error("file_init_temp failed for {}", userFile.getOriginalFileName(), e);
+            return FileToolResponse.error("file_init_temp failed: " + e.getMessage(), userFile.getOriginalFileName());
+        }
+    }
+
     // ================================================================
     // 内部辅助
     // ================================================================
@@ -520,7 +625,7 @@ public class FileToolService {
      * 这些工具在没有 fileId 时会创建新文件。
      */
     private boolean isOptionalFileIdTool(String toolName) {
-        return "excel_write".equals(toolName) || "word_write".equals(toolName) || "md_write".equals(toolName) || "txt_write".equals(toolName);
+        return "file_write".equals(toolName);
     }
 
     /**
@@ -679,5 +784,63 @@ public class FileToolService {
                     (String) e.get("expression")));
         }
         return exprs;
+    }
+
+    private FileToolResponse routeByExtension(UserFile userFile, Map<String, Object> params, String userId, String operation) {
+        String ext = "";
+        if (userFile != null) {
+            ext = extractExtension(userFile.getOriginalFileName());
+            log.debug("routeByExtension: operation={}, ext={}, fileName={}", operation, ext, userFile.getOriginalFileName());
+        } else {
+            ext = inferExtensionFromParams(params);
+            log.debug("routeByExtension: operation={}, ext={} (inferred from params)", operation, ext);
+        }
+
+        String handlerName;
+        if ("txt".equalsIgnoreCase(ext) || "log".equalsIgnoreCase(ext) || "html".equalsIgnoreCase(ext)) {
+            handlerName = "txt_" + operation;
+        } else if ("md".equalsIgnoreCase(ext) || "markdown".equalsIgnoreCase(ext)) {
+            handlerName = "md_" + operation;
+        } else if ("docx".equalsIgnoreCase(ext) || "doc".equalsIgnoreCase(ext)) {
+            handlerName = "word_" + operation;
+        } else if ("xlsx".equalsIgnoreCase(ext) || "xls".equalsIgnoreCase(ext) || "csv".equalsIgnoreCase(ext)) {
+            handlerName = "excel_" + operation;
+        } else {
+            return FileToolResponse.error("Unsupported file type: " + ext + ". Supported types: txt/md/log/html/docx/doc/xlsx/xls/csv");
+        }
+
+        ToolHandler handler = handlers.get(handlerName);
+        if (handler != null) {
+            try {
+                return handler.handle(userFile, params, userId);
+            } catch (Exception e) {
+                log.error("Error executing handler {}: {}", handlerName, e.getMessage(), e);
+                return FileToolResponse.error("Error executing " + handlerName + ": " + e.getMessage());
+            }
+        } else {
+            return FileToolResponse.error("Handler not found for " + handlerName);
+        }
+    }
+
+    private String inferExtensionFromParams(Map<String, Object> params) {
+        if (params == null) return "txt";
+        if (params.containsKey("title") && params.get("title") != null && !((String) params.get("title")).isEmpty()) {
+            return "docx";
+        }
+        if (params.containsKey("headers") && params.get("headers") != null) {
+            return "xlsx";
+        }
+        String content = params.get("content") instanceof String ? (String) params.get("content") : "";
+        if (content != null && content.startsWith("# ")) {
+            return "md";
+        }
+        return "txt";
+    }
+
+    private String extractExtension(String fileName) {
+        if (fileName == null) return "";
+        int dot = fileName.lastIndexOf('.');
+        if (dot < 0 || dot == fileName.length() - 1) return "";
+        return fileName.substring(dot + 1).toLowerCase();
     }
 }

@@ -56,6 +56,7 @@ public class SecurityConfig {
                 .antMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .antMatchers("/api/skills/**").permitAll()
                 .antMatchers("/api/system-skills/**").permitAll()
+                .antMatchers("/api/token-usage/**").permitAll()
                 .anyRequest().permitAll()
             )
             .addFilterBefore(new ApiTokenFilter(), UsernamePasswordAuthenticationFilter.class);

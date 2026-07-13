@@ -254,23 +254,54 @@ export class SkillManager {
     return skills;
   }
 
+  /**
+   * open spec: optimize-agent-prompt-and-skill-mounting
+   *
+   * Filesystem skills are no longer injected into the static prompt. The
+   * returned string is a ≤ 5-line placeholder that instructs the agent to
+   * call `search_filesystem_skills` to discover skills on demand.
+   *
+   * This keeps prompt size constant regardless of how many SKILL.md files
+   * exist on disk.
+   */
   buildSkillPromptContext(): string {
-    const skills = this.getRoutableSkills();
-    if (skills.length === 0) return '';
-
-    const lines = skills.map((skill) => {
-      const metadataSuffix = skill.metadataSummary ? ` | metadata: ${skill.metadataSummary}` : '';
-      return `- ${skill.name}: ${skill.description}${metadataSuffix}`;
-    });
-
     return [
-      '[Available Skills]',
-      'You can load a skill on demand when it is directly relevant.',
-      'Only use a skill tool when the current request clearly matches the skill description.',
-      'The tool will return the full SKILL.md instructions only after you choose it.',
-      ...lines,
+      '[Filesystem Skills]',
+      'Filesystem skills (from SKILLs/) are NOT listed here. To find a skill, call the search_filesystem_skills tool with a query describing the task.',
+      'After retrieval, load a skill by passing its id to execute_skill_with_context.',
       '',
     ].join('\n');
+  }
+
+  /**
+   * open spec: optimize-agent-prompt-and-skill-mounting
+   *
+   * Search routable filesystem skills by case-insensitive substring match
+   * on `name + description + metadataSummary` (mirrors SearchToolsTool
+   * algorithm in tools/search-tools.ts). Returns scored matches.
+   *
+   * @param query User-provided search query (may be empty; empty query returns all)
+   */
+  searchSkills(query: string): Array<{ id: string; name: string; description: string; score: number }> {
+    const skills = this.getRoutableSkills();
+    const q = normalizeText(query).toLowerCase();
+
+    const scored = skills.map((skill) => {
+      const haystack = `${skill.name}\n${skill.description}\n${skill.metadataSummary || ''}`.toLowerCase();
+      if (!q) return { skill, score: 0 };
+      if (!haystack.includes(q)) return null;
+      // score: substring occurrences (clamped to 1.0)
+      const matches = haystack.split(q).length - 1;
+      return { skill, score: Math.min(1, matches * 0.5 + 0.5) };
+    }).filter((entry): entry is { skill: RegisteredSkill; score: number } => entry !== null);
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map(({ skill, score }) => ({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      score,
+    }));
   }
 
   private buildToolResult(skill: RegisteredSkill, reason: string): string {
