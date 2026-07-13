@@ -48,7 +48,8 @@ import { AgentFactory } from '../agent/agent';
 import { MemoryService } from '../mem/memory.service';
 import { SkillManager } from '../skills/skill.manager';
 import { LoggerService } from '../utils/logger.service';
-import { describeGatewayExtendedTool } from '../tools/java-skills';
+import { describeGatewayExtendedTool, type BindableAgentTool } from '../tools/java-skills';
+import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import {
   clearActiveParentToolId,
   getActiveParentToolId,
@@ -812,6 +813,9 @@ export class AgentController {
         const lastToolArguments = new Map<string, unknown>();
         const lastEmittedToolResult = new Map<string, string | undefined>();
         const toolCallStartTimes = new Map<string, number>();
+        // open spec: fix-llm-request-full-payload — hoist out of try block so finally can read it
+        let mainAgentTools: BindableAgentTool[] | undefined;
+        let agent: any;
         try {
           const llmCallbackHandler = this.logger.createLlmCallbackHandler(sessionId, (event) => {
             subject.next({ data: JSON.stringify(event) });
@@ -838,7 +842,8 @@ export class AgentController {
           // 具体技能执行由主 Agent 通过 search_tools + execute_skill_with_context 创建子 Agent 完成
           // open spec: add-slash-skill-invocation: 如果 slash 检测到，传 forcedSkillIds 让主 agent 只挂载这一个技能，
           // 同时隐藏 search / execute / generator 类工具（LLM 没有"选择"余地，100% 调指定技能）。
-          const { agent } = await AgentFactory.createMainAgent(
+          // open spec: fix-llm-request-full-payload: 同时取 tools 用于拼装完整 Chat Completions body 写入 requestData
+          ({ agent, tools: mainAgentTools } = await AgentFactory.createMainAgent(
             gatewayUrl,
             apiToken,
             openAiApiKey,
@@ -1179,7 +1184,10 @@ export class AgentController {
               llmModel: modelName,
               skillName: skillNames.join(','),
               toolName: toolNames.join(','),
-              requestData: JSON.stringify({ instruction, context: llmContext, history: sanitizedHistory }),
+              // open spec: fix-llm-request-full-payload — 把 tools 转 OpenAI Chat Completions 格式后
+              // 拼到 requestData 里，skill-gateway 才能算出"实际送给大模型的字符数"。
+              // 结构：{ modelName, params: { options: { tools: [...], signal: {} } }, messages: [...] }
+              requestData: JSON.stringify(buildFullLlmRequestBody(modelName, mainAgentTools, sanitizedHistory, instruction, llmContext)),
               responseData: JSON.stringify({ response: fullAssistantResponse }),
               conversationContent: JSON.stringify({
                 messages: [
@@ -1197,4 +1205,70 @@ export class AgentController {
         }
       });
   }
+}
+
+/**
+ * open spec: fix-llm-request-full-payload
+ *
+ * 构造"实际送给大模型"的完整 Chat Completions body，序列化后写入 conversation_logs.request_data。
+ * 这样 skill-gateway 就能用 CHAR_LENGTH(request_data) 算出真实 prompt 字符数（含 tools + messages）。
+ *
+ * 结构对齐 OpenAI Chat Completions API：
+ * {
+ *   modelName: "MiniMax-M3",
+ *   params: { options: { tools: [{type:"function", function:{name,description,parameters}}, ...], signal: {} }, batch_size: 1 },
+ *   messages: [{role:"system",content:instruction}, ...sanitizedHistory, {role:"user",content:userInput}]
+ * }
+ */
+function buildFullLlmRequestBody(
+  modelName: string,
+  tools: BindableAgentTool[] | undefined,
+  sanitizedHistory: Array<{ role?: string; content?: unknown }>,
+  instruction: string,
+  llmContext: Record<string, unknown>,
+): Record<string, unknown> {
+  // 1. tools → OpenAI Chat Completions format
+  let openAiTools: Array<Record<string, unknown>> = [];
+  if (Array.isArray(tools) && tools.length > 0) {
+    try {
+      openAiTools = tools.map((t) => {
+        const def = convertToOpenAITool(t) as any;
+        // convertToOpenAITool returns { type, function } — already the wire format
+        return def as Record<string, unknown>;
+      });
+    } catch (e) {
+      console.warn(`[buildFullLlmRequestBody] convertToOpenAITool failed, falling back to name+description only: ${e instanceof Error ? e.message : e}`);
+      openAiTools = tools.map((t) => ({
+        type: 'function',
+        function: {
+          name: t.name,
+          description: t.description,
+          parameters: { type: 'object', properties: {} },
+        },
+      }));
+    }
+  }
+
+  // 2. messages = [system(instruction) + ...history + user(instruction as final user turn)]
+  //    匹配 agent-core 实际喂给 LLM 的格式（SystemMessage = llmContext/历史 + UserMessage = 本轮 instruction）
+  const messages: Array<Record<string, unknown>> = [
+    ...sanitizedHistory.map((m) => ({
+      role: typeof m.role === 'string' ? m.role : 'user',
+      content: typeof m.content === 'string' ? m.content : String(m.content ?? ''),
+    })),
+    { role: 'user', content: instruction },
+  ];
+
+  return {
+    modelName,
+    params: {
+      options: {
+        tools: openAiTools,
+        signal: {},
+      },
+      batch_size: 1,
+    },
+    context: llmContext,  // 保留 context 元信息（不影响 token 计数但保留诊断信息）
+    messages,
+  };
 }

@@ -5,6 +5,7 @@ import { useUser } from '../composables/useUser';
 import { useSkillHub } from '../composables/useSkillHub';
 import { useServerLedger } from '../composables/useServerLedger';
 import { useLlmSettings } from '../composables/useLlmSettings';
+import { useTokenUsage } from '../composables/useTokenUsage';
 import { useAsyncTaskNotifications } from '../composables/useAsyncTaskNotifications';
 import UserAvatar from './UserAvatar.vue';
 import ProfileEditModal from './ProfileEditModal.vue';
@@ -12,6 +13,7 @@ import LlmSettingsModal from './LlmSettingsModal.vue';
 import SkillHub from './SkillHub.vue';
 import ServerLedger from './ServerLedger.vue';
 import TaskNotificationBell from './TaskNotificationBell.vue';
+import TokenUsagePanel from './TokenUsagePanel.vue';
 import ConversationSidebar from './ConversationSidebar.vue';
 import { AppIcon, FolderOpenIcon, ServerIcon, ChartIcon } from 'tdesign-icons-vue-next';
 
@@ -21,6 +23,7 @@ const profileEditVisible = ref(false);
 const { toggleSkillHub } = useSkillHub();
 const { toggleServerLedger } = useServerLedger();
 const { toggleLlmSettings } = useLlmSettings();
+const { toggleTokenUsage } = useTokenUsage();
 const { startPolling, stopPolling } = useAsyncTaskNotifications();
 
 const sidebarCollapsed = ref(false)
@@ -71,6 +74,10 @@ onBeforeUnmount(() => {
               <template #icon><ChartIcon /></template>
               运营看板
             </t-button>
+            <t-button v-if="currentUser" theme="default" variant="text" @click="toggleTokenUsage">
+              <template #icon><ChartIcon /></template>
+              Token 用量
+            </t-button>
             <t-button v-if="currentUser" theme="default" variant="text" @click="profileEditVisible = true">
               编辑资料
             </t-button>
@@ -93,6 +100,7 @@ onBeforeUnmount(() => {
     <ServerLedger />
     <ProfileEditModal v-model:visible="profileEditVisible" />
     <LlmSettingsModal />
+    <TokenUsagePanel />
   </t-layout>
 </template>
 

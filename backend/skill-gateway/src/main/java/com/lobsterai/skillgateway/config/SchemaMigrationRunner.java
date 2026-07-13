@@ -56,6 +56,7 @@ public class SchemaMigrationRunner implements InitializingBean {
             migrateExternalService(conn);
             migrateExternalServiceInput(conn);
             cleanupDuplicateBxdcbotSubTaskChatMessages(conn);
+            migrateTokenUsageIndexes(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
             log.warn("[SchemaMigration] Migration failed: {}", e.getMessage());
@@ -108,6 +109,38 @@ public class SchemaMigrationRunner implements InitializingBean {
             log.warn("[SchemaMigration] Failed to clean up duplicate ASYNC_TASK_RESULT messages: {}",
                     e.getMessage());
         }
+    }
+
+    /**
+     * open spec: add-conversation-token-usage-tab
+     * 为 token 用量查询加复合索引：
+     * - conversation_logs(user_id, updated_at) — 会话列表 + 日期过滤
+     * - conversation_logs(session_id, created_at) — 会话详情倒序
+     * - conversation_logs(user_id, created_at) — 按天聚合
+     * - tool_call_logs(session_id, trace_id) — 详情 round 的 skill 清单
+     *
+     * 注：conversation_logs 已有 idx_conv_user_id / idx_conv_session_id / idx_conv_created_at / idx_conv_trace_id，
+     * 本次加的复合索引是补全 LEFT JOIN + WHERE + GROUP BY 的高效路径。
+     */
+    void migrateTokenUsageIndexes(Connection conn) {
+        String convTable = "conversation_logs";
+        if (!tableExists(conn, convTable)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet, skip", convTable);
+            return;
+        }
+        Set<String> convIdx = getIndexNames(conn, convTable);
+        ensureIndex(conn, convTable, "idx_conv_logs_user_updated", convIdx,
+                "ALTER TABLE conversation_logs ADD INDEX idx_conv_logs_user_updated (user_id, updated_at)");
+        ensureIndex(conn, convTable, "idx_conv_logs_session_created", convIdx,
+                "ALTER TABLE conversation_logs ADD INDEX idx_conv_logs_session_created (session_id, created_at)");
+        ensureIndex(conn, convTable, "idx_conv_logs_user_created", convIdx,
+                "ALTER TABLE conversation_logs ADD INDEX idx_conv_logs_user_created (user_id, created_at)");
+
+        String toolTable = "tool_call_logs";
+        if (!tableExists(conn, toolTable)) return;
+        Set<String> toolIdx = getIndexNames(conn, toolTable);
+        ensureIndex(conn, toolTable, "idx_tool_call_logs_session_trace", toolIdx,
+                "ALTER TABLE tool_call_logs ADD INDEX idx_tool_call_logs_session_trace (session_id, trace_id)");
     }
 
     private void migrateAsyncTasks(Connection conn) {
