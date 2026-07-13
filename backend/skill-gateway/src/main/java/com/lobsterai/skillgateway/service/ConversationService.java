@@ -459,4 +459,36 @@ public class ConversationService {
             return null;
         }
     }
+
+    /**
+     * 深度克隆对话：复制 skills、files、source 等配置，但<b>不带消息历史</b>。
+     * 用于外部系统接入时为每个 callerId 创建独立副本。
+     *
+     * @param templateConv 模板对话
+     * @param newUserId 新对话所属的用户 ID
+     * @param source 来源系统标识（如 ecommerce、crm），可 null
+     * @return 新建的克隆对话
+     */
+    @Transactional
+    public Conversation clone(Conversation templateConv, String newUserId, String source) {
+        Conversation cloned = new Conversation();
+        cloned.setConversationId(UUID.randomUUID().toString());
+        cloned.setUserId(newUserId);
+        cloned.setName(templateConv.getName() + " (API)");
+        cloned.setEnabledSkills(templateConv.getEnabledSkills());
+        cloned.setEnabledFiles(templateConv.getEnabledFiles());
+        cloned.setStatus("active");
+        cloned.setIsPublished(false);         // 克隆对话本身不发布
+        cloned.setPublishType(null);
+        cloned.setExternalSystemPrompt(templateConv.getExternalSystemPrompt());
+        cloned.setSource(source);
+        cloned.setCreatedAt(LocalDateTime.now());
+        cloned.setUpdatedAt(LocalDateTime.now());
+        conversationMapper.insert(cloned);
+
+        // 注入一条问好语（非 LLM，纯模板随机）
+        insertGreetingMessage(cloned.getConversationId(), newUserId);
+
+        return cloned;
+    }
 }

@@ -43,7 +43,7 @@ export interface ConversationsState {
   /** Computed: the currently active Conversation object (undefined if none) */
   currentConversation: ComputedRef<Conversation | undefined>
   /** Publish a conversation as API */
-  publishConversation: (conversationId: string, userId: string, apiDescription: string) => Promise<{ apiKey: string }>
+  publishConversation: (conversationId: string, userId: string, apiDescription: string, publishType?: string, externalSystemPrompt?: string | null) => Promise<{ apiKey: string }>
 }
 
 function sanitizeName(raw: string): string {
@@ -222,8 +222,8 @@ function createConversationsState(): ConversationsState {
     }
   }
 
-  async function publishConversationMethod(conversationId: string, userId: string, apiDescription: string): Promise<{ apiKey: string }> {
-    const res = await apiPublishConversation(userId, conversationId, apiDescription)
+  async function publishConversationMethod(conversationId: string, userId: string, apiDescription: string, publishType?: string, externalSystemPrompt?: string | null): Promise<{ apiKey: string }> {
+    const res = await apiPublishConversation(userId, conversationId, apiDescription, publishType, externalSystemPrompt)
     // Refresh the full conversations list from the backend so every view that
     // reads from `conversations` (sidebar, ChatView's watcher, etc.) sees the
     // fresh `is_published = true` state.

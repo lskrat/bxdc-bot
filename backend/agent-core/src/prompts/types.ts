@@ -93,4 +93,9 @@ export interface SystemPrompts {
    * @returns 格式化的任务状态摘要
    */
   buildTasksSummary: (tasks: TasksStatusMap) => string;
+
+  /**
+   * 外部 API 接入默认系统提示词（简化版，不含 skillGenerator、taskTracking、confirmationUI）
+   */
+  externalApiSystemPrompt: string;
 }

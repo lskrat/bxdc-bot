@@ -278,12 +278,27 @@ CREATE TABLE IF NOT EXISTS conversations (
     api_description TEXT NULL COMMENT 'API描述文本，发布时填写，作为LLM对话上下文的系统消息',
     api_key VARCHAR(64) NULL COMMENT 'API调用密钥明文，供前端展示和复制',
     api_key_hash VARCHAR(64) NULL COMMENT 'API调用密钥SHA-256哈希，供认证查询',
+    publish_type VARCHAR(16) DEFAULT 'internal' COMMENT '发布类型：internal=内部共享, external=外部系统接入',
+    external_system_prompt TEXT NULL COMMENT '外部接入模式的系统提示词',
+    source VARCHAR(64) NULL COMMENT '对话来源：NULL=手动创建, 外部接入时存apiClient值，如 ecommerce/crm等',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_conv_user_id (user_id),
     INDEX idx_conv_status (status),
     UNIQUE INDEX idx_api_key_hash (api_key_hash)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='对话会话表';
+
+-- external_api_tenants（外部API接入租户映射表 - 模板对话与克隆对话的映射关系）
+CREATE TABLE IF NOT EXISTS external_api_tenants (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    template_conv_id BIGINT NOT NULL COMMENT '模板对话主键ID（conversations.id）',
+    caller_id VARCHAR(255) NOT NULL COMMENT '外部系统传入的用户标识',
+    user_id VARCHAR(128) NOT NULL COMMENT '自动创建的平台用户ID（ext_前缀）',
+    cloned_conv_id BIGINT NOT NULL COMMENT '克隆的对话主键ID（conversations.id）',
+    created_at DATETIME NOT NULL COMMENT '首次调用时间',
+    UNIQUE KEY uk_template_caller (template_conv_id, caller_id),
+    INDEX idx_cloned_conv (cloned_conv_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='外部API接入租户映射表';
 
 -- conversation_messages（对话消息表 - 存储每轮对话的完整消息内容）
 CREATE TABLE IF NOT EXISTS conversation_messages (

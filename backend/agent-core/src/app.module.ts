@@ -29,6 +29,7 @@ import { UserController } from './controller/user.controller';
 import { AvatarController } from './features/avatar/avatar.controller';
 import { OptimizeTextController } from './features/optimize-text/optimize-text.controller';
 import { SkillProxyController } from './features/skills/skill-proxy.controller';
+import { PromptsController } from './controller/prompts.controller';
 import { MemoryService } from './mem/memory.service';
 import { SkillManager } from './skills/skill.manager';
 import { LoggerService } from './utils/logger.service';
@@ -48,7 +49,7 @@ import { BxdcbotRunScheduler } from './services/bxdcbot-run-scheduler.js';
  */
 @Module({
   imports: [ConfigModule.forRoot()],
-  controllers: [AgentController, HealthController, MemoryController, UserController, AvatarController, OptimizeTextController, SkillProxyController],
+  controllers: [AgentController, HealthController, MemoryController, UserController, AvatarController, OptimizeTextController, SkillProxyController, PromptsController],
   providers: [MemoryService, SkillManager, LoggerService, BxdcbotRunScheduler],
 })
 export class AppModule {}

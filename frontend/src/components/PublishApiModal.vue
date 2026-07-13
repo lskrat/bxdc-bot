@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useConversations } from '../composables/useConversations'
 import { useUser } from '../composables/useUser'
 import { copyTextToClipboard } from '../utils/clipboard'
+import { apiUrl } from '../services/config'
 
 const props = defineProps<{
   visible: boolean
@@ -18,27 +19,58 @@ const emit = defineEmits<{
 const { currentUser } = useUser()
 const conversations = useConversations()
 
+const isAdmin = computed(() => (currentUser.value as any)?.isAdmin === true)
+const publishType = ref<'internal' | 'external'>('internal')
 const apiDescription = ref('')
+const externalSystemPrompt = ref('')
 const publishing = ref(false)
 const publishResult = ref<{ apiKey: string } | null>(null)
 
 const displayUrl = computed(() => {
+  if (publishType.value === 'external') {
+    return `${window.location.origin}/api/agent-chat/external`
+  }
   return `${window.location.origin}/api/agent-chat`
 })
 
-async function handlePublish() {
-  const desc = apiDescription.value.trim()
-  if (!desc) {
-    MessagePlugin.warning('请填写 API 描述')
-    return
+// Watch for external type selection → fetch default prompt
+watch(publishType, async (newType) => {
+  if (newType === 'external' && !externalSystemPrompt.value) {
+    try {
+      const res = await fetch(apiUrl('/prompts/external-api-default'))
+      if (res.ok) {
+        const data = await res.json()
+        externalSystemPrompt.value = data.prompt || ''
+      }
+    } catch {
+      // 静默失败，管理员可手动填写
+    }
   }
+})
+
+async function handlePublish() {
   if (!currentUser.value) return
+
+  if (publishType.value === 'external') {
+    if (!externalSystemPrompt.value.trim()) {
+      MessagePlugin.warning('请填写系统提示词')
+      return
+    }
+  } else {
+    if (!apiDescription.value.trim()) {
+      MessagePlugin.warning('请填写 API 描述')
+      return
+    }
+  }
+
   publishing.value = true
   try {
     const result = await conversations.publishConversation(
       props.conversationId,
       currentUser.value.id,
-      desc,
+      apiDescription.value.trim(),
+      publishType.value,
+      externalSystemPrompt.value.trim() || null,
     )
     publishResult.value = result
   } catch (e: any) {
@@ -50,6 +82,8 @@ async function handlePublish() {
 
 function handleClose() {
   apiDescription.value = ''
+  externalSystemPrompt.value = ''
+  publishType.value = 'internal'
   publishResult.value = null
   emit('close')
 }
@@ -57,13 +91,14 @@ function handleClose() {
 function handleDone() {
   const key = publishResult.value?.apiKey
   apiDescription.value = ''
+  externalSystemPrompt.value = ''
+  publishType.value = 'internal'
   publishResult.value = null
   emit('published', key || '')
 }
 
 async function copyApiKey() {
   if (!publishResult.value?.apiKey) return
-  // 使用 textarea + execCommand('copy')，兼容内网/老浏览器
   const ok = await copyTextToClipboard(publishResult.value.apiKey)
   if (ok) {
     MessagePlugin.success('已复制到剪贴板')
@@ -84,18 +119,46 @@ async function copyApiKey() {
     <!-- Step 1: Fill description -->
     <template v-if="!publishResult">
       <t-alert theme="info" message="发布后，该对话的页面将变为 API 详情视图，不再显示聊天界面" style="margin-bottom: 16px" />
+
+      <!-- 发布类型选择 -->
       <t-form label-width="80px">
-        <t-form-item label="API 描述" required>
-          <t-textarea
-            v-model="apiDescription"
-            placeholder="请描述该 API 提供的服务，例如：该 API 提供数据分析和报告生成服务..."
-            :maxlength="2000"
-            :autosize="{ minRows: 4, maxRows: 8 }"
-          />
-          <template #help>
-            描述将作为 LLM 对话上下文，帮助 AI 理解 API 的服务范围
-          </template>
+        <t-form-item label="发布类型">
+          <t-radio-group v-model="publishType">
+            <t-radio value="internal">内部共享（团队内使用）</t-radio>
+            <t-radio v-if="isAdmin" value="external">外部系统接入（供第三方系统调用）</t-radio>
+          </t-radio-group>
         </t-form-item>
+
+        <!-- 外部接入模式：系统提示词 -->
+        <template v-if="publishType === 'external'">
+          <t-form-item label="系统提示词" required>
+            <t-textarea
+              v-model="externalSystemPrompt"
+              placeholder="系统提示词已自动填充默认值，可根据需要修改..."
+              :maxlength="4000"
+              :autosize="{ minRows: 6, maxRows: 12 }"
+            />
+            <template #help>
+              提示词已自动加载默认值，可以根据实际场景修改
+            </template>
+          </t-form-item>
+        </template>
+
+        <!-- 内部共享模式：API 描述 -->
+        <template v-else>
+          <t-form-item label="API 描述" required>
+            <t-textarea
+              v-model="apiDescription"
+              placeholder="请描述该 API 提供的服务，例如：该 API 提供数据分析和报告生成服务..."
+              :maxlength="2000"
+              :autosize="{ minRows: 4, maxRows: 8 }"
+            />
+            <template #help>
+              描述将作为 LLM 对话上下文，帮助 AI 理解 API 的服务范围
+            </template>
+          </t-form-item>
+        </template>
+
         <t-form-item label="调用地址">
           <t-input :value="displayUrl" readonly />
         </t-form-item>

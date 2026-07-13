@@ -53,6 +53,15 @@ public class Conversation {
     @TableField("api_key_hash")
     private String apiKeyHash;
 
+    @TableField("publish_type")
+    private String publishType;
+
+    @TableField("external_system_prompt")
+    private String externalSystemPrompt;
+
+    @TableField("source")
+    private String source;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 
@@ -147,6 +156,30 @@ public class Conversation {
 
     public void setApiKeyHash(String apiKeyHash) {
         this.apiKeyHash = apiKeyHash;
+    }
+
+    public String getPublishType() {
+        return publishType;
+    }
+
+    public void setPublishType(String publishType) {
+        this.publishType = publishType;
+    }
+
+    public String getExternalSystemPrompt() {
+        return externalSystemPrompt;
+    }
+
+    public void setExternalSystemPrompt(String externalSystemPrompt) {
+        this.externalSystemPrompt = externalSystemPrompt;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
     }
 
     public LocalDateTime getCreatedAt() {

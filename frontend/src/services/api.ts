@@ -175,15 +175,24 @@ export async function publishConversation(
   userId: string,
   conversationId: string,
   apiDescription: string,
+  publishType?: string,
+  externalSystemPrompt?: string | null,
 ): Promise<PublishResponse> {
+  const body: Record<string, unknown> = { apiDescription }
+  if (publishType) {
+    body.publishType = publishType
+  }
+  if (externalSystemPrompt !== undefined) {
+    body.externalSystemPrompt = externalSystemPrompt
+  }
   const response = await fetch(apiUrl(`/api/conversations/${conversationId}/publish`), {
     method: 'PUT',
     headers: authHeaders(userId),
-    body: JSON.stringify({ apiDescription }),
+    body: JSON.stringify(body),
   })
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}))
-    throw new Error((body as any).error || 'Failed to publish conversation')
+    const bodyErr = await response.json().catch(() => ({}))
+    throw new Error((bodyErr as any).error || 'Failed to publish conversation')
   }
   return response.json()
 }

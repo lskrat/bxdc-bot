@@ -106,6 +106,14 @@ When dealing with file download links (downloadUrl) and file IDs (fileId), you M
 `;
 
 /**
+ * 外部 API 接入默认系统提示词（简化版）
+ *
+ * 保留：agentRole（简化版）、skillDiscovery、extendedSkillRouting、downloadUrl
+ * 移除：skillGenerator（外部用户不应创建技能）、taskTracking、confirmationUI（外部调用 auto-deny）
+ */
+const externalApiSystemPrompt = agentRolePrompt + skillDiscoveryPolicy + extendedSkillRoutingPolicy + downloadUrlPolicy;
+
+/**
  * 构建任务状态摘要
  * 
  * 根据任务状态映射表生成用于注入到 LLM 提示词中的摘要文本
@@ -146,4 +154,5 @@ export const EnglishPrompts: SystemPrompts = {
   extendedSkillRoutingPolicy,
   downloadUrlPolicy,
   buildTasksSummary,
+  externalApiSystemPrompt: externalApiSystemPrompt,
 };

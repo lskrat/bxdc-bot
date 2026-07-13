@@ -61,7 +61,8 @@ public class ConversationApiService {
     // ---- Publish ----
 
     @Transactional
-    public Map<String, Object> publish(String conversationId, String userId, String apiDescription) {
+    public Map<String, Object> publish(String conversationId, String userId, String apiDescription,
+                                        String publishType, String externalSystemPrompt) {
         Conversation conv = conversationService.getById(conversationId, userId);
 
         if (apiDescription == null || apiDescription.trim().isEmpty()) {
@@ -78,6 +79,8 @@ public class ConversationApiService {
         conv.setApiDescription(apiDescription.trim());
         conv.setApiKey(apiKey);
         conv.setApiKeyHash(apiKeyHash);
+        conv.setPublishType(publishType != null ? publishType : "internal");
+        conv.setExternalSystemPrompt(externalSystemPrompt);
         conv.setUpdatedAt(LocalDateTime.now());
         conversationMapper.updateById(conv);
 
@@ -402,6 +405,9 @@ public class ConversationApiService {
         dto.put("status", conv.getStatus());
         dto.put("is_published", conv.getIsPublished());
         dto.put("api_description", conv.getApiDescription());
+        dto.put("publish_type", conv.getPublishType());
+        dto.put("external_system_prompt", conv.getExternalSystemPrompt());
+        dto.put("source", conv.getSource());
         dto.put("created_at", conv.getCreatedAt() != null ? conv.getCreatedAt().toString() : null);
         dto.put("updated_at", conv.getUpdatedAt() != null ? conv.getUpdatedAt().toString() : null);
         return dto;

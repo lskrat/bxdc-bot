@@ -52,7 +52,14 @@ public class UserController {
         if (user == null) {
             return ResponseEntity.notFound().build();
         }
-        return ResponseEntity.ok(user);
+        // 附加 isAdmin 字段（读取环境变量 SYSTEM_ADMIN_IDS）
+        Map<String, Object> result = new HashMap<>();
+        result.put("id", user.getId());
+        result.put("nickname", user.getNickname());
+        result.put("avatar", user.getAvatar());
+        result.put("createdAt", user.getCreatedAt() != null ? user.getCreatedAt().toString() : null);
+        result.put("isAdmin", userService.isAdmin(user.getId()));
+        return ResponseEntity.ok(result);
     }
 
     @PutMapping("/{id}/avatar")

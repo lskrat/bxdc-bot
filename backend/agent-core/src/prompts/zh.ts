@@ -106,6 +106,14 @@ const downloadUrlPolicy = `[下载链接策略]
 `;
 
 /**
+ * 外部 API 接入默认系统提示词（简化版）
+ *
+ * 保留：agentRole（简化版）、skillDiscovery、extendedSkillRouting、downloadUrl
+ * 移除：skillGenerator（外部用户不应创建技能）、taskTracking、confirmationUI（外部调用 auto-deny）
+ */
+const externalApiSystemPrompt = agentRolePrompt + skillDiscoveryPolicy + extendedSkillRoutingPolicy + downloadUrlPolicy;
+
+/**
  * 任务状态中文映射
  */
 const statusMap: Record<string, string> = {
@@ -156,4 +164,5 @@ export const ChinesePrompts: SystemPrompts = {
   extendedSkillRoutingPolicy,
   downloadUrlPolicy,
   buildTasksSummary,
+  externalApiSystemPrompt,
 };

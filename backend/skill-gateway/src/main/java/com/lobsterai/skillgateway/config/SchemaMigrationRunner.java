@@ -52,6 +52,8 @@ public class SchemaMigrationRunner implements InitializingBean {
             migrateAsyncTaskParentToolId(conn);
             migrateChatMessageParentToolId(conn);
             cleanupDuplicateBxdcbotSubTaskChatMessages(conn);
+            migrateConversationsExternalApiColumns(conn);
+            migrateExternalApiTenants(conn);
         } catch (Exception e) {
             // 迁移失败不阻塞应用启动，但记录严重警告
             log.warn("[SchemaMigration] Migration failed: {}", e.getMessage());
@@ -590,5 +592,65 @@ public class SchemaMigrationRunner implements InitializingBean {
         // 3. 复合索引（按 parent_tool_id 过滤子任务产生的对话消息）
         ensureIndex(conn, table, "idx_chat_msg_parent_tool", existingIndexes,
                 "CREATE INDEX idx_chat_msg_parent_tool ON " + table + "(parent_tool_id)");
+    }
+
+    /**
+     * external-api-tenant-access change 配套 schema 迁移。
+     *
+     * 任务：conversations 表新增 publish_type / external_system_prompt / source 三列。
+     * 存量对话保持 NULL / 默认值，向后兼容。
+     */
+    void migrateConversationsExternalApiColumns(Connection conn) {
+        String table = "conversations";
+        if (!tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} does not exist yet (will be created by schema-mysql.sql)", table);
+            return;
+        }
+
+        Set<String> existingColumns = getColumnNames(conn, table);
+
+        ensureColumn(conn, table, "publish_type", existingColumns,
+                "ALTER TABLE conversations ADD COLUMN publish_type VARCHAR(16) DEFAULT 'internal' " +
+                "COMMENT '发布类型：internal=内部共享, external=外部系统接入'");
+
+        ensureColumn(conn, table, "external_system_prompt", existingColumns,
+                "ALTER TABLE conversations ADD COLUMN external_system_prompt TEXT NULL " +
+                "COMMENT '外部接入模式的系统提示词'");
+
+        ensureColumn(conn, table, "source", existingColumns,
+                "ALTER TABLE conversations ADD COLUMN source VARCHAR(64) NULL " +
+                "COMMENT '对话来源：NULL=手动创建, 外部接入时存apiClient值'");
+    }
+
+    /**
+     * external-api-tenant-access change 配套 schema 迁移。
+     *
+     * 任务：创建 external_api_tenants 表，存储模板对话到克隆对话的租户映射。
+     */
+    void migrateExternalApiTenants(Connection conn) {
+        String table = "external_api_tenants";
+        if (tableExists(conn, table)) {
+            log.debug("[SchemaMigration] Table {} already exists, skip", table);
+            return;
+        }
+
+        String createSql = "CREATE TABLE " + table + " (\n" +
+                "  id BIGINT PRIMARY KEY AUTO_INCREMENT,\n" +
+                "  template_conv_id BIGINT NOT NULL COMMENT '模板对话主键ID',\n" +
+                "  caller_id VARCHAR(255) NOT NULL COMMENT '外部系统传入的用户标识',\n" +
+                "  user_id VARCHAR(128) NOT NULL COMMENT '自动创建的平台用户ID',\n" +
+                "  cloned_conv_id BIGINT NOT NULL COMMENT '克隆的对话主键ID',\n" +
+                "  created_at DATETIME NOT NULL COMMENT '首次调用时间',\n" +
+                "  UNIQUE KEY uk_template_caller (template_conv_id, caller_id),\n" +
+                "  INDEX idx_cloned_conv (cloned_conv_id)\n" +
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4\n" +
+                "  COMMENT '外部API接入租户映射表'";
+
+        try (Statement st = conn.createStatement()) {
+            st.executeUpdate(createSql);
+            log.info("[SchemaMigration] ✅ Created table {}", table);
+        } catch (Exception e) {
+            log.warn("[SchemaMigration] Failed to create table {}: {}", table, e.getMessage());
+        }
     }
 }

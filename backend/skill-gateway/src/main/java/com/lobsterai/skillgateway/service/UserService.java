@@ -282,4 +282,45 @@ public class UserService {
         if (id == null) return null;
         return userMapper.selectById(id);
     }
+
+    /**
+     * 判断用户是否为管理员。
+     * 读取环境变量 SYSTEM_ADMIN_IDS（逗号分隔的用户 ID 列表）。
+     */
+    public boolean isAdmin(String userId) {
+        if (userId == null) return false;
+        String adminIds = System.getenv("SYSTEM_ADMIN_IDS");
+        if (adminIds == null || adminIds.trim().isEmpty()) return false;
+        String[] ids = adminIds.split(",");
+        for (String id : ids) {
+            if (userId.equals(id.trim())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 为外部系统接入自动创建平台用户（跳过注册门禁、不要求 6 位数字 ID）。
+     *
+     * @param userId 平台用户 ID（ext_ 前缀格式）
+     * @param nickname 用户昵称
+     * @return 创建的用户
+     */
+    public User createExternalUser(String userId, String nickname) {
+        if (userId == null || userId.trim().isEmpty()) {
+            throw new IllegalArgumentException("User ID must not be empty.");
+        }
+        if (userMapper.selectById(userId) != null) {
+            throw new IllegalArgumentException("User ID already exists: " + userId);
+        }
+
+        User user = new User();
+        user.setId(userId);
+        user.setNickname(nickname != null ? nickname : "API User");
+        user.setAvatar("🤖");
+        user.setCreatedAt(LocalDateTime.now());
+        userMapper.insert(user);
+
+        log.info("[UserService] Created external user: id={}, nickname={}", userId, user.getNickname());
+        return user;
+    }
 }

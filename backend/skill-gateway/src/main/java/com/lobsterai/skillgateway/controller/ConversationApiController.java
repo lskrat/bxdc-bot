@@ -1,9 +1,11 @@
 package com.lobsterai.skillgateway.controller;
 
 import com.lobsterai.skillgateway.service.ConversationApiService;
+import com.lobsterai.skillgateway.service.ExternalApiService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.*;
 
@@ -19,9 +21,12 @@ import java.util.*;
 public class ConversationApiController {
 
     private final ConversationApiService apiService;
+    private final ExternalApiService externalApiService;
 
-    public ConversationApiController(ConversationApiService apiService) {
+    public ConversationApiController(ConversationApiService apiService,
+                                     ExternalApiService externalApiService) {
         this.apiService = apiService;
+        this.externalApiService = externalApiService;
     }
 
     // ---- Publish ----
@@ -33,11 +38,16 @@ public class ConversationApiController {
             @RequestBody Map<String, Object> body) {
         String apiDescription = body.get("apiDescription") instanceof String
                 ? (String) body.get("apiDescription") : "";
-        Map<String, Object> result = apiService.publish(conversationId, userId, apiDescription);
+        String publishType = body.get("publishType") instanceof String
+                ? (String) body.get("publishType") : "internal";
+        String externalSystemPrompt = body.get("externalSystemPrompt") instanceof String
+                ? (String) body.get("externalSystemPrompt") : null;
+        Map<String, Object> result = apiService.publish(conversationId, userId, apiDescription,
+                publishType, externalSystemPrompt);
         return ResponseEntity.ok(result);
     }
 
-    // ---- External API Call ----
+    // ---- External API Call (Internal) ----
 
     @PostMapping("/api/agent-chat")
     public ResponseEntity<Map<String, Object>> agentChat(@RequestBody Map<String, Object> body) {
@@ -52,6 +62,33 @@ public class ConversationApiController {
 
         Map<String, Object> result = apiService.agentChat(apiKey, instruction, callerId);
         return ResponseEntity.ok(result);
+    }
+
+    // ---- External API Call (External System) ----
+
+    @PostMapping("/api/agent-chat/external")
+    public ResponseEntity<?> externalAgentChat(@RequestBody Map<String, Object> body) {
+        String apiKey = body.get("apiKey") instanceof String ? (String) body.get("apiKey") : "";
+        String instruction = body.get("instruction") instanceof String ? (String) body.get("instruction") : "";
+        String callerId = body.get("callerId") instanceof String ? (String) body.get("callerId") : "";
+        String apiClient = body.get("apiClient") instanceof String ? (String) body.get("apiClient") : null;
+        boolean streaming = Boolean.TRUE.equals(body.get("streaming"));
+
+        if (apiKey.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Collections.singletonMap("error", "Invalid API key"));
+        }
+
+        if (streaming) {
+            SseEmitter emitter = externalApiService.agentChatExternalStreaming(
+                    apiKey, instruction, callerId, apiClient);
+            return ResponseEntity.ok().contentType(
+                    org.springframework.http.MediaType.TEXT_EVENT_STREAM).body(emitter);
+        } else {
+            Map<String, Object> result = externalApiService.agentChatExternal(
+                    apiKey, instruction, callerId, apiClient);
+            return ResponseEntity.ok(result);
+        }
     }
 
     // ---- Call Logs ----
