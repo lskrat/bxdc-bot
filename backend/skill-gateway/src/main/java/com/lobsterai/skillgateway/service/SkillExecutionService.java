@@ -47,6 +47,7 @@ public class SkillExecutionService {
     private final JsonSchemaValidator jsonSchemaValidator;
     private final ObjectMapper objectMapper;
     private final FileToolService fileToolService;
+    private final ConversationService conversationService;
 
     public SkillExecutionService(
             SkillService skillService,
@@ -63,7 +64,8 @@ public class SkillExecutionService {
             FileToolService fileToolService,
             PythonSandboxService pythonSandboxService,
             JsonSchemaValidator jsonSchemaValidator,
-            ExternalServiceSkillExecutor externalServiceSkillExecutor
+            ExternalServiceSkillExecutor externalServiceSkillExecutor,
+            ConversationService conversationService
     ) {
         this.skillService = skillService;
         this.apiProxyService = apiProxyService;
@@ -80,13 +82,47 @@ public class SkillExecutionService {
         this.objectMapper = objectMapper;
         this.fileToolService = fileToolService;
         this.externalServiceSkillExecutor = externalServiceSkillExecutor;
+        this.conversationService = conversationService;
     }
 
     private final ExternalServiceSkillExecutor externalServiceSkillExecutor;
 
+    /**
+     * 解析技能：优先从对话 enabledSkills 中无可见性过滤地查找（支持外部用户），
+     * 回退到 getUserSkill（含可见性过滤）。
+     */
+    private Skill resolveSkill(ExecuteRequest request) {
+        Long skillId = request.skillId;
+        if (skillId == null) return null;
+
+        // 有 conversationId 时，先检查技能是否在对话 enabledSkills 中
+        if (request.conversationId != null && !request.conversationId.isEmpty()
+                && request.userId != null && !request.userId.isEmpty()) {
+            try {
+                List<Long> enabledIds = conversationService.getEnabledSkillIds(
+                        request.conversationId, request.userId);
+                if (enabledIds.contains(skillId)) {
+                    // 在 enabledSkills 中，用 findEnabledByIds 无可见性过滤地加载
+                    List<Skill> skills = skillService.listEnabledByIds(Collections.singletonList(skillId));
+                    if (!skills.isEmpty()) return skills.get(0);
+                }
+            } catch (Exception e) {
+                log.debug("[SkillExecution] Conversation lookup failed for skill={}, user={}: {}",
+                        skillId, request.userId, e.getMessage());
+            }
+        }
+
+        // 回退：普通可见性过滤
+        return skillService.getSkillByIdForUser(skillId, request.userId).orElse(null);
+    }
+
     public Object execute(ExecuteRequest request) throws Exception {
-        Skill skill = skillService.getSkillByIdForUser(request.skillId, request.userId)
-                .orElseThrow(() -> new IllegalArgumentException("Skill not found or disabled: " + request.skillId));
+        // 先查技能：优先从对话的 enabledSkills 中无可见性过滤地查找（支持外部用户），
+        // 如果传了 X-Conversation-Id 且技能在对话的 enabledSkills 中，不做可见性过滤
+        Skill skill = resolveSkill(request);
+        if (skill == null) {
+            throw new IllegalArgumentException("Skill not found or disabled: " + request.skillId);
+        }
 
         if (!skill.isEnabled()) {
             throw new IllegalArgumentException("Skill is disabled: " + request.skillId);

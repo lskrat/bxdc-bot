@@ -70,19 +70,21 @@ public class ExternalApiService {
         ConvContext ctx = resolveContext(apiKey, callerId, apiClient);
 
         long startMs = System.currentTimeMillis();
-        ApiCallLog callLog = createCallLog(ctx.clonedConv.getConversationId(),
-                ctx.clonedConv.getUserId(), callerId, instruction);
+        // 记录到模板对话下（管理员在模板对话的调用记录页查看）
+        ApiCallLog callLog = createCallLog(ctx.templateConv.getConversationId(),
+                ctx.templateConv.getUserId(), callerId, instruction);
         String reply = null;
-        int toolCallCount = 0;
+        List<Map<String, Object>> toolCallList = new ArrayList<>();
         String status = "running";
         String errorMessage = null;
 
         try {
+            String systemContent = getSystemContent(ctx.templateConv);
+            String effectiveInstruction = systemContent + "\n\n用户请求：" + instruction;
             List<Map<String, String>> history = buildHistory(ctx.templateConv, ctx.clonedConv);
-            Map<String, Object> agentRequest = buildAgentRequest(instruction, history, ctx.clonedConv);
-            Map<String, Object> sseResult = callAgentCoreSSE(agentRequest);
+            Map<String, Object> agentRequest = buildAgentRequest(effectiveInstruction, history, ctx.clonedConv);
+            Map<String, Object> sseResult = callAgentCoreSSE(agentRequest, toolCallList);
             reply = (String) sseResult.get("reply");
-            toolCallCount = (int) sseResult.getOrDefault("toolCalls", 0);
             status = "success";
         } catch (ResponseStatusException e) {
             status = "error";
@@ -94,14 +96,13 @@ public class ExternalApiService {
             log.error("[external-agent-chat] agent-core call failed", e);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Agent service unavailable");
         } finally {
-            updateCallLog(callLog, status, reply, toolCallCount, startMs, errorMessage);
+            updateCallLog(callLog, status, reply, toolCallList.size(), startMs, errorMessage);
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("conversationId", ctx.clonedConv.getConversationId());
         result.put("reply", reply);
-        result.put("toolCalls", Collections.singletonList(
-                Collections.singletonMap("count", toolCallCount)));
+        result.put("toolCalls", toolCallList);
         result.put("durationMs", (int) (System.currentTimeMillis() - startMs));
         return result;
     }
@@ -114,24 +115,27 @@ public class ExternalApiService {
         ConvContext ctx = resolveContext(apiKey, callerId, apiClient);
 
         long startMs = System.currentTimeMillis();
-        ApiCallLog callLog = createCallLog(ctx.clonedConv.getConversationId(),
-                ctx.clonedConv.getUserId(), callerId, instruction);
+        // 记录到模板对话下（管理员在模板对话的调用记录页查看）
+        ApiCallLog callLog = createCallLog(ctx.templateConv.getConversationId(),
+                ctx.templateConv.getUserId(), callerId, instruction);
 
         SseEmitter emitter = new SseEmitter(AGENT_TIMEOUT_MS + 10_000L);
 
         // 异步处理 SSE 流
         Thread emitterThread = new Thread(() -> {
             StringBuilder replyBuilder = new StringBuilder();
-            int[] toolCallCount = new int[1];
+            List<Map<String, Object>> toolCallList = new ArrayList<>();
             String status = "running";
             String errorMessage = null;
 
             try {
+                String systemContent = getSystemContent(ctx.templateConv);
+                String effectiveInstruction = systemContent + "\n\n用户请求：" + instruction;
                 List<Map<String, String>> history = buildHistory(ctx.templateConv, ctx.clonedConv);
-                Map<String, Object> agentRequest = buildAgentRequest(instruction, history, ctx.clonedConv);
+                Map<String, Object> agentRequest = buildAgentRequest(effectiveInstruction, history, ctx.clonedConv);
 
                 // 调用 agent-core SSE 并透传事件
-                callAgentCoreSSEAndEmit(agentRequest, emitter, replyBuilder, toolCallCount);
+                callAgentCoreSSEAndEmit(agentRequest, emitter, replyBuilder, toolCallList);
                 status = "success";
             } catch (Exception e) {
                 status = "error";
@@ -144,15 +148,14 @@ public class ExternalApiService {
                     emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(errEvent)));
                 } catch (IOException ignored) {}
             } finally {
-                updateCallLog(callLog, status, replyBuilder.toString(), toolCallCount[0], startMs, errorMessage);
+                updateCallLog(callLog, status, replyBuilder.toString(), toolCallList.size(), startMs, errorMessage);
                 try {
                     // 发送 agent_finish
                     Map<String, Object> finishEvent = new LinkedHashMap<>();
                     finishEvent.put("type", "agent_finish");
                     finishEvent.put("conversationId", ctx.clonedConv.getConversationId());
                     finishEvent.put("reply", replyBuilder.toString());
-                    finishEvent.put("toolCalls", Collections.singletonList(
-                            Collections.singletonMap("count", toolCallCount[0])));
+                    finishEvent.put("toolCalls", toolCallList);
                     finishEvent.put("durationMs", (int) (System.currentTimeMillis() - startMs));
                     emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(finishEvent)));
                     emitter.send(SseEmitter.event().data("[DONE]"));
@@ -185,20 +188,31 @@ public class ExternalApiService {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid API key");
         }
         Conversation templateConv = convs.get(0);
+        log.info("[ExternalApi] Resolved template conv: id={}, name={}, publishType={}",
+                templateConv.getConversationId(), templateConv.getName(), templateConv.getPublishType());
         if (!Boolean.TRUE.equals(templateConv.getIsPublished())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Conversation is not published");
         }
 
         // 2. Find or create tenant
-        ExternalApiTenant tenant = findOrCreateTenant(templateConv, callerId.trim(), apiClient);
+        try {
+            ExternalApiTenant tenant = findOrCreateTenant(templateConv, callerId.trim(), apiClient);
 
-        // 3. Load cloned conversation
-        Conversation clonedConv = conversationMapper.selectById(tenant.getClonedConvId());
-        if (clonedConv == null) {
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Cloned conversation not found");
+            // 3. Load cloned conversation
+            Conversation clonedConv = conversationMapper.selectById(tenant.getClonedConvId());
+            if (clonedConv == null) {
+                throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Cloned conversation not found");
+            }
+
+            return new ConvContext(templateConv, clonedConv);
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("[ExternalApi] Failed to resolve context for caller={}, apiKeyHash={}: {}",
+                    callerId, apiKeyHash, e.getMessage(), e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "Failed to initialize tenant: " + e.getMessage(), e);
         }
-
-        return new ConvContext(templateConv, clonedConv);
     }
 
     /**
@@ -251,23 +265,26 @@ public class ExternalApiService {
     // ---- History Building ----
 
     private List<Map<String, String>> buildHistory(Conversation templateConv, Conversation clonedConv) {
-        List<Map<String, String>> history = new ArrayList<>();
+        // 外部接入的 history 只包含空白列表。
+        // System prompt 改为拼接到 instruction 中（agent-core 会过滤掉 history 里的 system 角色消息）。
+        return Collections.emptyList();
+    }
 
-        // System message: 优先用 external_system_prompt，回退到 api_description
-        String systemContent = templateConv.getExternalSystemPrompt();
-        if (systemContent == null || systemContent.trim().isEmpty()) {
-            systemContent = templateConv.getApiDescription();
+    // ---- System Content ----
+
+    /**
+     * 获取外部接入模式的实际 system prompt。
+     * 优先级：external_system_prompt > api_description > 兜底文案。
+     */
+    private String getSystemContent(Conversation templateConv) {
+        String content = templateConv.getExternalSystemPrompt();
+        if (content == null || content.trim().isEmpty()) {
+            content = templateConv.getApiDescription();
         }
-        if (systemContent == null || systemContent.trim().isEmpty()) {
-            systemContent = "你是一个已发布为 API 的助手，请根据用户的指令完成任务。";
+        if (content == null || content.trim().isEmpty()) {
+            content = "你是一个已发布为 API 的助手，请根据用户的指令完成任务。";
         }
-
-        Map<String, String> systemMsg = new LinkedHashMap<>();
-        systemMsg.put("role", "system");
-        systemMsg.put("content", systemContent);
-        history.add(systemMsg);
-
-        return history;
+        return content;
     }
 
     // ---- Agent Request ----
@@ -281,6 +298,13 @@ public class ExternalApiService {
         agentRequest.put("conversationId", conv.getConversationId());
         agentRequest.put("userId", conv.getUserId());
         agentRequest.put("enabledSkillIds", parseEnabledSkills(conv.getEnabledSkills()));
+
+        // context 是 agent-core 初始化 LLM 配置和会话所必需的
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("userId", conv.getUserId());
+        context.put("sessionId", conv.getConversationId());
+        agentRequest.put("context", context);
+
         return agentRequest;
     }
 
@@ -302,14 +326,14 @@ public class ExternalApiService {
     /**
      * 调用 agent-core SSE 并聚合结果（非流式）。
      */
-    private Map<String, Object> callAgentCoreSSE(Map<String, Object> requestBody) {
+    private Map<String, Object> callAgentCoreSSE(Map<String, Object> requestBody,
+                                                   List<Map<String, Object>> toolCallList) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(10_000);
         factory.setReadTimeout(AGENT_TIMEOUT_MS);
         RestTemplate sseTemplate = new RestTemplate(factory);
 
         StringBuilder replyBuilder = new StringBuilder();
-        int[] toolCallCount = new int[1];
 
         String url = agentCoreUrl + "/agent/run";
         try {
@@ -340,12 +364,18 @@ public class ExternalApiService {
                                             if (agent instanceof Map) {
                                                 Object content = ((Map<?, ?>) agent).get("content");
                                                 if (content != null) {
-                                                    replyBuilder.setLength(0);
                                                     replyBuilder.append(content);
                                                 }
                                             }
                                         } else if ("tool_status".equals(eventType)) {
-                                            toolCallCount[0]++;
+                                            String toolName = (String) event.get("toolName");
+                                            String toolStatus = (String) event.get("status");
+                                            if (toolName != null) {
+                                                Map<String, Object> info = new LinkedHashMap<>();
+                                                info.put("toolName", toolName);
+                                                info.put("status", toolStatus != null ? toolStatus : "unknown");
+                                                toolCallList.add(info);
+                                            }
                                         } else if ("confirmation_request".equals(eventType)) {
                                             // Auto-deny in API context
                                             String taskId = (String) event.get("taskId");
@@ -355,7 +385,6 @@ public class ExternalApiService {
                                             if ("assistant".equals(role)) {
                                                 Object content = event.get("content");
                                                 if (content != null) {
-                                                    replyBuilder.setLength(0);
                                                     replyBuilder.append(content);
                                                 }
                                             }
@@ -375,7 +404,7 @@ public class ExternalApiService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("reply", replyBuilder.toString());
-        result.put("toolCalls", toolCallCount[0]);
+        result.put("toolCalls", toolCallList.size());
         return result;
     }
 
@@ -385,7 +414,7 @@ public class ExternalApiService {
     private void callAgentCoreSSEAndEmit(Map<String, Object> requestBody,
                                           SseEmitter emitter,
                                           StringBuilder replyBuilder,
-                                          int[] toolCallCount) throws IOException {
+                                          List<Map<String, Object>> toolCallList) throws IOException {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(10_000);
         factory.setReadTimeout(AGENT_TIMEOUT_MS);
@@ -421,18 +450,21 @@ public class ExternalApiService {
                                         out.put("content", content != null ? content : "");
                                         emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(out)));
                                     } else if ("tool_status".equals(eventType)) {
-                                        toolCallCount[0]++;
-                                        // 透传 tool_status -> tool_start / tool_result
                                         String toolName = (String) event.getOrDefault("toolName", "unknown");
-                                        String status = (String) event.getOrDefault("status", "");
+                                        String toolStatus = (String) event.getOrDefault("status", "");
+                                        Map<String, Object> info = new LinkedHashMap<>();
+                                        info.put("toolName", toolName);
+                                        info.put("status", toolStatus);
+                                        toolCallList.add(info);
+                                        // 透传 tool_status -> tool_start / tool_result
                                         Map<String, Object> out = new LinkedHashMap<>();
-                                        if ("started".equals(status)) {
+                                        if ("started".equals(toolStatus)) {
                                             out.put("type", "tool_start");
                                         } else {
                                             out.put("type", "tool_result");
                                         }
                                         out.put("toolName", toolName);
-                                        out.put("status", status);
+                                        out.put("status", toolStatus);
                                         emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(out)));
                                     } else if ("confirmation_request".equals(eventType)) {
                                         String taskId = (String) event.get("taskId");
@@ -447,12 +479,18 @@ public class ExternalApiService {
                                             }
                                         }
                                     } else if (eventType == null || eventType.isEmpty()) {
+                                        // 无 type 的流式 token（role + content），追加并透传给客户端
                                         String role = (String) event.get("role");
                                         if ("assistant".equals(role)) {
                                             Object content = event.get("content");
                                             if (content != null) {
-                                                replyBuilder.setLength(0);
-                                                replyBuilder.append(content);
+                                                String token = String.valueOf(content);
+                                                replyBuilder.append(token);
+                                                // 透传给客户端
+                                                Map<String, Object> out = new LinkedHashMap<>();
+                                                out.put("type", "agent_message");
+                                                out.put("content", token);
+                                                emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(out)));
                                             }
                                         }
                                     }

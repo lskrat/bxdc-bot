@@ -19,7 +19,6 @@ const emit = defineEmits<{
 const { currentUser } = useUser()
 const conversations = useConversations()
 
-const isAdmin = computed(() => (currentUser.value as any)?.isAdmin === true)
 const publishType = ref<'internal' | 'external'>('internal')
 const apiDescription = ref('')
 const externalSystemPrompt = ref('')
@@ -51,12 +50,7 @@ watch(publishType, async (newType) => {
 async function handlePublish() {
   if (!currentUser.value) return
 
-  if (publishType.value === 'external') {
-    if (!externalSystemPrompt.value.trim()) {
-      MessagePlugin.warning('请填写系统提示词')
-      return
-    }
-  } else {
+  if (publishType.value !== 'external') {
     if (!apiDescription.value.trim()) {
       MessagePlugin.warning('请填写 API 描述')
       return
@@ -125,13 +119,13 @@ async function copyApiKey() {
         <t-form-item label="发布类型">
           <t-radio-group v-model="publishType">
             <t-radio value="internal">内部共享（团队内使用）</t-radio>
-            <t-radio v-if="isAdmin" value="external">外部系统接入（供第三方系统调用）</t-radio>
+            <t-radio value="external">外部系统接入（供第三方系统调用）</t-radio>
           </t-radio-group>
         </t-form-item>
 
         <!-- 外部接入模式：系统提示词 -->
         <template v-if="publishType === 'external'">
-          <t-form-item label="系统提示词" required>
+          <t-form-item label="系统提示词">
             <t-textarea
               v-model="externalSystemPrompt"
               placeholder="系统提示词已自动填充默认值，可根据需要修改..."

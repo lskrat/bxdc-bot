@@ -171,10 +171,24 @@ const downloadUrlHint = `downloadUrl/fileId 必须逐字来自本轮工具返回
 /**
  * 外部 API 接入默认系统提示词（简化版）
  *
- * 保留：agentRole（简化版）、skillDiscovery、extendedSkillRouting、downloadUrl
+ * 保留：agentRole（简化版）、skillDiscovery（修改版，去掉"建议创建新技能"）、extendedSkillRouting、downloadUrl
  * 移除：skillGenerator（外部用户不应创建技能）、taskTracking、confirmationUI（外部调用 auto-deny）
  */
-const externalApiSystemPrompt = agentRolePrompt + skillDiscoveryPolicy + extendedSkillRoutingPolicy + downloadUrlPolicy;
+const externalSkillDiscoveryPolicy = `[技能发现策略]
+首先检查你当前可用的扩展工具（名称以"extended_"开头）是否能直接处理用户请求。如果可以，直接调用它们，不需要经过 execute_skill_with_context。
+仅当已挂载的扩展工具无法直接完成用户任务时，才调用 execute_skill_with_context —— 系统自动通过向量检索匹配系统技能并创建子 Agent 执行。
+
+【调用准则】
+1. 按技能域分组调用：子 Agent 可以在同一技能域内执行多步操作（如读文件→统计分析→生成图表），但跨技能域的任务必须拆分。
+2. 操作类型限制：每次调用的 searchQuery 最多包含两类操作关键词。当任务涉及 ≥3 种不同操作类型时，必须拆分调用。
+3. NO_MATCH → 换关键词重试（最多 2 次）。2 次后如实告知用户"当前没有对应技能，请联系平台管理员"。
+4. TOOL_NOT_FOUND → 子 Agent 加载的技能不对路。修改 userInput 的关键词重试（最多 2 次）。
+5. continueConversation=true 仅用于同一批技能的后续操作，一般情况下用默认的 false。
+6. 禁止凭记忆推测技能——系统技能随时可能被增删改，让向量检索来匹配。
+
+`;
+
+const externalApiSystemPrompt = agentRolePrompt + externalSkillDiscoveryPolicy + extendedSkillRoutingPolicy + downloadUrlPolicy;
 
 /**
  * 任务状态中文映射

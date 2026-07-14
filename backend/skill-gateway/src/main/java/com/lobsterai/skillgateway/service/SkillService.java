@@ -89,6 +89,15 @@ public class SkillService {
         return skillMapper.findVisibleEnabledSummaryForUserByIds(userId, ids);
     }
 
+    /**
+     * 按 ID 列表查询 enabled=true 的技能，不做可见性过滤。
+     * 仅用于 agent-core 内部调用（/api/skills/by-conversation），
+     * 对话已勾选的技能都应返回，不应因外部用户 visibility 不匹配而被过滤。
+     */
+    public List<Skill> listEnabledByIds(List<Long> ids) {
+        return skillMapper.findEnabledByIds(ids);
+    }
+
     public Optional<Skill> getSkillByIdForUser(Long id, String userId) {
         Skill skill = skillMapper.selectById(id);
         if (skill == null || !canViewSkill(skill, userId)) {

@@ -10,6 +10,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -80,6 +81,18 @@ public interface SkillMapper extends BaseMapper<Skill> {
                                 .eq("created_by", userId))
                         .or(w2 -> w2.eq("visibility", SkillVisibility.TEAM)
                                 .apply("EXISTS (SELECT 1 FROM user_team ut WHERE ut.is_deleted = 0 AND ut.members LIKE CONCAT('%', {0}, '%') AND FIND_IN_SET(ut.id, skills.team_id) > 0)", userId))));
+    }
+
+    /**
+     * 按 ID 列表查询 enabled=true 的技能（不做可见性过滤，agent-core 内部调用用）。
+     */
+    default List<Skill> findEnabledByIds(List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return selectList(new QueryWrapper<Skill>()
+                .in("id", ids)
+                .eq("enabled", true));
     }
 
     /**

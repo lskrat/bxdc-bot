@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>外部 API 测试工具</title>
+<style>
+  :root {
+    --bg: #f5f6fa;
+    --card-bg: #fff;
+    --border: #e0e3e8;
+    --text: #2c3e50;
+    --text-secondary: #7f8c9b;
+    --primary: #4a6cf7;
+    --primary-hover: #3b5de7;
+    --success: #10b981;
+    --danger: #ef4444;
+    --warn: #f59e0b;
+    --radius: 8px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .container { max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 20px; }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+    box-shadow: var(--shadow);
+  }
+  .card-title {
+    font-size: 13px; font-weight: 600; color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px;
+  }
+  .form-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .form-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
+  .form-group label { font-size: 12px; font-weight: 500; color: var(--text-secondary); }
+  .form-group input {
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 13px; font-family: inherit; color: var(--text); background: #fff;
+    transition: border-color 0.15s;
+  }
+  .form-group input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(74,108,247,0.15); }
+  .checkbox-group { display: flex; align-items: center; gap: 6px; padding-top: 16px; min-width: auto; }
+  .checkbox-group label { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+  .messages {
+    min-height: 300px; max-height: 500px; overflow-y: auto; padding: 16px;
+    background: #fafbfc; border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 12px;
+  }
+  .messages:empty::after {
+    content: "发送一条消息开始测试..."; display: flex; justify-content: center; align-items: center;
+    height: 100%; color: var(--text-secondary); font-size: 13px; min-height: 260px;
+  }
+  .msg { margin-bottom: 14px; animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  .msg-user { display: flex; justify-content: flex-end; }
+  .msg-user .msg-bubble {
+    background: var(--primary); color: #fff; max-width: 75%;
+    padding: 10px 14px; border-radius: 12px 12px 4px 12px; font-size: 14px; line-height: 1.5; word-break: break-word;
+  }
+  .msg-assistant { display: flex; flex-direction: column; align-items: flex-start; }
+  .msg-assistant .msg-bubble {
+    background: #fff; border: 1px solid var(--border); max-width: 100%;
+    padding: 10px 14px; border-radius: 12px 12px 12px 4px; font-size: 14px; line-height: 1.6; word-break: break-word; white-space: pre-wrap;
+  }
+  .msg-assistant .msg-meta { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+  .msg-streaming .msg-bubble { border-left: 3px solid var(--primary); }
+  .msg-error .msg-bubble { background: #fef2f2; border-color: var(--danger); color: var(--danger); }
+
+  .tool-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .tool-tag {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;
+  }
+  .tool-tag.completed { background: #ecfdf5; color: #065f46; }
+  .tool-tag.started { background: #eff6ff; color: #1e40af; }
+  .tool-tag.running { background: #fffbeb; color: #92400e; }
+  .tool-tag.failed { background: #fef2f2; color: #991b1b; }
+
+  .input-row { display: flex; gap: 8px; }
+  .input-row input {
+    flex: 1; padding: 10px 14px; border: 1px solid var(--border);
+    border-radius: var(--radius); font-size: 14px; font-family: inherit;
+  }
+  .input-row input:focus { outline: none; border-color: var(--primary); }
+  .btn {
+    padding: 10px 20px; border: none; border-radius: var(--radius);
+    font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s; white-space: nowrap;
+  }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-outline { background: #fff; color: var(--primary); border: 1px solid var(--primary); }
+  .btn-outline:hover { background: #f0f4ff; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .status-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); min-height: 20px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+  .status-dot.connected { background: var(--success); }
+  .status-dot.error { background: var(--danger); }
+  .status-dot.streaming { background: var(--primary); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+    border-radius: 50%; animation: spin 0.6s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (max-width: 640px) {
+    .container { padding: 12px; }
+    .form-row { flex-direction: column; }
+    .form-group { min-width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>外部 API 测试工具</h1>
+
+  <div class="card">
+    <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+      连接配置
+      <span class="status-bar">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">未连接</span>
+      </span>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>平台地址</label>
+        <input type="text" id="baseUrl" value="http://localhost:18080" placeholder="http://localhost:18080">
+      </div>
+      <div class="form-group">
+        <label>API Key</label>
+        <input type="text" id="apiKey" placeholder="c_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+      </div>
+    </div>
+    <div class="form-row" style="margin-top: 10px;">
+      <div class="form-group">
+        <label>Caller ID（外部用户标识）</label>
+        <input type="text" id="callerId" value="test-user-001" placeholder="test-user-001">
+      </div>
+      <div class="form-group">
+        <label>系统名称（apiClient）</label>
+        <input type="text" id="apiClient" value="demo-tester" placeholder="ecommerce / erp / crm">
+      </div>
+      <div class="checkbox-group">
+        <input type="checkbox" id="streaming" checked>
+        <label for="streaming">流式输出 (SSE)</label>
+      </div>
+      <div class="checkbox-group">
+        <input type="checkbox" id="noStreamingFallback">
+        <label for="noStreamingFallback" title="流式不可用时自动降级非流式">降级非流式</label>
+      </div>
+    </div>
+    <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;">
+      <button class="btn btn-outline btn-sm" onclick="saveConfig()">保存</button>
+      <button class="btn btn-outline btn-sm" onclick="loadConfig()">加载</button>
+      <button class="btn btn-outline btn-sm" onclick="clearConfig()">清除</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">对话测试</div>
+    <div class="messages" id="messages"></div>
+    <div class="input-row">
+      <input type="text" id="instructionInput" placeholder="输入指令，按 Enter 发送..."
+        onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault();sendMessage();}">
+      <button class="btn btn-primary" id="sendBtn" onclick="sendMessage()">发送</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const els = {
+  baseUrl: $('baseUrl'), apiKey: $('apiKey'), callerId: $('callerId'), apiClient: $('apiClient'),
+  streaming: $('streaming'), noStreamingFallback: $('noStreamingFallback'),
+  messages: $('messages'), instructionInput: $('instructionInput'), sendBtn: $('sendBtn'),
+  statusDot: $('statusDot'), statusText: $('statusText'),
+};
+
+let isStreaming = false;
+let abortController = null;
+
+// ============== Config ==============
+const STORAGE_KEY = 'external-api-tester-config';
+function saveConfig() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    baseUrl: els.baseUrl.value.trim(), apiKey: els.apiKey.value.trim(),
+    callerId: els.callerId.value.trim(), apiClient: els.apiClient.value.trim(),
+    streaming: els.streaming.checked, noStreamingFallback: els.noStreamingFallback.checked,
+  }));
+  setStatus('connected', '已保存');
+}
+function loadConfig() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return setStatus('error', '无保存的配置');
+  try {
+    const c = JSON.parse(raw);
+    els.baseUrl.value = c.baseUrl || ''; els.apiKey.value = c.apiKey || '';
+    els.callerId.value = c.callerId || ''; els.apiClient.value = c.apiClient || '';
+    els.streaming.checked = c.streaming !== false;
+    els.noStreamingFallback.checked = c.noStreamingFallback || false;
+    setStatus('connected', '已加载');
+  } catch { setStatus('error', '配置解析失败'); }
+}
+function clearConfig() { localStorage.removeItem(STORAGE_KEY); setStatus('connected', '已清除'); }
+
+(function init() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw) try {
+    const c = JSON.parse(raw);
+    els.baseUrl.value = c.baseUrl || 'http://localhost:18080';
+    els.apiKey.value = c.apiKey || ''; els.callerId.value = c.callerId || 'test-user-001';
+    els.apiClient.value = c.apiClient || 'demo-tester';
+    els.streaming.checked = c.streaming !== false;
+    els.noStreamingFallback.checked = c.noStreamingFallback || false;
+    setStatus('connected', '已自动加载');
+  } catch { /* ignore */ }
+})();
+
+// ============== UI ==============
+function setStatus(state, text) {
+  els.statusDot.className = 'status-dot ' + state;
+  els.statusText.textContent = text || state;
+}
+function setLoading(loading) {
+  isStreaming = loading;
+  els.sendBtn.disabled = loading;
+  els.instructionInput.disabled = loading;
+  els.sendBtn.innerHTML = loading ? '<span class="spinner"></span> 处理中' : '发送';
+  if (loading) setStatus('streaming', els.streaming.checked ? '流式接收中...' : '等待响应...');
+  else setStatus('connected', '就绪');
+}
+function scrollToBottom() { els.messages.scrollTop = els.messages.scrollHeight; }
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function appendUserMessage(text) {
+  const div = document.createElement('div');
+  div.className = 'msg msg-user';
+  div.innerHTML = `<div class="msg-bubble">${escapeHtml(text)}</div>`;
+  els.messages.appendChild(div); scrollToBottom();
+}
+
+function appendAssistantMessage(text, toolCalls, meta) {
+  const div = document.createElement('div');
+  div.className = 'msg msg-assistant';
+  div.innerHTML = `<div class="msg-bubble">${escapeHtml(text)}</div>`;
+  const metaParts = [];
+  if (meta) metaParts.push(meta);
+  if (toolCalls && toolCalls.length > 0) {
+    const tags = toolCalls.map(tc => {
+      const cls = (tc.status || 'unknown').toLowerCase();
+      return `<span class="tool-tag ${cls}">${escapeHtml(tc.toolName || '?')}</span>`;
+    }).join('');
+    metaParts.push(`<span class="tool-tags">${tags}</span>`);
+  }
+  div.innerHTML += `<div class="msg-meta">${metaParts.join(' · ')}</div>`;
+  els.messages.appendChild(div); scrollToBottom();
+  return div;
+}
+
+function appendErrorMessage(text) {
+  const div = document.createElement('div');
+  div.className = 'msg msg-assistant msg-error';
+  div.innerHTML = `<div class="msg-bubble">${escapeHtml(text)}</div>`;
+  els.messages.appendChild(div); scrollToBottom();
+}
+
+function getOrCreateStreamingBubble() {
+  let existing = els.messages.querySelector('.msg-streaming');
+  if (existing) return existing;
+  const div = document.createElement('div');
+  div.className = 'msg msg-assistant msg-streaming';
+  div.innerHTML = '<div class="msg-bubble"></div><div class="msg-meta"></div>';
+  els.messages.appendChild(div); scrollToBottom();
+  return div;
+}
+
+function finalizeStreamingBubble(bubble, meta, toolCalls) {
+  bubble.classList.remove('msg-streaming');
+  if (meta || toolCalls?.length) {
+    const parts = [];
+    if (meta) parts.push(meta);
+    if (toolCalls?.length) {
+      const tags = toolCalls.map(tc => {
+        const cls = (tc.status || 'unknown').toLowerCase();
+        return `<span class="tool-tag ${cls}">${escapeHtml(tc.toolName || '?')}</span>`;
+      }).join('');
+      parts.push(`<span class="tool-tags">${tags}</span>`);
+    }
+    bubble.querySelector('.msg-meta').innerHTML = parts.join(' · ');
+  }
+}
+
+// ============== API ==============
+async function sendMessage() {
+  const instruction = els.instructionInput.value.trim();
+  if (!instruction) return;
+  if (!els.apiKey.value.trim()) { appendErrorMessage('请先填写 API Key'); return; }
+  if (!els.callerId.value.trim()) { appendErrorMessage('请先填写 Caller ID'); return; }
+
+  els.instructionInput.value = '';
+  appendUserMessage(instruction);
+
+  const baseUrl = els.baseUrl.value.trim().replace(/\/+$/, '');
+  const body = {
+    apiKey: els.apiKey.value.trim(),
+    instruction,
+    callerId: els.callerId.value.trim(),
+    apiClient: els.apiClient.value.trim() || null,
+    streaming: els.streaming.checked,
+  };
+
+  if (els.streaming.checked) {
+    const ok = await sendStreaming(baseUrl + '/api/agent-chat/external', body);
+    if (!ok && els.noStreamingFallback.checked) {
+      body.streaming = false;
+      await sendNonStreaming(baseUrl + '/api/agent-chat/external', body);
+    }
+  } else {
+    await sendNonStreaming(baseUrl + '/api/agent-chat/external', body);
+  }
+}
+
+// ---- Non-streaming ----
+async function sendNonStreaming(url, body) {
+  setLoading(true);
+  try {
+    const res = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    const data = await res.json();
+    appendAssistantMessage(
+      data.reply || '(空回复)',
+      data.toolCalls,
+      `耗时 ${data.durationMs || '?'}ms`
+    );
+  } catch (e) {
+    appendErrorMessage(`请求失败: ${e.message}`);
+    setStatus('error', '请求失败');
+  } finally { setLoading(false); }
+}
+
+// ---- Streaming (SSE) ----
+async function sendStreaming(url, body) {
+  setLoading(true);
+  abortController = new AbortController();
+  let succeeded = false;
+
+  // 立即创建一个空的 streaming bubble，让用户知道正在等待
+  const bubble = getOrCreateStreamingBubble();
+  bubble.querySelector('.msg-bubble').textContent = '（等待响应...）';
+
+  try {
+    console.log('[SSE] Fetching:', url);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: abortController.signal,
+    });
+
+    console.log('[SSE] Response status:', res.status, 'content-type:', res.headers.get('content-type'));
+
+    if (!res.ok) {
+      bubble.remove();
+      if (res.status >= 500 && els.noStreamingFallback.checked) {
+        setLoading(false);
+        return false;
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}: ${res.statusText}`);
+    }
+
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('text/event-stream')) {
+      console.log('[SSE] Not SSE, reading as JSON');
+      const data = await res.json();
+      bubble.querySelector('.msg-bubble').textContent = data.reply || '(空回复)';
+      finalizeStreamingBubble(bubble, `耗时 ${data.durationMs || '?'}ms`, data.toolCalls);
+      return true;
+    }
+
+    console.log('[SSE] Starting to read stream...');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullReply = '';
+    const toolList = [];
+    let eventCount = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        console.log('[SSE] Stream done, total events:', eventCount, 'reply len:', fullReply.length);
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (!trimmed.startsWith('data:')) {
+           console.log('[SSE] Non-data line:', trimmed.substring(0, 50));
+           continue;
+         }
+         const data = trimmed.substring(5).trim();
+         if (!data || data === '[DONE]') continue;
+
+        try {
+          const event = JSON.parse(data);
+          eventCount++;
+          const et = event.type || '(no-type)';
+          if (eventCount <= 5 || eventCount % 50 === 0) {
+            console.log(`[SSE] #${eventCount} type=${et}`, JSON.stringify(event).substring(0, 120));
+          }
+
+          if (et === 'agent_message') {
+            fullReply += event.content || '';
+            bubble.querySelector('.msg-bubble').textContent = fullReply;
+            scrollToBottom();
+
+          } else if (et === 'tool_start' || et === 'tool_result') {
+            const existing = toolList.find(t => t.toolName === event.toolName && t.status === 'started');
+            const st = event.status || (et === 'tool_start' ? 'started' : 'completed');
+            if (et === 'tool_result' && existing) {
+              existing.status = st;
+            } else if (!existing || et === 'tool_result') {
+              toolList.push({ toolName: event.toolName || '?', status: st });
+            }
+            const tags = toolList.map(t => {
+              const cls = (t.status || '').toLowerCase();
+              return `<span class="tool-tag ${cls}">${escapeHtml(t.toolName || '?')}</span>`;
+            }).join('');
+            bubble.querySelector('.msg-meta').innerHTML = `<span class="tool-tags">${tags}</span>`;
+            scrollToBottom();
+
+          } else if (et === 'agent_finish') {
+            succeeded = true;
+            fullReply = event.reply || fullReply;
+            const finalToolCalls = Array.isArray(event.toolCalls) ? event.toolCalls : toolList;
+            bubble.querySelector('.msg-bubble').textContent = fullReply;
+            finalizeStreamingBubble(bubble, `耗时 ${event.durationMs || '?'}ms`, finalToolCalls);
+            setStatus('connected', '就绪');
+
+          } else if (et === 'error') {
+            appendErrorMessage(`服务器错误: ${event.message || '未知错误'}`);
+            setStatus('error', '服务器错误');
+
+          } else if (et === 'agent_update') {
+            const agent = event.agent;
+            if (agent && agent.content) {
+              fullReply = agent.content;
+              bubble.querySelector('.msg-bubble').textContent = fullReply;
+              scrollToBottom();
+            }
+
+          } else {
+            console.log('[SSE] Unhandled event type:', et);
+          }
+        } catch (e) {
+          console.warn('[SSE] Parse error for line:', trimmed.substring(0, 80), e);
+        }
+      }
+    }
+
+    if (bubble.classList.contains('msg-streaming')) {
+      console.log('[SSE] Stream ended without agent_finish, toolList:', toolList.length);
+      finalizeStreamingBubble(bubble, `耗时 ?ms · 事件 ${eventCount}`, toolList);
+    }
+    setStatus('connected', '就绪');
+    return succeeded;
+  } catch (e) {
+    console.error('[SSE] Fatal error:', e);
+    if (e.name === 'AbortError') {
+      appendErrorMessage('请求已取消');
+    } else {
+      appendErrorMessage(`请求失败: ${e.message}`);
+      setStatus('error', '请求失败');
+    }
+    return false;
+  } finally {
+    setLoading(false);
+    abortController = null;
+  }
+}
+
+// Escape 取消
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isStreaming && abortController) {
+    abortController.abort();
+    setLoading(false);
+  }
+});
+
+// Ctrl+Enter 发送
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    if (!isStreaming) sendMessage();
+  }
+});
+</script>
+</body>
+</html>

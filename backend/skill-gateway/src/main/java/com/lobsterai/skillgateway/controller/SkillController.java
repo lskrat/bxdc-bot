@@ -114,7 +114,13 @@ public class SkillController {
             @RequestHeader(value = "X-User-Id", required = false) String userId,
             @RequestParam(value = "ownerType", required = false) Integer ownerType
     ) {
-        return skillService.listSkillsForUser(userId, ownerType);
+        try {
+            return skillService.listSkillsForUser(userId, ownerType);
+        } catch (Exception e) {
+            System.err.println("[SkillController.getAllSkills] ERROR: " + e.getMessage());
+            e.printStackTrace();
+            throw e;
+        }
     }
 
     /**
@@ -139,7 +145,8 @@ public class SkillController {
             @RequestParam("conversationId") String conversationId
     ) {
         List<Long> enabledSkillIds = conversationService.getEnabledSkillIds(conversationId, userId);
-        return skillService.listEnabledSkillsForUserByIds(userId, enabledSkillIds);
+        // agent-core 内部调用：不做可见性过滤，对话已勾选的技能都应返回
+        return skillService.listEnabledByIds(enabledSkillIds);
     }
 
     /**

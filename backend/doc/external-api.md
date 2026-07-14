@@ -49,7 +49,8 @@ Content-Type: `application/json`
   "reply": "订单 #12345 状态为：已发货，物流单号 SF1234567890，预计明日送达。",
   "toolCalls": [
     {
-      "count": 1
+      "toolName": "compute",
+      "status": "completed"
     }
   ],
   "durationMs": 3200
@@ -60,7 +61,7 @@ Content-Type: `application/json`
 |------|------|------|
 | `conversationId` | string | 克隆对话 ID（该用户的独立对话标识） |
 | `reply` | string | AI 的完整回复文本 |
-| `toolCalls` | array | Skill 调用汇总（当前仅返回调用次数 `count`） |
+| `toolCalls` | array | 工具调用明细，每项包含 `toolName`（工具名）和 `status`（状态：`running`/`completed`/`failed`） |
 | `durationMs` | number | 请求处理耗时（毫秒） |
 
 ### 流式（`streaming: true`）
@@ -80,7 +81,7 @@ data: {"type":"tool_result","toolName":"api_call","status":"completed"}
 
 data: {"type":"agent_message","content":"订单 #12345 状态为：已发货"}
 
-data: {"type":"agent_finish","conversationId":"abc-def-ghi-uuid","reply":"完整回复文本","toolCalls":[{"count":1}],"durationMs":3200}
+data: {"type":"agent_finish","conversationId":"abc-def-ghi-uuid","reply":"完整回复文本","toolCalls":[{"toolName":"api_call","status":"completed"}],"durationMs":3200}
 
 data: [DONE]
 ```

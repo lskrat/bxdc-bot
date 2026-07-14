@@ -65,7 +65,9 @@ public class ConversationApiService {
                                         String publishType, String externalSystemPrompt) {
         Conversation conv = conversationService.getById(conversationId, userId);
 
-        if (apiDescription == null || apiDescription.trim().isEmpty()) {
+        // 外部系统接入模式走 externalSystemPrompt，不强制要求 apiDescription
+        boolean isExternal = "external".equals(publishType);
+        if (!isExternal && (apiDescription == null || apiDescription.trim().isEmpty())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "API description is required");
         }
         if (Boolean.TRUE.equals(conv.getIsPublished())) {
@@ -110,7 +112,7 @@ public class ConversationApiService {
         long startMs = System.currentTimeMillis();
         String status = "running";
         String reply = null;
-        int toolCallCount = 0;
+        List<Map<String, Object>> toolCallList = new ArrayList<>();
         String errorMessage = null;
 
         // Prepare call log
@@ -142,9 +144,8 @@ public class ConversationApiService {
 
             // Call agent-core via SSE
             String url = agentCoreUrl + "/agent/run";
-            Map<String, Object> sseResult = callAgentCoreSSE(url, agentRequest);
+            Map<String, Object> sseResult = callAgentCoreSSE(url, agentRequest, toolCallList);
             reply = (String) sseResult.get("reply");
-            toolCallCount = (int) sseResult.getOrDefault("toolCalls", 0);
 
             status = "success";
         } catch (ResponseStatusException e) {
@@ -161,7 +162,7 @@ public class ConversationApiService {
             long durationMs = System.currentTimeMillis() - startMs;
             callLog.setStatus(status);
             callLog.setReply(reply);
-            callLog.setToolCallCount(toolCallCount);
+            callLog.setToolCallCount(toolCallList.size());
             callLog.setDurationMs((int) Math.min(durationMs, Integer.MAX_VALUE));
             callLog.setErrorMessage(errorMessage);
             apiCallLogMapper.updateById(callLog);
@@ -170,7 +171,7 @@ public class ConversationApiService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("conversationId", conv.getConversationId());
         result.put("reply", reply);
-        result.put("toolCalls", toolCallCount);
+        result.put("toolCalls", toolCallList);
         result.put("durationMs", (int) (System.currentTimeMillis() - startMs));
         return result;
     }
@@ -215,7 +216,8 @@ public class ConversationApiService {
         }
     }
 
-    private Map<String, Object> callAgentCoreSSE(String url, Map<String, Object> requestBody) {
+    private Map<String, Object> callAgentCoreSSE(String url, Map<String, Object> requestBody,
+                                                   List<Map<String, Object>> toolCallList) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(10_000);
         factory.setReadTimeout(AGENT_TIMEOUT_MS);
@@ -227,7 +229,6 @@ public class ConversationApiService {
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
         StringBuilder replyBuilder = new StringBuilder();
-        int[] toolCallCount = new int[1];
 
         try {
             sseTemplate.execute(url, HttpMethod.POST,
@@ -265,7 +266,14 @@ public class ConversationApiService {
                                                 }
                                             }
                                         } else if ("tool_status".equals(eventType)) {
-                                            toolCallCount[0]++;
+                                            String toolName = (String) event.get("toolName");
+                                            String toolStatus = (String) event.get("status");
+                                            if (toolName != null) {
+                                                Map<String, Object> info = new LinkedHashMap<>();
+                                                info.put("toolName", toolName);
+                                                info.put("status", toolStatus != null ? toolStatus : "unknown");
+                                                toolCallList.add(info);
+                                            }
                                         } else if ("confirmation_request".equals(eventType)) {
                                             // Auto-deny confirmation in API context
                                             String taskId = (String) event.get("taskId");
@@ -304,7 +312,7 @@ public class ConversationApiService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("reply", replyBuilder.toString());
-        result.put("toolCalls", toolCallCount[0]);
+        result.put("toolCalls", toolCallList.size());
         return result;
     }
 

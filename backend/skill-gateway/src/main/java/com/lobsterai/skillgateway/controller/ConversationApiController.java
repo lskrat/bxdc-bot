@@ -5,7 +5,6 @@ import com.lobsterai.skillgateway.service.ExternalApiService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.*;
 
@@ -66,8 +65,13 @@ public class ConversationApiController {
 
     // ---- External API Call (External System) ----
 
+    /**
+     * 外部系统接入。
+     * 流式模式直接返回 SseEmitter（Spring 自动设置 Content-Type: text/event-stream）；
+     * 非流式模式返回 JSON。
+     */
     @PostMapping("/api/agent-chat/external")
-    public ResponseEntity<?> externalAgentChat(@RequestBody Map<String, Object> body) {
+    public Object externalAgentChat(@RequestBody Map<String, Object> body) {
         String apiKey = body.get("apiKey") instanceof String ? (String) body.get("apiKey") : "";
         String instruction = body.get("instruction") instanceof String ? (String) body.get("instruction") : "";
         String callerId = body.get("callerId") instanceof String ? (String) body.get("callerId") : "";
@@ -80,15 +84,11 @@ public class ConversationApiController {
         }
 
         if (streaming) {
-            SseEmitter emitter = externalApiService.agentChatExternalStreaming(
-                    apiKey, instruction, callerId, apiClient);
-            return ResponseEntity.ok().contentType(
-                    org.springframework.http.MediaType.TEXT_EVENT_STREAM).body(emitter);
-        } else {
-            Map<String, Object> result = externalApiService.agentChatExternal(
-                    apiKey, instruction, callerId, apiClient);
-            return ResponseEntity.ok(result);
+            return externalApiService.agentChatExternalStreaming(apiKey, instruction, callerId, apiClient);
         }
+
+        Map<String, Object> result = externalApiService.agentChatExternal(apiKey, instruction, callerId, apiClient);
+        return ResponseEntity.ok(result);
     }
 
     // ---- Call Logs ----

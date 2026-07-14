@@ -172,7 +172,21 @@ const downloadUrlHint = `downloadUrl/fileId must come verbatim from this turn's 
  * 保留：agentRole（简化版）、skillDiscovery、extendedSkillRouting、downloadUrl
  * 移除：skillGenerator（外部用户不应创建技能）、taskTracking、confirmationUI（外部调用 auto-deny）
  */
-const externalApiSystemPrompt = agentRolePrompt + skillDiscoveryPolicy + extendedSkillRoutingPolicy + downloadUrlPolicy;
+const externalSkillDiscoveryPolicy = `[Skill discovery]
+First, check whether any of your directly-available extension tools (names starting with "extended_") can handle the user's request. If yes, call them directly — no need to go through execute_skill_with_context.
+Only when directly-mounted extension tools cannot complete the task, call execute_skill_with_context — the system will auto-match system skills via vector retrieval and create a sub-agent.
+1. Group by skill domain: Split complex tasks into domain-specific calls. Each call should target at most 2 types of operations. When task involves ≥3 operation types (e.g., Excel+Word+SSH), call separately per domain.
+2. Call execute_skill_with_context directly, passing the user's task description as userInput. The system will auto-match the most relevant system skills via vector retrieval based on userInput/searchQuery.
+3. For multi-step operations within the same skill domain (e.g., read file → analyze → generate chart), use a single call — the sub-agent handles sequencing internally.
+4. If the result returns status=NO_MATCH, tell the user "No matching skill is available. Please contact the administrator."
+5. If the result returns status=TOOL_NOT_FOUND or suggestRetry=true, the loaded skills cannot complete the current operation. You MAY modify the userInput keywords and re-call execute_skill_with_context, but only up to 2 retries.
+6. If after 2 retries it still returns TOOL_NOT_FOUND/suggestRetry=true, or multiple consecutive calls fail to complete the task, you MUST stop calling and tell the user "Current system skills cannot complete this task. Please try a more specific description or contact the administrator to confirm if relevant skills are enabled."
+7. For multi-step operations with the same skill set, use continueConversation=true to continue the sub-agent conversation.
+8. Do NOT rely on memory, conversation history, or context to guess skills — the system's skill registry changes over time. Let auto-retrieval handle it.
+
+`;
+
+const externalApiSystemPrompt = agentRolePrompt + externalSkillDiscoveryPolicy + extendedSkillRoutingPolicy + downloadUrlPolicy;
 
 /**
  * 构建任务状态摘要
